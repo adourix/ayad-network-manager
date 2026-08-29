@@ -1,0 +1,21 @@
+services:
+  enforcement:
+    build: ./enforcement
+    network_mode: host
+    cap_add: [NET_ADMIN, NET_RAW]
+    volumes:
+      - config-data:/etc/app-config
+  backend:
+    build: ./backend
+    env_file: .env
+    ports:
+      - "${DASHBOARD_PORT}:${DASHBOARD_PORT}"
+    depends_on: [enforcement, db]
+  db:
+    image: postgres:16
+    env_file: .env
+    volumes: [db-data:/var/lib/postgresql/data]
+volumes:
+  config-data:
+  db-data:
+

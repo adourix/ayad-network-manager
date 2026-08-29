@@ -1,0 +1,467 @@
+import Fastify from "fastify";
+import websocket from "@fastify/websocket";
+
+import { TrafficReconciliationService } from "./application/enforcement/TrafficReconciliationService.js";
+import { LinuxTcStateReader } from "./infrastructure/enforcement/TcStateReader.js";
+import { FirewallService } from "./application/enforcement/FirewallService.js";
+import { TrafficEnforcementService } from "./application/enforcement/TrafficEnforcementService.js";
+import { DefaultTrafficPolicyValidator } from "./application/enforcement/DefaultTrafficPolicyValidator.js";
+import { NftDeviceBlocker } from "./infrastructure/enforcement/NftDeviceBlocker.js";
+import { LinuxSystemCommandExecutor } from "./infrastructure/enforcement/LinuxSystemCommandExecutor.js";
+import { LinuxIfbManager } from "./infrastructure/enforcement/LinuxIfbManager.js";
+import { SingleInterfaceIfbTrafficEnforcer } from "./infrastructure/enforcement/SingleInterfaceIfbTrafficEnforcer.js";
+import { NftTrafficUsageReader } from "./infrastructure/enforcement/NftTrafficUsageReader.js";
+
+import { PrismaDevicePolicyRepository } from "./infrastructure/database/PrismaDevicePolicyRepository.js";
+import { PrismaDeviceRepository } from "./infrastructure/database/PrismaDeviceRepository.js";
+import { PrismaTrafficSampleRepository } from "./infrastructure/database/PrismaTrafficSampleRepository.js";
+
+import { TrafficAccountingService } from "./application/monitoring/TrafficAccountingService.js";
+import { DevicePolicyService } from "./application/policies/DevicePolicyService.js";
+
+import { LinuxDhcpLeaseReader } from "./infrastructure/network/LinuxDhcpLeaseReader.js";
+import { LinuxNeighborTableReader } from "./infrastructure/network/LinuxNeighborTableReader.js";
+import { DhcpNeighborIdentityValidator } from "./infrastructure/network/DhcpNeighborIdentityValidator.js";
+
+import { LiveMonitoringService } from "./application/monitoring/LiveMonitoringService.js";
+
+import { DeviceDiscoveryService } from "./application/devices/DeviceDiscoveryService.js";
+import { DeviceDiscoverySyncService } from "./application/devices/DeviceDiscoverySyncService.js";
+import { DeviceService } from "./application/devices/DeviceService.js";
+
+import { NftBlockedDeviceReader } from "./infrastructure/enforcement/NftBlockedDeviceReader.js";
+
+import { config } from "./config.js";
+import { deviceRoutes } from "./interfaces/http/routes/devices.js";
+
+const app = Fastify({
+  logger: true,
+});
+
+await app.register(websocket);
+
+
+
+/*
+ * Network discovery
+ */
+
+const dhcpLeaseReader =
+  new LinuxDhcpLeaseReader(
+    "/var/lib/misc/dnsmasq.leases",
+  );
+
+const neighborTableReader =
+  new LinuxNeighborTableReader();
+
+const identityValidator =
+  new DhcpNeighborIdentityValidator();
+
+const discoveryService =
+  new DeviceDiscoveryService(
+    dhcpLeaseReader,
+    neighborTableReader,
+    identityValidator,
+    config.network.lanInterface,
+);
+
+/*
+ * Repositories
+ */
+
+const deviceRepository =
+  new PrismaDeviceRepository();
+
+const policyRepository =
+  new PrismaDevicePolicyRepository();
+
+/*
+ * Device discovery synchronization
+ *
+ * Keeps the database IP address synchronized
+ * with the current DHCP + neighbor information.
+ */
+
+const deviceDiscoverySyncService =
+  new DeviceDiscoverySyncService(
+    discoveryService,
+    deviceRepository,
+    10_000,
+);
+
+/*
+ * Firewall
+ */
+
+const deviceBlocker =
+  new NftEnforcer(
+    systemCommandExecutor,
+  );
+
+const blockedDeviceReader =
+  new NftBlockedDeviceReader(
+    systemCommandExecutor,
+  );
+
+/*
+ * Device services
+ */
+
+const deviceService =
+  new DeviceService(
+    discoveryService,
+    deviceRepository,
+    blockedDeviceReader,
+  );
+
+const devicePolicyService =
+  new DevicePolicyService(
+    deviceRepository,
+    policyRepository,
+  );
+
+/*
+ * Traffic enforcement
+ */
+
+const systemCommandExecutor =
+  new LinuxSystemCommandExecutor();
+
+const ifbManager =
+  new LinuxIfbManager(
+    systemCommandExecutor,
+  );
+
+const tcStateReader =
+  new LinuxTcStateReader(
+    systemCommandExecutor,
+  );
+
+const trafficPolicyValidator =
+  new DefaultTrafficPolicyValidator(
+    config.network.uplinkBandwidthMbps,
+  );
+
+const trafficEnforcer =
+  new SingleInterfaceIfbTrafficEnforcer(
+    config.network.uplinkBandwidthMbps,
+    config.network.lanInterface,
+    systemCommandExecutor,
+    ifbManager,
+    tcStateReader,
+  );
+
+/*
+ * Traffic accounting
+ */
+
+const trafficUsageReader =
+  new NftTrafficUsageReader({
+    mode:
+      config.network.networkMode,
+
+    clientInterface:
+      config.network.clientInterface,
+
+    uplinkInterface:
+      config.network.networkMode ===
+      "dual-interface"
+        ? config.network.uplinkInterface
+        : null,
+
+    clientSubnet:
+      config.network.clientSubnet,
+  });
+
+const trafficSampleRepository =
+  new PrismaTrafficSampleRepository();
+
+const trafficAccountingService =
+  new TrafficAccountingService(
+    deviceRepository,
+    discoveryService,
+    trafficUsageReader,
+    trafficSampleRepository,
+  );
+
+const trafficReconciliationService =
+  new TrafficReconciliationService(
+    deviceRepository,
+    policyRepository,
+    trafficEnforcer,
+  );
+
+const trafficEnforcementService =
+  new TrafficEnforcementService(
+    trafficEnforcer,
+    trafficPolicyValidator,
+    deviceRepository,
+    policyRepository,
+  );
+
+/*
+ * Routes
+ */
+
+await deviceRoutes(
+  app,
+  deviceService,
+  devicePolicyService,
+  firewallService,
+  liveMonitoringService,
+  trafficEnforcementService,
+);/*
+ * Network discovery
+ */
+
+const dhcpLeaseReader =
+  new LinuxDhcpLeaseReader(
+    "/var/lib/misc/dnsmasq.leases",
+  );
+
+const neighborTableReader =
+  new LinuxNeighborTableReader();
+
+const identityValidator =
+  new DhcpNeighborIdentityValidator();
+
+const discoveryService =
+  new DeviceDiscoveryService(
+    dhcpLeaseReader,
+    neighborTableReader,
+    identityValidator,
+    config.network.lanInterface,
+);
+
+/*
+ * Repositories
+ */
+
+const deviceRepository =
+  new PrismaDeviceRepository();
+
+const policyRepository =
+  new PrismaDevicePolicyRepository();
+
+/*
+ * Device discovery synchronization
+ *
+ * Keeps the database IP address synchronized
+ * with the current DHCP + neighbor information.
+ */
+
+const deviceDiscoverySyncService =
+  new DeviceDiscoverySyncService(
+    discoveryService,
+    deviceRepository,
+    10_000,
+);
+
+/*
+ * Firewall
+ */
+
+const deviceBlocker =
+  new NftEnforcer(
+    systemCommandExecutor,
+  );
+
+const blockedDeviceReader =
+  new NftBlockedDeviceReader(
+    systemCommandExecutor,
+  );
+
+/*
+ * Device services
+ */
+
+const deviceService =
+  new DeviceService(
+    discoveryService,
+    deviceRepository,
+    blockedDeviceReader,
+  );
+
+const devicePolicyService =
+  new DevicePolicyService(
+    deviceRepository,
+    policyRepository,
+  );
+
+/*
+ * Traffic enforcement
+ */
+
+const systemCommandExecutor =
+  new LinuxSystemCommandExecutor();
+
+const ifbManager =
+  new LinuxIfbManager(
+    systemCommandExecutor,
+  );
+
+const tcStateReader =
+  new LinuxTcStateReader(
+    systemCommandExecutor,
+  );
+
+const trafficPolicyValidator =
+  new DefaultTrafficPolicyValidator(
+    config.network.uplinkBandwidthMbps,
+  );
+
+const trafficEnforcer =
+  new SingleInterfaceIfbTrafficEnforcer(
+    config.network.uplinkBandwidthMbps,
+    config.network.lanInterface,
+    systemCommandExecutor,
+    ifbManager,
+    tcStateReader,
+  );
+
+/*
+ * Traffic accounting
+ */
+
+const trafficUsageReader =
+  new NftTrafficUsageReader({
+    mode:
+      config.network.networkMode,
+
+    clientInterface:
+      config.network.clientInterface,
+
+    uplinkInterface:
+      config.network.networkMode ===
+      "dual-interface"
+        ? config.network.uplinkInterface
+        : null,
+
+    clientSubnet:
+      config.network.clientSubnet,
+  });
+
+const trafficSampleRepository =
+  new PrismaTrafficSampleRepository();
+
+const trafficAccountingService =
+  new TrafficAccountingService(
+    deviceRepository,
+    discoveryService,
+    trafficUsageReader,
+    trafficSampleRepository,
+  );
+
+const trafficReconciliationService =
+  new TrafficReconciliationService(
+    deviceRepository,
+    policyRepository,
+    trafficEnforcer,
+  );
+
+const trafficEnforcementService =
+  new TrafficEnforcementService(
+    trafficEnforcer,
+    trafficPolicyValidator,
+    deviceRepository,
+    policyRepository,
+  );
+
+/*
+ * Routes
+ */
+
+await deviceRoutes(
+  app,
+  deviceService,
+  devicePolicyService,
+  firewallService,
+  liveMonitoringService,
+  trafficEnforcementService,
+);
+
+
+
+/* * Health */
+
+
+
+
+
+app.get( "/api/health", async () => {
+
+
+    return {
+      status: "ok",
+    };
+  },
+);
+
+/*
+ * Start server
+ */
+
+await app.listen({
+  host: "0.0.0.0",
+  port: config.server.port,
+});
+
+/*
+ * Traffic policy reconciliation
+ */
+
+try {
+  await trafficReconciliationService.reconcile();
+
+  console.log(
+    "Traffic policy reconciliation completed.",
+  );
+} catch (error) {
+  console.error(
+    "Traffic policy reconciliation failed:",
+    error,
+  );
+
+  throw error;
+}
+
+/*
+ * Device discovery synchronization
+ *
+ * Start this BEFORE traffic accounting so that
+ * the database contains the current IP addresses.
+ */
+
+try {
+  await deviceDiscoverySyncService.start();
+
+  console.log(
+    "Device discovery synchronization started.",
+  );
+} catch (error) {
+  console.error(
+    "Device discovery synchronization startup failed:",
+    error,
+  );
+
+  throw error;
+}
+
+/*
+ * Traffic accounting
+ */
+
+try {
+  await trafficAccountingService.start();
+
+  console.log(
+    "Traffic accounting started.",
+  );
+} catch (error) {
+  console.error(
+    "Traffic accounting startup failed:",
+    error,
+  );
+
+  throw error;
+}

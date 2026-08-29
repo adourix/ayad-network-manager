@@ -1,0 +1,303 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/infrastructure/database/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Device {
+  id                Int      @id @default(autoincrement())
+  mac               String   @unique
+  ip                String?
+  hostname          String?
+  l2Visible         Boolean  @default(true)
+  proxyMac          String?
+  identityValidated Boolean  @default(true)
+  identitySource    IdentitySource @default(DHCP)
+  firstSeen         DateTime @default(now())
+  lastSeen          DateTime @default(now())
+
+  policy         DevicePolicy?
+  trafficSamples TrafficSample[]
+  trafficRollups TrafficRollup[]
+  quotaPeriods   QuotaPeriod[]
+  notifications  Notification[]
+  portRules      PortRule[]
+  auditLogs      AuditLog[]
+  blockedDevice  BlockedDevice?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([lastSeen])
+  @@map("devices")
+}
+
+enum IdentitySource {
+  DHCP
+  DHCP_CONFIRMED_PROXY
+  STATIC_ARP
+  PROXY_UNCONFIRMED
+  PROXY_ACCEPTED_BY_ADMIN
+}
+
+model NeighborObservation {
+  id               BigInt   @id @default(autoincrement())
+  mac              String
+  ip               String
+  neighborState    String
+  consecutiveCount Int      @default(1)
+  lastSeen         DateTime @default(now())
+  @@unique([mac, ip])
+  @@index([lastSeen])
+  @@map("neighbor_observations")
+}
+
+model DevicePolicy {
+  id       Int    @id @default(autoincrement())
+  deviceId Int    @unique
+  device   Device @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+
+  blocked Boolean @default(false)
+
+  downloadLimit BigInt?
+  uploadLimit   BigInt?
+
+  quota       BigInt?
+  quotaPeriod String?
+  quotaAction String?
+
+  quotaEnforcedAction String?
+
+  profileId Int?
+  profile   Profile? @relation(fields: [profileId], references: [id], onDelete: SetNull)
+
+  scheduleId Int?
+  schedule   Schedule? @relation(fields: [scheduleId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([profileId])
+  @@index([scheduleId])
+  @@map("device_policies")
+}
+
+model Profile {
+  id          Int     @id @default(autoincrement())
+  name        String  @unique
+  description String?
+
+  downloadLimit BigInt?
+  uploadLimit   BigInt?
+  quota         BigInt?
+  quotaPeriod   String?
+
+  policies DevicePolicy[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("profiles")
+}
+
+model Schedule {
+  id          Int     @id @default(autoincrement())
+  name        String  @unique
+  description String?
+
+  policies DevicePolicy[]
+  rules    ScheduleRule[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("schedules")
+}
+
+model ScheduleRule {
+  id         Int      @id @default(autoincrement())
+  scheduleId Int
+  schedule   Schedule @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
+
+  dayOfWeek Int
+  startTime String
+  endTime   String
+
+  downloadLimit BigInt?
+  uploadLimit   BigInt?
+  blocked       Boolean?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([scheduleId])
+  @@map("schedule_rules")
+}
+
+model PortRule {
+  id Int @id @default(autoincrement())
+
+  deviceId Int
+  device   Device @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+
+  name     String
+  protocol String
+  port     Int
+  action   String
+
+  enabled Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([protocol, port])
+  @@index([deviceId])
+  @@map("port_rules")
+}
+
+model QuotaPeriod {
+  id       Int    @id @default(autoincrement())
+  deviceId Int
+  device   Device @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+
+  periodType  String
+  periodStart DateTime
+  periodEnd   DateTime
+
+  usedDownloadBytes BigInt @default(0)
+  usedUploadBytes   BigInt @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([deviceId, periodType, periodStart])
+  @@index([deviceId, periodEnd])
+  @@map("quota_periods")
+}
+
+model TrafficSample {
+  id       BigInt @id @default(autoincrement())
+  deviceId Int
+  device   Device @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+
+  timestamp DateTime
+
+  downloadBytes BigInt
+  uploadBytes   BigInt
+
+  downloadRate BigInt?
+  uploadRate   BigInt?
+
+  @@unique([deviceId, timestamp])
+  @@index([deviceId, timestamp])
+  @@map("traffic_samples")
+}
+
+model TrafficRollup {
+  id            BigInt   @id @default(autoincrement())
+  deviceId      Int
+  device        Device   @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  bucketStart   DateTime
+  granularity   String
+  downloadBytes BigInt
+  uploadBytes   BigInt
+
+  @@unique([deviceId, bucketStart, granularity])
+  @@index([deviceId, bucketStart])
+  @@map("traffic_rollups")
+}
+
+model Notification {
+  id       Int     @id @default(autoincrement())
+  deviceId Int?
+  device   Device? @relation(fields: [deviceId], references: [id], onDelete: SetNull)
+
+  type    String
+  message String
+
+  createdAt DateTime  @default(now())
+  readAt    DateTime?
+  deliveryAttempts Int @default(0)
+  nextAttemptAt DateTime @default(now())
+  deliveredAt DateTime?
+  lastDeliveryError String?
+
+  @@index([deviceId])
+  @@index([createdAt])
+  @@index([deliveredAt, nextAttemptAt])
+  @@map("notifications")
+}
+
+model VpnConfig {
+  id              Int       @id @default(1)
+  vmessLink       String
+  enabled         Boolean   @default(false)
+  connected       Boolean   @default(false)
+  lastConnectedAt DateTime?
+  updatedAt       DateTime  @updatedAt
+
+  @@map("vpn_config")
+}
+
+model AuditLog {
+  id BigInt @id @default(autoincrement())
+
+  deviceId Int?
+  device   Device? @relation(fields: [deviceId], references: [id], onDelete: SetNull)
+
+  action  String
+  mac     String?
+  details Json?
+
+  createdAt DateTime @default(now())
+
+  @@index([deviceId])
+  @@index([mac])
+  @@index([createdAt])
+  @@map("audit_log")
+}
+
+model BlockedDevice {
+  id        Int      @id @default(autoincrement())
+  deviceId  Int      @unique
+  mac       String?  @unique
+  active    Boolean  @default(true)
+  reason    String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  device    Device      @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  ipBindings IpBinding[]
+
+  @@index([active])
+  @@map("blocked_devices")
+}
+
+model IpBinding {
+  id              Int      @id @default(autoincrement())
+  blockedDeviceId Int
+  ip              String
+  active          Boolean  @default(true)
+  boundAt         DateTime @default(now())
+  releasedAt      DateTime?
+  releaseReason   String?
+
+  blockedDevice BlockedDevice @relation(fields: [blockedDeviceId], references: [id], onDelete: Cascade)
+
+  @@index([ip, active])
+  @@unique([blockedDeviceId, ip, active])
+  @@map("ip_bindings")
+}
+
+model AuthSession {
+  id        BigInt   @id @default(autoincrement())
+  tokenHash String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([expiresAt])
+  @@map("auth_sessions")
+}

@@ -1,0 +1,23 @@
+[Unit]
+Description=Network Control System backend
+After=network-online.target postgresql.service network-control-enforcement.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=@APP_ROOT@
+EnvironmentFile=@CONFIG_FILE@
+Environment=ENFORCEMENT_SOCKET_PATH=/run/network-control/enforcement.sock
+ExecStart=/usr/bin/node @APP_ROOT@/dist/server.js
+Restart=on-failure
+RestartSec=5
+CapabilityBoundingSet=CAP_NET_RAW
+AmbientCapabilities=CAP_NET_RAW
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=@APP_ROOT@ /run/network-control
+
+[Install]
+WantedBy=multi-user.target

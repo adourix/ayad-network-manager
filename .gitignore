@@ -1,0 +1,13 @@
+node_modules
+# Keep environment variables out of version control
+.env
+
+/generated/prisma
+
+# Runtime/build artifacts
+backend/dist/
+backend/.tmp/
+backend/cache/
+backend/node_modules/
+backend/client/
+backend-before-architecture.tar.gz

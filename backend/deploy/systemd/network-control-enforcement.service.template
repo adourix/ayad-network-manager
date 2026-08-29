@@ -1,0 +1,23 @@
+[Unit]
+Description=Network Control System privileged enforcement agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=@APP_ROOT@
+EnvironmentFile=@CONFIG_FILE@
+RuntimeDirectory=network-control
+ExecStart=/usr/bin/node @APP_ROOT@/dist/infrastructure/enforcement/EnforcementAgent.js
+Restart=on-failure
+RestartSec=5
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/run/network-control
+
+[Install]
+WantedBy=multi-user.target
