@@ -9,8 +9,6 @@ import type {
 
 const execFileAsync = promisify(execFile);
 
-// Privileged commands must never be able to pin the enforcement agent forever
-// if a kernel/netlink operation stops responding.
 const COMMAND_TIMEOUT_MS = 5_000;
 
 export class LinuxSystemCommandExecutor implements SystemCommandExecutor {
@@ -44,14 +42,10 @@ export class LinuxSystemCommandExecutor implements SystemCommandExecutor {
           ? "/usr/sbin/nft"
           : command;
 
-    const { stdout, stderr } = await execFileAsync(
-      executable,
-      args,
-      {
-        timeout: this.timeoutMs,
-        killSignal: "SIGKILL",
-      },
-    );
+    const { stdout, stderr } = await execFileAsync(executable, args, {
+      timeout: this.timeoutMs,
+      killSignal: "SIGKILL",
+    });
 
     return { stdout, stderr };
   }
@@ -65,6 +59,13 @@ export class LinuxSystemCommandExecutor implements SystemCommandExecutor {
       const socket = createConnection(socketPath);
       let data = "";
       let settled = false;
+      let deadline: NodeJS.Timeout;
+
+      const cleanup = (): void => {
+        clearTimeout(deadline);
+        socket.removeAllListeners();
+        socket.destroy();
+      };
 
       const finish = (
         error?: Error,
@@ -72,20 +73,19 @@ export class LinuxSystemCommandExecutor implements SystemCommandExecutor {
       ): void => {
         if (settled) return;
         settled = true;
-        clearTimeout(deadline);
-        socket.destroy();
+        cleanup();
 
         if (error) reject(error);
         else resolve(result!);
       };
 
-      const deadline = setTimeout(() => {
+      deadline = setTimeout(() => {
         finish(
           new Error(
-            `enforcement command timed out after ${COMMAND_TIMEOUT_MS}ms`,
+            `enforcement command timed out after ${this.timeoutMs}ms`,
           ),
         );
-      }, COMMAND_TIMEOUT_MS);
+      }, this.timeoutMs);
 
       socket.once("error", (error) => finish(error));
 
@@ -94,13 +94,20 @@ export class LinuxSystemCommandExecutor implements SystemCommandExecutor {
         const newline = data.indexOf("\n");
         if (newline < 0) return;
 
+        const line = data.slice(0, newline);
+
         try {
-          const result = JSON.parse(data.slice(0, newline)) as {
+          const result = JSON.parse(line) as {
             ok: boolean;
             stdout?: string;
             stderr?: string;
             error?: string;
           };
+
+          if (typeof result.ok !== "boolean") {
+            finish(new Error("invalid enforcement response"));
+            return;
+          }
 
           if (!result.ok) {
             finish(
@@ -109,12 +116,13 @@ export class LinuxSystemCommandExecutor implements SystemCommandExecutor {
                   "privileged enforcement command failed",
               ),
             );
-          } else {
-            finish(undefined, {
-              stdout: result.stdout ?? "",
-              stderr: result.stderr ?? "",
-            });
+            return;
           }
+
+          finish(undefined, {
+            stdout: result.stdout ?? "",
+            stderr: result.stderr ?? "",
+          });
         } catch (error) {
           finish(
             error instanceof Error
@@ -124,8 +132,19 @@ export class LinuxSystemCommandExecutor implements SystemCommandExecutor {
         }
       });
 
-      socket.on("connect", () => {
-        socket.end(`${JSON.stringify({ command, args })}\n`);
+      socket.once("close", () => {
+        if (settled) return;
+        finish(
+          new Error(
+            "enforcement socket closed before a response was received",
+          ),
+        );
+      });
+
+      socket.once("connect", () => {
+        socket.write(
+          `${JSON.stringify({ command, args })}\n`,
+        );
       });
     });
   }
