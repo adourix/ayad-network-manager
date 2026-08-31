@@ -25,13 +25,16 @@ function valid(command: string, args: string[]): boolean {
   );
 }
 
+/*
+ * Only network-state probes belong to the background lane.
+ *
+ * nft reads MUST stay on the priority path because the enforcement layer
+ * performs read-before-write operations (for example, locating a rule handle
+ * before inserting/replacing it). Putting nft list operations behind the
+ * background queue can starve a mutation while the backend's reconciliation
+ * loops continue polling, which is exactly what causes the 5s remote timeout.
+ */
 function isBackgroundRead(command: string, args: string[]): boolean {
-  if (command === "nft") {
-    const verbIndex = args.findIndex((arg) => arg === "list");
-    if (verbIndex < 0) return false;
-    return ["set", "chain", "table"].includes(args[verbIndex + 1] ?? "");
-  }
-
   if (command === "tc") {
     return (
       (args[0] === "filter" && args[1] === "show") ||
@@ -89,13 +92,12 @@ class SerialLane {
 }
 
 /*
- * Two independent lanes are intentional:
- * - background inspection is serialized so polling cannot fork-bomb nft/tc;
- * - priority mutations are serialized among themselves but NEVER wait behind
- *   a slow background read.
+ * Background polling is serialized to avoid spawning an unbounded number of
+ * simultaneous tc/ip inspection processes. Mutating enforcement commands are
+ * deliberately NOT queued: the backend NftEnforcer already serializes its
+ * mutations, while the privileged agent must remain responsive to them.
  */
-const backgroundLane = new SerialLane(64);
-const priorityLane = new SerialLane(64);
+const backgroundLane = new SerialLane(1);
 
 try {
   unlinkSync(socketPath);
@@ -110,13 +112,61 @@ const server = createServer((socket) => {
     socket.end(`${JSON.stringify(payload)}\n`);
   };
 
+  const executeRequest = async (
+    request: { command: string; args: string[] },
+    background: boolean,
+  ): Promise<void> => {
+    const executor = background ? backgroundRead : local;
+
+    try {
+      console.error(
+        "enforcement execute",
+        request.command,
+        request.args,
+        background ? "background" : "priority",
+      );
+
+      const result = await executor.execute(
+        request.command,
+        request.args,
+      );
+
+      console.error(
+        "enforcement completed",
+        request.command,
+      );
+
+      send({ ok: true, ...result });
+    } catch (error) {
+      console.error(
+        "enforcement failed",
+        error instanceof Error
+          ? error.message
+          : String(error),
+      );
+
+      send({
+        ok: false,
+        error:
+          error instanceof Error
+            ? error.message
+            : String(error),
+      });
+    }
+  };
+
   const handle = (): void => {
     if (handled) return;
     handled = true;
 
     let request: { command: string; args: string[] };
+
     try {
-      request = JSON.parse(input.trim()) as { command: string; args: string[] };
+      request = JSON.parse(input.trim()) as {
+        command: string;
+        args: string[];
+      };
+
       if (
         !Array.isArray(request.args) ||
         typeof request.command !== "string" ||
@@ -127,51 +177,63 @@ const server = createServer((socket) => {
     } catch (error) {
       send({
         ok: false,
-        error: error instanceof Error ? error.message : String(error),
+        error:
+          error instanceof Error
+            ? error.message
+            : String(error),
       });
       return;
     }
 
-    const background = isBackgroundRead(request.command, request.args);
-    const lane = background ? backgroundLane : priorityLane;
-    const executor = background ? backgroundRead : local;
+    const background = isBackgroundRead(
+      request.command,
+      request.args,
+    );
+
+    if (!background) {
+      void executeRequest(request, false);
+      return;
+    }
 
     try {
-      lane.enqueue(async () => {
-        try {
-          const result = await executor.execute(request.command, request.args);
-          send({ ok: true, ...result });
-        } catch (error) {
-          send({
-            ok: false,
-            error: error instanceof Error ? error.message : String(error),
-          });
-        }
-      });
+      backgroundLane.enqueue(() =>
+        executeRequest(request, true),
+      );
     } catch (error) {
       send({
         ok: false,
-        error: error instanceof Error ? error.message : String(error),
+        error:
+          error instanceof Error
+            ? error.message
+            : String(error),
       });
     }
   };
 
   socket.on("data", (chunk) => {
     input += chunk.toString();
+
     if (input.length > 64 * 1024) {
       socket.destroy();
       return;
     }
-    if (input.includes("\n")) handle();
+
+    if (input.includes("\n")) {
+      handle();
+    }
   });
 
   socket.on("end", () => {
-    if (!handled && input.trim()) handle();
+    if (!handled && input.trim()) {
+      handle();
+    }
   });
 });
 
 server.listen(socketPath, () => {
-  process.stdout.write(`enforcement agent listening on ${socketPath}\n`);
+  process.stdout.write(
+    `enforcement agent listening on ${socketPath}\n`,
+  );
 });
 
 process.on("SIGTERM", () => {
@@ -179,6 +241,7 @@ process.on("SIGTERM", () => {
     try {
       unlinkSync(socketPath);
     } catch {}
+
     process.exit(0);
   });
 });
