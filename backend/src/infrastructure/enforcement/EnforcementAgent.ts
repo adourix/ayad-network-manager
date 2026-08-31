@@ -10,6 +10,9 @@ const allowed = new Set(["nft", "tc", "ip", "systemctl"]);
 const local = new LinuxSystemCommandExecutor(true);
 const backgroundRead = new LinuxSystemCommandExecutor(true, 1_000);
 
+type Request = { command: string; args: string[] };
+type Job = () => Promise<void>;
+
 function valid(command: string, args: string[]): boolean {
   if (
     !allowed.has(command) ||
@@ -26,13 +29,9 @@ function valid(command: string, args: string[]): boolean {
 }
 
 /*
- * Only network-state probes belong to the background lane.
- *
- * nft reads MUST stay on the priority path because the enforcement layer
- * performs read-before-write operations (for example, locating a rule handle
- * before inserting/replacing it). Putting nft list operations behind the
- * background queue can starve a mutation while the backend's reconciliation
- * loops continue polling, which is exactly what causes the 5s remote timeout.
+ * Only expensive state polling is background work. Mutations and nft reads
+ * stay on the priority lane because nft read-before-write operations are part
+ * of the interactive enforcement path.
  */
 function isBackgroundRead(command: string, args: string[]): boolean {
   if (command === "tc") {
@@ -53,19 +52,22 @@ function isBackgroundRead(command: string, args: string[]): boolean {
   return false;
 }
 
-type Job = () => Promise<void>;
-
-class SerialLane {
+class PriorityScheduler {
   private running = false;
-  private readonly queue: Job[] = [];
+  private readonly priority: Job[] = [];
+  private readonly background: Job[] = [];
 
-  constructor(private readonly maxQueued: number) {}
+  constructor(private readonly maxBackgroundQueue = 2, private readonly maxPriorityQueue = 64) {}
 
-  enqueue(job: Job): void {
-    if (this.queue.length >= this.maxQueued) {
-      throw new Error("enforcement lane overloaded");
+  enqueue(job: Job, background: boolean): void {
+    const queue = background ? this.background : this.priority;
+    const limit = background ? this.maxBackgroundQueue : this.maxPriorityQueue;
+
+    if (queue.length >= limit) {
+      throw new Error(background ? "background enforcement queue overloaded" : "enforcement queue overloaded");
     }
-    this.queue.push(job);
+
+    queue.push(job);
     void this.drain();
   }
 
@@ -74,13 +76,15 @@ class SerialLane {
     this.running = true;
 
     try {
-      while (this.queue.length > 0) {
-        const job = this.queue.shift()!;
+      while (this.priority.length > 0 || this.background.length > 0) {
+        const job = this.priority.shift() ?? this.background.shift();
+        if (!job) continue;
+
         try {
           await job();
         } catch (error) {
           console.error(
-            "enforcement lane job failed",
+            "enforcement scheduler job failed",
             error instanceof Error ? error.message : String(error),
           );
         }
@@ -91,13 +95,7 @@ class SerialLane {
   }
 }
 
-/*
- * Background polling is serialized to avoid spawning an unbounded number of
- * simultaneous tc/ip inspection processes. Mutating enforcement commands are
- * deliberately NOT queued: the backend NftEnforcer already serializes its
- * mutations, while the privileged agent must remain responsive to them.
- */
-const backgroundLane = new SerialLane(1);
+const scheduler = new PriorityScheduler();
 
 try {
   unlinkSync(socketPath);
@@ -112,10 +110,7 @@ const server = createServer((socket) => {
     socket.end(`${JSON.stringify(payload)}\n`);
   };
 
-  const executeRequest = async (
-    request: { command: string; args: string[] },
-    background: boolean,
-  ): Promise<void> => {
+  const executeRequest = async (request: Request, background: boolean): Promise<void> => {
     const executor = background ? backgroundRead : local;
 
     try {
@@ -126,31 +121,19 @@ const server = createServer((socket) => {
         background ? "background" : "priority",
       );
 
-      const result = await executor.execute(
-        request.command,
-        request.args,
-      );
+      const result = await executor.execute(request.command, request.args);
 
-      console.error(
-        "enforcement completed",
-        request.command,
-      );
-
+      console.error("enforcement completed", request.command);
       send({ ok: true, ...result });
     } catch (error) {
       console.error(
         "enforcement failed",
-        error instanceof Error
-          ? error.message
-          : String(error),
+        error instanceof Error ? error.message : String(error),
       );
 
       send({
         ok: false,
-        error:
-          error instanceof Error
-            ? error.message
-            : String(error),
+        error: error instanceof Error ? error.message : String(error),
       });
     }
   };
@@ -159,14 +142,9 @@ const server = createServer((socket) => {
     if (handled) return;
     handled = true;
 
-    let request: { command: string; args: string[] };
-
+    let request: Request;
     try {
-      request = JSON.parse(input.trim()) as {
-        command: string;
-        args: string[];
-      };
-
+      request = JSON.parse(input.trim()) as Request;
       if (
         !Array.isArray(request.args) ||
         typeof request.command !== "string" ||
@@ -177,63 +155,42 @@ const server = createServer((socket) => {
     } catch (error) {
       send({
         ok: false,
-        error:
-          error instanceof Error
-            ? error.message
-            : String(error),
+        error: error instanceof Error ? error.message : String(error),
       });
       return;
     }
 
-    const background = isBackgroundRead(
-      request.command,
-      request.args,
-    );
-
-    if (!background) {
-      void executeRequest(request, false);
-      return;
-    }
+    const background = isBackgroundRead(request.command, request.args);
 
     try {
-      backgroundLane.enqueue(() =>
-        executeRequest(request, true),
+      scheduler.enqueue(
+        () => executeRequest(request, background),
+        background,
       );
     } catch (error) {
       send({
         ok: false,
-        error:
-          error instanceof Error
-            ? error.message
-            : String(error),
+        error: error instanceof Error ? error.message : String(error),
       });
     }
   };
 
   socket.on("data", (chunk) => {
     input += chunk.toString();
-
     if (input.length > 64 * 1024) {
       socket.destroy();
       return;
     }
-
-    if (input.includes("\n")) {
-      handle();
-    }
+    if (input.includes("\n")) handle();
   });
 
   socket.on("end", () => {
-    if (!handled && input.trim()) {
-      handle();
-    }
+    if (!handled && input.trim()) handle();
   });
 });
 
 server.listen(socketPath, () => {
-  process.stdout.write(
-    `enforcement agent listening on ${socketPath}\n`,
-  );
+  process.stdout.write(`enforcement agent listening on ${socketPath}\n`);
 });
 
 process.on("SIGTERM", () => {
@@ -241,7 +198,6 @@ process.on("SIGTERM", () => {
     try {
       unlinkSync(socketPath);
     } catch {}
-
     process.exit(0);
   });
 });
