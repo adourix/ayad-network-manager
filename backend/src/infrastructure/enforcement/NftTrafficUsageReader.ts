@@ -1,8 +1,4 @@
-import type {
-  TrafficUsage,
-  TrafficUsageDevice,
-  TrafficUsageReader,
-} from "../../application/monitoring/TrafficUsageReader.js";
+import type { TrafficUsage, TrafficUsageDevice, TrafficUsageReader } from "../../application/monitoring/TrafficUsageReader.js";
 import type { TrafficAccountingTopology } from "../../application/monitoring/TrafficAccountingTopology.js";
 import type { SystemCommandExecutor } from "./SystemCommandExecutor.js";
 
@@ -20,24 +16,14 @@ function validateMac(mac: string): string {
 function validateIp(ip: string): string {
   const normalized = ip.trim();
   const parts = normalized.split(".").map(Number);
-  if (
-    parts.length !== 4 ||
-    parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)
-  ) {
+  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
     throw new Error(`Invalid IPv4 address: ${ip}`);
   }
   return normalized;
 }
 
-interface NftCounter {
-  name: string;
-  bytes: bigint;
-}
-
-interface NftRule {
-  handle: number;
-  comment: string;
-}
+interface NftCounter { name: string; bytes: bigint; }
+interface NftRule { handle: number; comment: string; raw: unknown; }
 
 export class NftTrafficUsageReader implements TrafficUsageReader {
   constructor(
@@ -45,19 +31,16 @@ export class NftTrafficUsageReader implements TrafficUsageReader {
     private readonly executor: SystemCommandExecutor,
   ) {}
 
-  private async execNft(args: string[]): Promise<{ stdout: string; stderr: string }> {
+  private execNft(args: string[]): Promise<{ stdout: string; stderr: string }> {
     return this.executor.execute("nft", args);
   }
 
   async readDeviceUsage(mac: string): Promise<TrafficUsage> {
     const normalizedMac = validateMac(mac);
-    const downloadCounter = this.counterName(normalizedMac, "download");
-    const uploadCounter = this.counterName(normalizedMac, "upload");
     const counters = await this.readCounters();
-
     return {
-      downloadBytes: counters.get(downloadCounter) ?? 0n,
-      uploadBytes: counters.get(uploadCounter) ?? 0n,
+      downloadBytes: counters.get(this.counterName(normalizedMac, "download")) ?? 0n,
+      uploadBytes: counters.get(this.counterName(normalizedMac, "upload")) ?? 0n,
     };
   }
 
@@ -67,40 +50,47 @@ export class NftTrafficUsageReader implements TrafficUsageReader {
     const normalizedIp = validateIp(device.ip);
 
     await this.ensureTable();
-
-    const downloadCounter = this.counterName(normalizedMac, "download");
-    const uploadCounter = this.counterName(normalizedMac, "upload");
-    const existingCounters = await this.readCounters();
-
-    if (!existingCounters.has(downloadCounter)) {
-      await this.execNft(["add", "counter", TABLE_FAMILY, TABLE_NAME, downloadCounter]);
-    }
-    if (!existingCounters.has(uploadCounter)) {
-      await this.execNft(["add", "counter", TABLE_FAMILY, TABLE_NAME, uploadCounter]);
-    }
-
-    await this.ensureRule("download", normalizedMac, normalizedIp, downloadCounter);
-    await this.ensureRule("upload", normalizedMac, normalizedIp, uploadCounter);
+    const counters = await this.readCounters();
+    const rules = await this.readRules();
+    await this.ensureDeviceCounters(normalizedMac, counters);
+    await this.ensureRuleWithState("download", normalizedMac, normalizedIp, this.counterName(normalizedMac, "download"), rules);
+    await this.ensureRuleWithState("upload", normalizedMac, normalizedIp, this.counterName(normalizedMac, "upload"), rules);
   }
 
   async reconcileDeviceAccounting(devices: TrafficUsageDevice[]): Promise<void> {
     await this.ensureTable();
 
-    for (const device of devices) {
-      await this.ensureDeviceAccounting(device);
-    }
-
+    const counters = await this.readCounters();
+    const rules = await this.readRules();
     const activeComments = new Set<string>();
+
     for (const device of devices) {
       const mac = validateMac(device.mac);
+      if (!device.ip) continue;
+      const ip = validateIp(device.ip);
+
       activeComments.add(this.ruleComment(mac, "download"));
       activeComments.add(this.ruleComment(mac, "upload"));
+
+      await this.ensureDeviceCounters(mac, counters);
+      await this.ensureRuleWithState("download", mac, ip, this.counterName(mac, "download"), rules);
+      await this.ensureRuleWithState("upload", mac, ip, this.counterName(mac, "upload"), rules);
     }
 
-    for (const rule of await this.readRules()) {
+    const finalRules = await this.readRules();
+    for (const rule of finalRules) {
       if (!rule.comment.startsWith("ayad_nm_")) continue;
       if (activeComments.has(rule.comment)) continue;
       await this.deleteRule(rule.handle);
+    }
+  }
+
+  private async ensureDeviceCounters(mac: string, counters: Map<string, bigint>): Promise<void> {
+    for (const direction of ["download", "upload"] as const) {
+      const name = this.counterName(mac, direction);
+      if (counters.has(name)) continue;
+      await this.execNft(["add", "counter", TABLE_FAMILY, TABLE_NAME, name]);
+      counters.set(name, 0n);
     }
   }
 
@@ -129,23 +119,35 @@ export class NftTrafficUsageReader implements TrafficUsageReader {
     }
   }
 
-  private async ensureRule(
+  private async ensureRuleWithState(
     direction: "download" | "upload",
     mac: string,
     ip: string,
     counterName: string,
+    rules: NftRule[],
   ): Promise<void> {
     const comment = this.ruleComment(mac, direction);
-    const rules = await this.readRules();
     const existingRule = rules.find((rule) => rule.comment === comment);
-    const expressions = this.buildRuleExpressions(direction, mac, ip);
 
+    if (existingRule && this.ruleMatches(existingRule.raw, direction, mac, ip)) return;
+
+    const expressions = this.buildRuleExpressions(direction, mac, ip);
     if (!existingRule) {
       await this.addRule(expressions, counterName, comment);
-      return;
+    } else {
+      await this.replaceRule(existingRule.handle, expressions, counterName, comment);
+    }
+  }
+
+  private ruleMatches(raw: unknown, direction: "download" | "upload", mac: string, ip: string): boolean {
+    const serialized = JSON.stringify(raw);
+    if (!serialized.includes(ip) || !serialized.includes(mac)) return false;
+
+    if (direction === "download") {
+      return serialized.includes("daddr") && !serialized.includes("saddr");
     }
 
-    await this.replaceRule(existingRule.handle, expressions, counterName, comment);
+    return serialized.includes("saddr");
   }
 
   private async addRule(expressions: string[], counterName: string, comment: string): Promise<void> {
@@ -155,12 +157,7 @@ export class NftTrafficUsageReader implements TrafficUsageReader {
     ]);
   }
 
-  private async replaceRule(
-    handle: number,
-    expressions: string[],
-    counterName: string,
-    comment: string,
-  ): Promise<void> {
+  private async replaceRule(handle: number, expressions: string[], counterName: string, comment: string): Promise<void> {
     await this.execNft([
       "replace", "rule", TABLE_FAMILY, TABLE_NAME, CHAIN_NAME,
       "handle", String(handle), ...expressions,
@@ -169,51 +166,30 @@ export class NftTrafficUsageReader implements TrafficUsageReader {
   }
 
   private async deleteRule(handle: number): Promise<void> {
-    await this.execNft([
-      "delete", "rule", TABLE_FAMILY, TABLE_NAME, CHAIN_NAME,
-      "handle", String(handle),
-    ]);
+    await this.execNft(["delete", "rule", TABLE_FAMILY, TABLE_NAME, CHAIN_NAME, "handle", String(handle)]);
   }
 
-  private buildRuleExpressions(
-    direction: "download" | "upload",
-    mac: string,
-    ip: string,
-  ): string[] {
+  private buildRuleExpressions(direction: "download" | "upload", mac: string, ip: string): string[] {
     const { mode, clientInterface, uplinkInterface, clientSubnet } = this.topology;
 
     if (mode === "single-interface-ifb") {
       if (direction === "download") {
         return ["iifname", clientInterface, "ip", "daddr", ip];
       }
-      return [
-        "iifname", clientInterface,
-        "ip", "saddr", clientSubnet,
-        "ether", "saddr", mac,
-      ];
+      return ["iifname", clientInterface, "ip", "saddr", clientSubnet, "ether", "saddr", mac];
     }
 
-    if (!uplinkInterface) {
-      throw new Error("Dual-interface accounting requires an uplink interface");
-    }
+    if (!uplinkInterface) throw new Error("Dual-interface accounting requires an uplink interface");
 
     if (direction === "download") {
       return ["iifname", uplinkInterface, "oifname", clientInterface, "ip", "daddr", ip];
     }
 
-    return [
-      "iifname", clientInterface,
-      "oifname", uplinkInterface,
-      "ip", "saddr", clientSubnet,
-      "ether", "saddr", mac,
-    ];
+    return ["iifname", clientInterface, "oifname", uplinkInterface, "ip", "saddr", clientSubnet, "ether", "saddr", mac];
   }
 
   private async readRules(): Promise<NftRule[]> {
-    const { stdout } = await this.execNft([
-      "-j", "-a", "list", "chain", TABLE_FAMILY, TABLE_NAME, CHAIN_NAME,
-    ]);
-
+    const { stdout } = await this.execNft(["-j", "-a", "list", "chain", TABLE_FAMILY, TABLE_NAME, CHAIN_NAME]);
     let document: { nftables?: unknown[] };
     try {
       document = JSON.parse(stdout) as { nftables?: unknown[] };
@@ -228,16 +204,13 @@ export class NftTrafficUsageReader implements TrafficUsageReader {
       if (typeof rule !== "object" || rule === null) continue;
       const data = rule as Record<string, unknown>;
       if (typeof data.handle !== "number" || typeof data.comment !== "string") continue;
-      result.push({ handle: data.handle, comment: data.comment });
+      result.push({ handle: data.handle, comment: data.comment, raw: rule });
     }
     return result;
   }
 
   private async readCounters(): Promise<Map<string, bigint>> {
-    const { stdout } = await this.execNft([
-      "-j", "list", "counters", TABLE_FAMILY, TABLE_NAME,
-    ]);
-
+    const { stdout } = await this.execNft(["-j", "list", "counters", TABLE_FAMILY, TABLE_NAME]);
     let document: { nftables?: unknown[] };
     try {
       document = JSON.parse(stdout) as { nftables?: unknown[] };
@@ -260,7 +233,6 @@ export class NftTrafficUsageReader implements TrafficUsageReader {
     const data = counter as Record<string, unknown>;
     if (typeof data.name !== "string") return null;
     if (typeof data.bytes !== "number" && typeof data.bytes !== "string") return null;
-
     try {
       return { name: data.name, bytes: BigInt(data.bytes) };
     } catch {
