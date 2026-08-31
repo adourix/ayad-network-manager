@@ -31,11 +31,15 @@ function valid(command: string, args: string[]): boolean {
 
 function isBackgroundRead(command: string, args: string[]): boolean {
   if (command === "nft") {
+    // nft JSON inspection commands commonly start with options such as
+    // `-j`, so do not assume that `list` is args[0].
+    const verbIndex = args.findIndex((arg) => arg === "list");
+    if (verbIndex < 0) return false;
+
     return (
-      args[0] === "list" &&
-      (args[1] === "set" ||
-        args[1] === "chain" ||
-        args[1] === "table")
+      args[verbIndex + 1] === "set" ||
+      args[verbIndex + 1] === "chain" ||
+      args[verbIndex + 1] === "table"
     );
   }
 
