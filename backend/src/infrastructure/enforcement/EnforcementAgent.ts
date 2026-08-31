@@ -14,11 +14,7 @@ function valid(command: string, args: string[]): boolean {
   if (
     !allowed.has(command) ||
     args.length > 64 ||
-    args.some(
-      (arg) =>
-        arg.length > 512 ||
-        /[\r\n\0]/.test(arg),
-    )
+    args.some((arg) => arg.length > 512 || /[\r\n\0]/.test(arg))
   ) {
     return false;
   }
@@ -31,16 +27,9 @@ function valid(command: string, args: string[]): boolean {
 
 function isBackgroundRead(command: string, args: string[]): boolean {
   if (command === "nft") {
-    // nft JSON inspection commands commonly start with options such as
-    // `-j`, so do not assume that `list` is args[0].
     const verbIndex = args.findIndex((arg) => arg === "list");
     if (verbIndex < 0) return false;
-
-    return (
-      args[verbIndex + 1] === "set" ||
-      args[verbIndex + 1] === "chain" ||
-      args[verbIndex + 1] === "table"
-    );
+    return ["set", "chain", "table"].includes(args[verbIndex + 1] ?? "");
   }
 
   if (command === "tc") {
@@ -61,6 +50,53 @@ function isBackgroundRead(command: string, args: string[]): boolean {
   return false;
 }
 
+type Job = () => Promise<void>;
+
+class SerialLane {
+  private running = false;
+  private readonly queue: Job[] = [];
+
+  constructor(private readonly maxQueued: number) {}
+
+  enqueue(job: Job): void {
+    if (this.queue.length >= this.maxQueued) {
+      throw new Error("enforcement lane overloaded");
+    }
+    this.queue.push(job);
+    void this.drain();
+  }
+
+  private async drain(): Promise<void> {
+    if (this.running) return;
+    this.running = true;
+
+    try {
+      while (this.queue.length > 0) {
+        const job = this.queue.shift()!;
+        try {
+          await job();
+        } catch (error) {
+          console.error(
+            "enforcement lane job failed",
+            error instanceof Error ? error.message : String(error),
+          );
+        }
+      }
+    } finally {
+      this.running = false;
+    }
+  }
+}
+
+/*
+ * Two independent lanes are intentional:
+ * - background inspection is serialized so polling cannot fork-bomb nft/tc;
+ * - priority mutations are serialized among themselves but NEVER wait behind
+ *   a slow background read.
+ */
+const backgroundLane = new SerialLane(64);
+const priorityLane = new SerialLane(64);
+
 try {
   unlinkSync(socketPath);
 } catch {}
@@ -74,16 +110,13 @@ const server = createServer((socket) => {
     socket.end(`${JSON.stringify(payload)}\n`);
   };
 
-  const handle = async (): Promise<void> => {
+  const handle = (): void => {
     if (handled) return;
     handled = true;
 
+    let request: { command: string; args: string[] };
     try {
-      const request = JSON.parse(input.trim()) as {
-        command: string;
-        args: string[];
-      };
-
+      request = JSON.parse(input.trim()) as { command: string; args: string[] };
       if (
         !Array.isArray(request.args) ||
         typeof request.command !== "string" ||
@@ -91,71 +124,54 @@ const server = createServer((socket) => {
       ) {
         throw new Error("command rejected by enforcement agent");
       }
-
-      const background = isBackgroundRead(
-        request.command,
-        request.args,
-      );
-
-      console.error(
-        "enforcement execute",
-        request.command,
-        request.args,
-        background ? "background" : "priority",
-      );
-
-      const result = await (
-        background ? backgroundRead : local
-      ).execute(request.command, request.args);
-
-      console.error(
-        "enforcement completed",
-        request.command,
-      );
-
-      send({ ok: true, ...result });
     } catch (error) {
-      console.error(
-        "enforcement failed",
-        error instanceof Error
-          ? error.message
-          : String(error),
-      );
-
       send({
         ok: false,
-        error:
-          error instanceof Error
-            ? error.message
-            : String(error),
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return;
+    }
+
+    const background = isBackgroundRead(request.command, request.args);
+    const lane = background ? backgroundLane : priorityLane;
+    const executor = background ? backgroundRead : local;
+
+    try {
+      lane.enqueue(async () => {
+        try {
+          const result = await executor.execute(request.command, request.args);
+          send({ ok: true, ...result });
+        } catch (error) {
+          send({
+            ok: false,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      });
+    } catch (error) {
+      send({
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
       });
     }
   };
 
   socket.on("data", (chunk) => {
     input += chunk.toString();
-
     if (input.length > 64 * 1024) {
       socket.destroy();
       return;
     }
-
-    if (input.includes("\n")) {
-      void handle();
-    }
+    if (input.includes("\n")) handle();
   });
 
   socket.on("end", () => {
-    if (!handled && input.trim()) {
-      void handle();
-    }
+    if (!handled && input.trim()) handle();
   });
 });
 
 server.listen(socketPath, () => {
-  process.stdout.write(
-    `enforcement agent listening on ${socketPath}\n`,
-  );
+  process.stdout.write(`enforcement agent listening on ${socketPath}\n`);
 });
 
 process.on("SIGTERM", () => {
@@ -163,7 +179,6 @@ process.on("SIGTERM", () => {
     try {
       unlinkSync(socketPath);
     } catch {}
-
     process.exit(0);
   });
 });
