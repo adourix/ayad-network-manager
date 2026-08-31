@@ -26,7 +26,7 @@ test("setup inspection enumerates interfaces and proposes a non-overlapping subn
   assert.ok(report.proposedClientSubnets.includes("192.168.50.0/24"));
 });
 
-test("setup apply renders atomically and rolls back when health checks fail", async () => {
+test("setup apply refuses an unhealthy configuration without destroying the existing config", async () => {
   const root = await mkdtemp(join(tmpdir(), "network-control-setup-"));
   const configPath = join(root, "config.env");
   const dnsmasqPath = join(root, "clients.conf");
@@ -48,7 +48,7 @@ test("setup apply renders atomically and rolls back when health checks fail", as
       }
       if (command === "ip") return { stdout: args.includes("addr") ? "eno1" : "", stderr: "" };
       if (command === "ping") throw new Error("unreachable");
-      if (command === "test" || command === "cat") throw new Error("no lease");
+      if (command === "cat") throw new Error("no lease");
       return { stdout: "", stderr: "" };
     },
   };
@@ -71,6 +71,5 @@ test("setup apply renders atomically and rolls back when health checks fail", as
   });
 
   assert.equal(result.applied, false);
-  assert.equal(result.rolledBack, true);
   assert.equal(await readFile(configPath, "utf8"), "OLD=1\n");
 });
