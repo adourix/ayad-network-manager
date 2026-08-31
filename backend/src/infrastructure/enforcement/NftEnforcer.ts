@@ -10,34 +10,13 @@ export function configureNftAudit(repository: OperationsRepository): void {
 }
 
 async function execNft(args: string[]): Promise<{ stdout: string; stderr: string }> {
-  await nftAudit?.audit({
-    action: "enforcement-command-before",
-    details: { command: "nft", args },
-  });
-
+  await nftAudit?.audit({ action: "enforcement-command-before", details: { command: "nft", args } });
   try {
     const result = await commandExecutor.execute("nft", args);
-    await nftAudit?.audit({
-      action: "enforcement-command-after",
-      details: {
-        command: "nft",
-        args,
-        result: "success",
-        stdout: result.stdout.slice(0, 2000),
-        stderr: result.stderr.slice(0, 2000),
-      },
-    });
+    await nftAudit?.audit({ action: "enforcement-command-after", details: { command: "nft", args, result: "success", stdout: result.stdout.slice(0, 2000), stderr: result.stderr.slice(0, 2000) } });
     return result;
   } catch (error) {
-    await nftAudit?.audit({
-      action: "enforcement-command-after",
-      details: {
-        command: "nft",
-        args,
-        result: "failure",
-        error: error instanceof Error ? error.message : String(error),
-      },
-    });
+    await nftAudit?.audit({ action: "enforcement-command-after", details: { command: "nft", args, result: "failure", error: error instanceof Error ? error.message : String(error) } });
     throw error;
   }
 }
@@ -49,7 +28,6 @@ const MAC_SET_NAME = "blocked_macs";
 const IP_SET_NAME = "blocked_ips";
 const FORWARD_CHAIN = "FORWARD";
 const UPLINK_INTERFACE = config.network.uplinkInterface;
-
 const MAC_REGEX = /^([0-9a-f]{2}:){5}[0-9a-f]{2}$/i;
 const IPV4_REGEX = /^(?:\d{1,3}\.){3}\d{1,3}$/;
 const MAC_BLOCK_COMMENT = "ayad_nm_blocked_macs";
@@ -64,47 +42,28 @@ interface NftRule {
   index: number;
 }
 
-/*
- * nftables serializes transactions in the kernel. We also serialize this
- * module's project-owned mutations so two reconciliations cannot both observe
- * the same handle and then race to delete/reinsert it.
- */
 let mutationTail: Promise<void> = Promise.resolve();
 
 function withMutationLock<T>(operation: () => Promise<T>): Promise<T> {
   const previous = mutationTail;
   let release!: () => void;
-  mutationTail = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-
-  return previous
-    .then(operation)
-    .finally(release);
+  mutationTail = new Promise<void>((resolve) => { release = resolve; });
+  return previous.then(operation).finally(release);
 }
 
 function validateMac(mac: string): string {
   const normalized = mac.trim().toLowerCase();
-  if (!MAC_REGEX.test(normalized)) {
-    throw new Error(`Invalid MAC address: ${mac}`);
-  }
+  if (!MAC_REGEX.test(normalized)) throw new Error(`Invalid MAC address: ${mac}`);
   return normalized;
 }
 
 function validateIp(ip: string): string {
   const normalized = ip.trim();
-  if (!IPV4_REGEX.test(normalized)) {
-    throw new Error(`Invalid IPv4 address: ${ip}`);
-  }
-
+  if (!IPV4_REGEX.test(normalized)) throw new Error(`Invalid IPv4 address: ${ip}`);
   const parts = normalized.split(".").map(Number);
-  if (
-    parts.length !== 4 ||
-    parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)
-  ) {
+  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
     throw new Error(`Invalid IPv4 address: ${ip}`);
   }
-
   return normalized;
 }
 
@@ -113,49 +72,25 @@ function validSubnet(subnet: string): boolean {
   if (!match) return false;
   const octets = match[1].split(".").map(Number);
   const prefix = Number(match[2]);
-  return (
-    octets.length === 4 &&
-    octets.every((octet) => Number.isInteger(octet) && octet >= 0 && octet <= 255) &&
-    Number.isInteger(prefix) && prefix >= 0 && prefix <= 32
-  );
+  return octets.length === 4 && octets.every((octet) => Number.isInteger(octet) && octet >= 0 && octet <= 255) && prefix >= 0 && prefix <= 32;
 }
 
 async function getRulesInChain(table: string, chain: string): Promise<NftRule[]> {
-  const { stdout } = await execNft([
-    "-j",
-    "list",
-    "chain",
-    TABLE_FAMILY,
-    table,
-    chain,
-  ]);
-
+  const { stdout } = await execNft(["-j", "list", "chain", TABLE_FAMILY, table, chain]);
   let document: { nftables?: unknown[] };
-  try {
-    document = JSON.parse(stdout);
-  } catch {
-    throw new Error(`Failed to parse nft JSON for ${table}/${chain}`);
-  }
+  try { document = JSON.parse(stdout); } catch { throw new Error(`Failed to parse nft JSON for ${table}/${chain}`); }
 
   const rules: NftRule[] = [];
   let index = 0;
-
   for (const item of document.nftables ?? []) {
     if (typeof item !== "object" || item === null) continue;
     const value = item as Record<string, unknown>;
     if (typeof value.rule !== "object" || value.rule === null) continue;
-
     const rule = value.rule as Record<string, unknown>;
     if (typeof rule.handle !== "number") continue;
-
-    rules.push({
-      handle: rule.handle,
-      comment: typeof rule.comment === "string" ? rule.comment : null,
-      index,
-    });
+    rules.push({ handle: rule.handle, comment: typeof rule.comment === "string" ? rule.comment : null, index });
     index += 1;
   }
-
   return rules;
 }
 
@@ -165,130 +100,35 @@ async function getForwardRules(): Promise<NftRule[]> {
 
 async function ensureSetUnlocked(name: string, type: string): Promise<void> {
   try {
-    await execNft([
-      "add",
-      "set",
-      TABLE_FAMILY,
-      TABLE_NAME,
-      name,
-      "{",
-      "type",
-      type,
-      ";",
-      "}",
-    ]);
+    await execNft(["add", "set", TABLE_FAMILY, TABLE_NAME, name, "{", "type", type, ";", "}"]);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (!message.includes("File exists")) throw error;
   }
 }
 
-async function ensureRuleAtFront(
-  comment: string,
-  ruleArgs: string[],
-): Promise<void> {
+async function ensureRuleAtPosition(comment: string, ruleArgs: string[], position: number): Promise<void> {
   const rules = await getForwardRules();
   const existing = rules.find((rule) => rule.comment === comment);
+  if (existing?.index === position) return;
 
-  if (!existing) {
-    await execNft([
-      "-c",
-      "insert",
-      "rule",
-      TABLE_FAMILY,
-      TABLE_NAME,
-      FORWARD_CHAIN,
-      "position",
-      "0",
-      ...ruleArgs,
-      "comment",
-      comment,
-    ]);
-    await execNft([
-      "insert",
-      "rule",
-      TABLE_FAMILY,
-      TABLE_NAME,
-      FORWARD_CHAIN,
-      "position",
-      "0",
-      ...ruleArgs,
-      "comment",
-      comment,
-    ]);
-    return;
+  if (existing) {
+    const deleteArgs = ["delete", "rule", TABLE_FAMILY, TABLE_NAME, FORWARD_CHAIN, "handle", String(existing.handle)];
+    await execNft(["-c", ...deleteArgs]);
+    await execNft(deleteArgs);
   }
 
-  // The rule is already first. Do not churn its handle on every request.
-  if (existing.index === 0) return;
-
-  await execNft([
-    "-c",
-    "delete",
-    "rule",
-    TABLE_FAMILY,
-    TABLE_NAME,
-    FORWARD_CHAIN,
-    "handle",
-    String(existing.handle),
-  ]);
-  await execNft([
-    "delete",
-    "rule",
-    TABLE_FAMILY,
-    TABLE_NAME,
-    FORWARD_CHAIN,
-    "handle",
-    String(existing.handle),
-  ]);
-
-  await execNft([
-    "-c",
-    "insert",
-    "rule",
-    TABLE_FAMILY,
-    TABLE_NAME,
-    FORWARD_CHAIN,
-    "position",
-    "0",
-    ...ruleArgs,
-    "comment",
-    comment,
-  ]);
-  await execNft([
-    "insert",
-    "rule",
-    TABLE_FAMILY,
-    TABLE_NAME,
-    FORWARD_CHAIN,
-    "position",
-    "0",
-    ...ruleArgs,
-    "comment",
-    comment,
-  ]);
+  const insertArgs = ["insert", "rule", TABLE_FAMILY, TABLE_NAME, FORWARD_CHAIN, "position", String(position), ...ruleArgs, "comment", comment];
+  await execNft(["-c", ...insertArgs]);
+  await execNft(insertArgs);
 }
 
 async function ensureMacBlockRuleUnlocked(): Promise<void> {
-  await ensureRuleAtFront(MAC_BLOCK_COMMENT, [
-    "ether",
-    "saddr",
-    `@${MAC_SET_NAME}`,
-    "oifname",
-    UPLINK_INTERFACE,
-    "drop",
-  ]);
+  await ensureRuleAtPosition(MAC_BLOCK_COMMENT, ["ether", "saddr", `@${MAC_SET_NAME}`, "oifname", UPLINK_INTERFACE, "drop"], 0);
 }
 
 async function ensureIpBlockRuleUnlocked(): Promise<void> {
-  await ensureRuleAtFront(IP_BLOCK_COMMENT, [
-    "ip",
-    "saddr",
-    `@${IP_SET_NAME}`,
-    "oifname",
-    UPLINK_INTERFACE,
-    "drop",
-  ]);
+  await ensureRuleAtPosition(IP_BLOCK_COMMENT, ["ip", "saddr", `@${IP_SET_NAME}`, "oifname", UPLINK_INTERFACE, "drop"], 1);
 }
 
 export async function ensureFirewallState(): Promise<void> {
@@ -302,77 +142,31 @@ export async function ensureFirewallState(): Promise<void> {
 }
 
 export async function ensureSingleInterfaceNat(clientSubnet: string): Promise<void> {
-  if (!validSubnet(clientSubnet)) {
-    throw new Error(`Invalid client subnet: ${clientSubnet}`);
-  }
-
+  if (!validSubnet(clientSubnet)) throw new Error(`Invalid client subnet: ${clientSubnet}`);
   await withMutationLock(async () => {
     const rules = await getRulesInChain("nat", "POSTROUTING");
     if (rules.some((rule) => rule.comment === NAT_COMMENT)) return;
-
-    const args = [
-      "add",
-      "rule",
-      TABLE_FAMILY,
-      "nat",
-      "POSTROUTING",
-      "ip",
-      "saddr",
-      clientSubnet,
-      "oifname",
-      UPLINK_INTERFACE,
-      "masquerade",
-      "comment",
-      NAT_COMMENT,
-    ];
-
+    const args = ["add", "rule", TABLE_FAMILY, "nat", "POSTROUTING", "ip", "saddr", clientSubnet, "oifname", UPLINK_INTERFACE, "masquerade", "comment", NAT_COMMENT];
     await execNft(["-c", ...args]);
     await execNft(args);
   });
 }
 
 async function ensureManagementAllowRulesUnlocked(): Promise<void> {
-  for (const [chain, port, comment] of [
-    ["INPUT", config.network.sshPort, SSH_ALLOW_COMMENT],
-    ["INPUT", config.server.port, DASHBOARD_ALLOW_COMMENT],
-  ] as const) {
+  for (const [chain, port, comment] of [["INPUT", config.network.sshPort, SSH_ALLOW_COMMENT], ["INPUT", config.server.port, DASHBOARD_ALLOW_COMMENT]] as const) {
     const rules = await getRulesInChain("filter", chain);
     if (rules.some((rule) => rule.comment === comment)) continue;
-
-    const args = [
-      "insert",
-      "rule",
-      TABLE_FAMILY,
-      "filter",
-      chain,
-      "position",
-      "0",
-      "tcp",
-      "dport",
-      String(port),
-      "accept",
-      "comment",
-      comment,
-    ];
-
+    const args = ["insert", "rule", TABLE_FAMILY, "filter", chain, "position", "0", "tcp", "dport", String(port), "accept", "comment", comment];
     await execNft(["-c", ...args]);
     await execNft(args);
   }
 }
 
 export async function getBlockedMacs(): Promise<Set<string>> {
-  const { stdout } = await execNft([
-    "list",
-    "set",
-    TABLE_FAMILY,
-    TABLE_NAME,
-    MAC_SET_NAME,
-  ]);
-
+  const { stdout } = await execNft(["list", "set", TABLE_FAMILY, TABLE_NAME, MAC_SET_NAME]);
   const blocked = new Set<string>();
   const match = stdout.match(/elements\s*=\s*\{([^}]*)\}/);
   if (!match?.[1]) return blocked;
-
   for (const value of match[1].split(",")) {
     const mac = value.trim().toLowerCase();
     if (MAC_REGEX.test(mac)) blocked.add(mac);
@@ -381,18 +175,10 @@ export async function getBlockedMacs(): Promise<Set<string>> {
 }
 
 export async function getBlockedIps(): Promise<Set<string>> {
-  const { stdout } = await execNft([
-    "list",
-    "set",
-    TABLE_FAMILY,
-    TABLE_NAME,
-    IP_SET_NAME,
-  ]);
-
+  const { stdout } = await execNft(["list", "set", TABLE_FAMILY, TABLE_NAME, IP_SET_NAME]);
   const blocked = new Set<string>();
   const match = stdout.match(/elements\s*=\s*\{([^}]*)\}/);
   if (!match?.[1]) return blocked;
-
   for (const value of match[1].split(",")) {
     const ip = value.trim();
     if (IPV4_REGEX.test(ip)) blocked.add(ip);
@@ -401,15 +187,7 @@ export async function getBlockedIps(): Promise<Set<string>> {
 }
 
 async function addElementUnlocked(setName: string, value: string): Promise<void> {
-  const args = [
-    "add",
-    "element",
-    TABLE_FAMILY,
-    TABLE_NAME,
-    setName,
-    `{ ${value} }`,
-  ];
-
+  const args = ["add", "element", TABLE_FAMILY, TABLE_NAME, setName, `{ ${value} }`];
   await execNft(["-c", ...args]);
   try {
     await execNft(args);
@@ -420,26 +198,13 @@ async function addElementUnlocked(setName: string, value: string): Promise<void>
 }
 
 async function deleteElementUnlocked(setName: string, value: string): Promise<void> {
-  const args = [
-    "delete",
-    "element",
-    TABLE_FAMILY,
-    TABLE_NAME,
-    setName,
-    `{ ${value} }`,
-  ];
-
+  const args = ["delete", "element", TABLE_FAMILY, TABLE_NAME, setName, `{ ${value} }`];
   await execNft(["-c", ...args]);
   try {
     await execNft(args);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    if (
-      !message.includes("No such file or directory") &&
-      !message.includes("element does not exist")
-    ) {
-      throw error;
-    }
+    if (!message.includes("No such file or directory") && !message.includes("element does not exist")) throw error;
   }
 }
 
@@ -456,10 +221,7 @@ export async function unblockIp(ip: string): Promise<void> {
   await withMutationLock(() => deleteElementUnlocked(IP_SET_NAME, validateIp(ip)));
 }
 
-export async function blockDevice(
-  mac: string,
-  ip?: string | null,
-): Promise<void> {
+export async function blockDevice(mac: string, ip?: string | null): Promise<void> {
   await withMutationLock(async () => {
     const validatedMac = validateMac(mac);
     await ensureMacBlockRuleUnlocked();
@@ -468,10 +230,7 @@ export async function blockDevice(
   });
 }
 
-export async function unblockDevice(
-  mac: string,
-  ip?: string | null,
-): Promise<void> {
+export async function unblockDevice(mac: string, ip?: string | null): Promise<void> {
   await withMutationLock(async () => {
     const validatedMac = validateMac(mac);
     await deleteElementUnlocked(MAC_SET_NAME, validatedMac);
