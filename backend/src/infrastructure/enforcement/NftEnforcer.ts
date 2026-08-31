@@ -75,6 +75,16 @@ function validSubnet(subnet: string): boolean {
   return octets.length === 4 && octets.every((octet) => Number.isInteger(octet) && octet >= 0 && octet <= 255) && prefix >= 0 && prefix <= 32;
 }
 
+function isAlreadyExists(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("already exists") || message.includes("File exists");
+}
+
+function isMissingElement(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes("No such file or directory") || message.includes("element does not exist");
+}
+
 async function getRulesInChain(table: string, chain: string): Promise<NftRule[]> {
   const { stdout } = await execNft(["-j", "list", "chain", TABLE_FAMILY, table, chain]);
   let document: { nftables?: unknown[] };
@@ -102,8 +112,7 @@ async function ensureSetUnlocked(name: string, type: string): Promise<void> {
   try {
     await execNft(["add", "set", TABLE_FAMILY, TABLE_NAME, name, "{", "type", type, ";", "}"]);
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (!message.includes("File exists")) throw error;
+    if (!isAlreadyExists(error)) throw error;
   }
 }
 
@@ -188,23 +197,35 @@ export async function getBlockedIps(): Promise<Set<string>> {
 
 async function addElementUnlocked(setName: string, value: string): Promise<void> {
   const args = ["add", "element", TABLE_FAMILY, TABLE_NAME, setName, `{ ${value} }`];
-  await execNft(["-c", ...args]);
+
+  try {
+    await execNft(["-c", ...args]);
+  } catch (error) {
+    if (isAlreadyExists(error)) return;
+    throw error;
+  }
+
   try {
     await execNft(args);
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (!message.includes("already exists")) throw error;
+    if (!isAlreadyExists(error)) throw error;
   }
 }
 
 async function deleteElementUnlocked(setName: string, value: string): Promise<void> {
   const args = ["delete", "element", TABLE_FAMILY, TABLE_NAME, setName, `{ ${value} }`];
-  await execNft(["-c", ...args]);
+
+  try {
+    await execNft(["-c", ...args]);
+  } catch (error) {
+    if (isMissingElement(error)) return;
+    throw error;
+  }
+
   try {
     await execNft(args);
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (!message.includes("No such file or directory") && !message.includes("element does not exist")) throw error;
+    if (!isMissingElement(error)) throw error;
   }
 }
 
