@@ -10,6 +10,7 @@ import type {
 const execFileAsync = promisify(execFile);
 
 const COMMAND_TIMEOUT_MS = 5_000;
+const REMOTE_RESPONSE_TIMEOUT_MS = 7_000;
 
 export class LinuxSystemCommandExecutor implements SystemCommandExecutor {
   constructor(
@@ -79,13 +80,16 @@ export class LinuxSystemCommandExecutor implements SystemCommandExecutor {
         else resolve(result!);
       };
 
+      // The agent owns the 5s command deadline. The backend needs a small
+      // response grace period so a command completing at that boundary can
+      // still deliver its response through the Unix socket.
       deadline = setTimeout(() => {
         finish(
           new Error(
             `enforcement command timed out after ${this.timeoutMs}ms`,
           ),
         );
-      }, this.timeoutMs);
+      }, REMOTE_RESPONSE_TIMEOUT_MS);
 
       socket.once("error", (error) => finish(error));
 
