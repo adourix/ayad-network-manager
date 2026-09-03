@@ -77,8 +77,30 @@ const app = Fastify({
 });
 
 app.setErrorHandler((error, _request, reply) => {
-  const failure = error as { validation?: unknown; statusCode?: number; message?: string };
+  const failure = error as {
+    validation?: unknown;
+    statusCode?: number;
+    message?: string;
+    response?: string;
+    deviceId?: number;
+    desiredBlocked?: boolean;
+  };
   const message = failure.message ?? "Request failed";
+
+  if (failure.response === "pending_enforcement" && failure.statusCode === 202) {
+    return reply.code(202).send({
+      status: "pending_enforcement",
+      deviceId: failure.deviceId,
+      desiredState: { blocked: failure.desiredBlocked },
+      actualState: { blocked: failure.desiredBlocked === true ? false : true },
+      enforcement: {
+        status: "pending",
+        retry: "reconciliation",
+        reason: message,
+      },
+    });
+  }
+
   const status = failure.validation
     ? 400
     : failure.statusCode && failure.statusCode < 500
