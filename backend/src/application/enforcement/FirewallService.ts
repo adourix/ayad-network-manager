@@ -6,6 +6,28 @@ import type { OperationsRepository } from "../../domain/repositories/OperationsR
 import type { BlockedDeviceRepository } from "../../domain/repositories/BlockedDeviceRepository.js";
 import { resolveDeviceIdentifier } from "../devices/DeviceIdentifierResolver.js";
 
+/**
+ * The durable desired state was persisted successfully, but immediate kernel
+ * enforcement did not complete. Reconciliation is responsible for convergence.
+ */
+export class PendingEnforcementError extends Error {
+  readonly statusCode = 202 as const;
+  readonly response = "pending_enforcement" as const;
+
+  constructor(
+    readonly deviceId: number,
+    readonly desiredBlocked: boolean,
+    cause: unknown,
+  ) {
+    super(
+      `Desired state persisted but kernel enforcement is pending: ${
+        cause instanceof Error ? cause.message : String(cause)
+      }`,
+    );
+    this.name = "PendingEnforcementError";
+  }
+}
+
 export class FirewallService {
   constructor(
     private readonly deviceBlocker: DeviceBlocker,
@@ -96,11 +118,6 @@ export class FirewallService {
       throw new Error("Refusing to block the device making this request");
     }
 
-    /*
-     * The database is the durable desired state. Persist it before touching
-     * the kernel so a transient enforcement failure can be retried safely by
-     * reconciliation instead of leaving the desired state as "unblocked".
-     */
     await this.policyRepository.upsert(device.id, { blocked: true });
 
     try {
@@ -132,12 +149,12 @@ export class FirewallService {
         mac: macAddress.toString(),
         deviceId: device.id,
         details: {
-          result: "failure",
+          result: "pending",
           error: error instanceof Error ? error.message : String(error),
           desiredStatePersisted: true,
         },
       });
-      throw error;
+      throw new PendingEnforcementError(device.id, true, error);
     }
   }
 
@@ -151,9 +168,6 @@ export class FirewallService {
     }
 
     const ip = device.ip?.toString() ?? null;
-
-    /* Persist the desired unblocked state first; reconciliation can safely
-       remove any kernel state left behind by a failed immediate operation. */
     await this.policyRepository.upsert(device.id, { blocked: false });
 
     try {
@@ -176,12 +190,12 @@ export class FirewallService {
         mac: macAddress.toString(),
         deviceId: device.id,
         details: {
-          result: "failure",
+          result: "pending",
           error: error instanceof Error ? error.message : String(error),
           desiredStatePersisted: true,
         },
       });
-      throw error;
+      throw new PendingEnforcementError(device.id, false, error);
     }
   }
 }
