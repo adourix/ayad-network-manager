@@ -16,11 +16,11 @@ export class DirectTargetManager implements IfbManager {
     return this.targetInterface;
   }
 
-  async ensureUploadRedirect(_interfaceName: string, _uploadIp: string): Promise<void> {}
+  async ensureDownloadRedirect(_interfaceName: string, _downloadIp: string): Promise<void> {}
 
-  async removeUploadIp(_interfaceName: string, _uploadIp: string): Promise<void> {}
+  async removeDownloadIp(_interfaceName: string, _downloadIp: string): Promise<void> {}
 
-  async removeAllUploadRedirects(_interfaceName: string): Promise<void> {}
+  async removeAllDownloadRedirects(_interfaceName: string): Promise<void> {}
 
   async remove(_interfaceName: string): Promise<void> {}
 }
