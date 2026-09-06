@@ -2,6 +2,8 @@ import type { IfbManager } from "./IfbManager.js";
 import type { SystemCommandExecutor } from "./SystemCommandExecutor.js";
 
 const IFB_NAME = "ifb0";
+const MIN_PRIORITY = 100;
+const MAX_PRIORITY = 65535;
 
 export class LinuxIfbManager implements IfbManager {
   constructor(private readonly executor: SystemCommandExecutor) {}
@@ -14,8 +16,9 @@ export class LinuxIfbManager implements IfbManager {
     try {
       await this.executor.execute("ip", ["link", "show", "dev", IFB_NAME]);
       return true;
-    } catch {
-      return false;
+    } catch (error) {
+      if (this.isMissingDeviceError(error)) return false;
+      throw error;
     }
   }
 
@@ -31,25 +34,23 @@ export class LinuxIfbManager implements IfbManager {
   async ensureDownloadRedirect(interfaceName: string, downloadIp: string): Promise<void> {
     await this.ensure(interfaceName);
 
-    const priority = this.priorityForIp(downloadIp);
     const result = await this.executor.execute("tc", [
       "filter", "show", "dev", interfaceName, "ingress",
     ]);
 
-    if (
-      result.stdout.includes(`pref ${priority}`) &&
-      result.stdout.includes(`dst_ip ${downloadIp}`) &&
-      result.stdout.includes(`dev ${IFB_NAME}`)
-    ) {
-      return;
-    }
+    const filters = this.parseRedirectFilters(result.stdout);
+    const existing = filters.find((filter) => filter.ip === downloadIp);
+    if (existing?.device === IFB_NAME) return;
+
+    const priority = this.findAvailablePriority(
+      this.priorityForIp(downloadIp),
+      new Set(filters.map((filter) => filter.priority)),
+    );
+
+    await this.ensureIngressQdisc(interfaceName, result.stdout);
 
     await this.executor.execute("tc", [
-      "qdisc", "replace", "dev", interfaceName, "handle", "ffff:", "ingress",
-    ]);
-
-    await this.executor.execute("tc", [
-      "filter", "replace",
+      "filter", "add",
       "dev", interfaceName,
       "parent", "ffff:",
       "pref", priority.toString(),
@@ -61,57 +62,36 @@ export class LinuxIfbManager implements IfbManager {
   }
 
   async removeDownloadIp(interfaceName: string, downloadIp: string): Promise<void> {
-    try {
-      await this.executor.execute("tc", [
-        "filter", "del", "dev", interfaceName,
-        "parent", "ffff:", "pref", this.priorityForIp(downloadIp).toString(),
-      ]);
-    } catch {
-      // Idempotent cleanup.
+    const result = await this.executor.execute("tc", [
+      "filter", "show", "dev", interfaceName, "ingress",
+    ]);
+
+    const priorities = this.parseRedirectFilters(result.stdout)
+      .filter((filter) => filter.ip === downloadIp && filter.device === IFB_NAME)
+      .map((filter) => filter.priority);
+
+    for (const priority of priorities) {
+      await this.deleteRedirectFilter(interfaceName, priority);
     }
   }
 
   async removeAllDownloadRedirects(interfaceName: string): Promise<void> {
-    try {
-      let result = await this.executor.execute("tc", [
-        "filter", "show", "dev", interfaceName, "ingress",
-      ]);
+    const result = await this.executor.execute("tc", [
+      "filter", "show", "dev", interfaceName, "ingress",
+    ]);
 
-      const priorities = new Set<number>();
-      for (const line of result.stdout.split("\n")) {
-        const priority = line.match(/\bpref\s+(\d+)\b/)?.[1];
-        if (priority && line.includes("mirred") && line.includes(`dev ${IFB_NAME}`)) {
-          priorities.add(Number(priority));
-        }
-      }
+    const priorities = new Set(
+      this.parseRedirectFilters(result.stdout)
+        .filter((filter) => filter.device === IFB_NAME)
+        .map((filter) => filter.priority),
+    );
 
-      for (const priority of priorities) {
-        try {
-          await this.executor.execute("tc", [
-            "filter", "del", "dev", interfaceName,
-            "parent", "ffff:", "pref", priority.toString(),
-          ]);
-        } catch {
-          // Idempotent cleanup.
-        }
-      }
-
-      result = await this.executor.execute("tc", [
-        "filter", "show", "dev", interfaceName, "ingress",
-      ]);
-
-      if (!/^\s*filter\s+/m.test(result.stdout)) {
-        try {
-          await this.executor.execute("tc", [
-            "qdisc", "del", "dev", interfaceName, "ingress",
-          ]);
-        } catch {
-          // Already absent.
-        }
-      }
-    } catch {
-      // No ingress qdisc exists before the first download policy.
+    for (const priority of priorities) {
+      await this.deleteRedirectFilter(interfaceName, priority);
     }
+
+    // Do not delete the ingress qdisc: it may be operator-owned and is not
+    // required to disappear when our filters are removed.
   }
 
   async remove(interfaceName: string): Promise<void> {
@@ -119,9 +99,95 @@ export class LinuxIfbManager implements IfbManager {
 
     try {
       await this.executor.execute("ip", ["link", "delete", IFB_NAME, "type", "ifb"]);
-    } catch {
-      // IFB may already be absent.
+    } catch (error) {
+      if (!this.isMissingDeviceError(error)) throw error;
     }
+  }
+
+  private async ensureIngressQdisc(interfaceName: string, currentOutput: string): Promise<void> {
+    if (/\bqdisc\s+ingress\s+ffff:\s+dev\s+\S+/i.test(currentOutput)) return;
+
+    try {
+      await this.executor.execute("tc", [
+        "qdisc", "add", "dev", interfaceName, "handle", "ffff:", "ingress",
+      ]);
+    } catch (error) {
+      // A concurrent/externally-created ingress qdisc is safe to reuse only
+      // if tc confirms that it exists. Other failures must propagate.
+      const result = await this.executor.execute("tc", [
+        "filter", "show", "dev", interfaceName, "ingress",
+      ]);
+      if (!/\bqdisc\s+ingress\s+ffff:\s+dev\s+\S+/i.test(result.stdout)) {
+        throw error;
+      }
+    }
+  }
+
+  private async deleteRedirectFilter(interfaceName: string, priority: number): Promise<void> {
+    try {
+      await this.executor.execute("tc", [
+        "filter", "del", "dev", interfaceName,
+        "parent", "ffff:", "pref", priority.toString(),
+      ]);
+    } catch (error) {
+      if (!this.isMissingFilterError(error)) throw error;
+    }
+  }
+
+  private parseRedirectFilters(output: string): Array<{
+    priority: number;
+    ip: string | null;
+    device: string | null;
+  }> {
+    const filters: Array<{
+      priority: number;
+      ip: string | null;
+      device: string | null;
+    }> = [];
+
+    let currentPriority: number | null = null;
+    let currentIp: string | null = null;
+    let currentDevice: string | null = null;
+
+    for (const line of output.split("\n")) {
+      const priority = line.match(/\bpref\s+(\d+)\b/)?.[1];
+      if (priority !== undefined) {
+        currentPriority = Number.parseInt(priority, 10);
+        currentIp = null;
+        currentDevice = null;
+      }
+
+      const ip = line.match(/\bdst_ip\s+([0-9]{1,3}(?:\.[0-9]{1,3}){3})\b/)?.[1];
+      if (ip !== undefined) currentIp = ip;
+
+      const device = line.match(/\bredirect\s+dev\s+(\S+)/)?.[1];
+      if (device !== undefined) currentDevice = device;
+
+      if (currentPriority !== null && (ip !== undefined || device !== undefined)) {
+        const last = filters[filters.length - 1];
+        if (last?.priority === currentPriority) {
+          last.ip = currentIp;
+          last.device = currentDevice;
+        } else {
+          filters.push({
+            priority: currentPriority,
+            ip: currentIp,
+            device: currentDevice,
+          });
+        }
+      }
+    }
+
+    return filters;
+  }
+
+  private findAvailablePriority(base: number, used: Set<number>): number {
+    for (let offset = 0; offset <= MAX_PRIORITY - MIN_PRIORITY; offset += 1) {
+      const candidate = MIN_PRIORITY + ((base - MIN_PRIORITY + offset) % (MAX_PRIORITY - MIN_PRIORITY + 1));
+      if (!used.has(candidate)) return candidate;
+    }
+
+    throw new Error("No available tc ingress filter priority");
   }
 
   private priorityForIp(ip: string): number {
@@ -129,6 +195,27 @@ export class LinuxIfbManager implements IfbManager {
     for (const character of ip) {
       hash = (hash * 31 + character.charCodeAt(0)) % 30000;
     }
-    return 100 + hash;
+    return MIN_PRIORITY + hash;
+  }
+
+  private isMissingDeviceError(error: unknown): boolean {
+    const message = this.errorMessage(error).toLowerCase();
+    return message.includes("cannot find device") ||
+      message.includes("cannot find dev") ||
+      message.includes("no such device") ||
+      message.includes("device \"ifb0\" does not exist");
+  }
+
+  private isMissingFilterError(error: unknown): boolean {
+    const message = this.errorMessage(error).toLowerCase();
+    return message.includes("cannot find filter") ||
+      message.includes("filter protocol") && message.includes("not found") ||
+      message.includes("no such file or directory");
+  }
+
+  private errorMessage(error: unknown): string {
+    if (error instanceof Error) return error.message;
+    if (typeof error === "string") return error;
+    return String(error);
   }
 }
