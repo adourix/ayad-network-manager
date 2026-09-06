@@ -47,7 +47,7 @@ export class LinuxIfbManager implements IfbManager {
       new Set(filters.map((filter) => filter.priority)),
     );
 
-    await this.ensureIngressQdisc(interfaceName, result.stdout);
+    await this.ensureIngressQdisc(interfaceName);
 
     await this.executor.execute("tc", [
       "filter", "add",
@@ -90,8 +90,8 @@ export class LinuxIfbManager implements IfbManager {
       await this.deleteRedirectFilter(interfaceName, priority);
     }
 
-    // Do not delete the ingress qdisc: it may be operator-owned and is not
-    // required to disappear when our filters are removed.
+    // Keep the ingress qdisc: it may be operator-owned and our filters do not
+    // require the qdisc to be deleted after cleanup.
   }
 
   async remove(interfaceName: string): Promise<void> {
@@ -104,23 +104,16 @@ export class LinuxIfbManager implements IfbManager {
     }
   }
 
-  private async ensureIngressQdisc(interfaceName: string, currentOutput: string): Promise<void> {
-    if (/\bqdisc\s+ingress\s+ffff:\s+dev\s+\S+/i.test(currentOutput)) return;
+  private async ensureIngressQdisc(interfaceName: string): Promise<void> {
+    const result = await this.executor.execute("tc", [
+      "qdisc", "show", "dev", interfaceName,
+    ]);
 
-    try {
-      await this.executor.execute("tc", [
-        "qdisc", "add", "dev", interfaceName, "handle", "ffff:", "ingress",
-      ]);
-    } catch (error) {
-      // A concurrent/externally-created ingress qdisc is safe to reuse only
-      // if tc confirms that it exists. Other failures must propagate.
-      const result = await this.executor.execute("tc", [
-        "filter", "show", "dev", interfaceName, "ingress",
-      ]);
-      if (!/\bqdisc\s+ingress\s+ffff:\s+dev\s+\S+/i.test(result.stdout)) {
-        throw error;
-      }
-    }
+    if (/\bqdisc\s+ingress\s+ffff:\s+dev\s+\S+/i.test(result.stdout)) return;
+
+    await this.executor.execute("tc", [
+      "qdisc", "add", "dev", interfaceName, "handle", "ffff:", "ingress",
+    ]);
   }
 
   private async deleteRedirectFilter(interfaceName: string, priority: number): Promise<void> {
@@ -209,7 +202,7 @@ export class LinuxIfbManager implements IfbManager {
   private isMissingFilterError(error: unknown): boolean {
     const message = this.errorMessage(error).toLowerCase();
     return message.includes("cannot find filter") ||
-      message.includes("filter protocol") && message.includes("not found") ||
+      (message.includes("filter protocol") && message.includes("not found")) ||
       message.includes("no such file or directory");
   }
 
