@@ -35,6 +35,17 @@ export class TcBuilder {
     };
   }
 
+  static changeRootClass(interfaceName: string, rate: string): TcCommand {
+    return {
+      command: "tc",
+      args: [
+        "class", "change", "dev", interfaceName,
+        "classid", "1:1", "htb",
+        "rate", rate, "ceil", rate,
+      ],
+    };
+  }
+
   static addClass(interfaceName: string, classId: string, rate: string): TcCommand {
     return {
       command: "tc",
