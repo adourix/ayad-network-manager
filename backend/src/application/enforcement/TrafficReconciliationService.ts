@@ -35,6 +35,7 @@ export class TrafficReconciliationService {
 
     const expectedDownloadClasses = new Set<string>();
     const expectedUploadClasses = new Set<string>();
+    const failures: Error[] = [];
 
     for (const { device, policy } of policies) {
       try {
@@ -56,9 +57,12 @@ export class TrafficReconciliationService {
           });
         }
       } catch (error) {
-        console.error(
-          `Failed to reconcile traffic policy for ${device.mac.toString()}:`,
-          error,
+        const failure = error instanceof Error ? error : new Error(String(error));
+        failures.push(
+          new Error(
+            `Failed to reconcile traffic policy for ${device.mac.toString()}: ${failure.message}`,
+            { cause: failure },
+          ),
         );
       }
     }
@@ -66,13 +70,22 @@ export class TrafficReconciliationService {
     try {
       await this.trafficEnforcer.reconcileDownloadState(expectedDownloadClasses);
     } catch (error) {
-      console.error("Failed to reconcile stale download tc state:", error);
+      const failure = error instanceof Error ? error : new Error(String(error));
+      failures.push(new Error(`Failed to reconcile stale download tc state: ${failure.message}`, { cause: failure }));
     }
 
     try {
       await this.trafficEnforcer.reconcileUploadState(expectedUploadClasses);
     } catch (error) {
-      console.error("Failed to reconcile stale upload tc state:", error);
+      const failure = error instanceof Error ? error : new Error(String(error));
+      failures.push(new Error(`Failed to reconcile stale upload tc state: ${failure.message}`, { cause: failure }));
+    }
+
+    if (failures.length > 0) {
+      throw new AggregateError(
+        failures,
+        `Traffic policy reconciliation failed for ${failures.length} operation(s)`,
+      );
     }
 
     console.log("Traffic policy reconciliation completed.");
