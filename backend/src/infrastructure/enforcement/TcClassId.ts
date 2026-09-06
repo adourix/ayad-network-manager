@@ -2,24 +2,13 @@ import { createHash } from "node:crypto";
 
 export class TcClassId {
   static fromMac(mac: string): string {
-    const normalized =
-      mac.trim().toLowerCase();
+    const normalized = mac.trim().toLowerCase();
+    const hash = createHash("sha256").update(normalized).digest("hex");
 
-    const hash =
-      createHash("sha256")
-        .update(normalized)
-        .digest("hex");
+    // HTB minor class IDs are 16-bit. Keep 1 reserved for the root class.
+    const value = Number.parseInt(hash.slice(0, 4), 16) || 2;
+    const normalizedValue = value === 1 ? 2 : value;
 
-    const value =
-      (
-        Number.parseInt(
-          hash.slice(0, 3),
-          16,
-        ) & 0xfff
-      ) || 1;
-
-    return value
-      .toString(16)
-      .padStart(3, "0");
+    return normalizedValue.toString(16).padStart(4, "0");
   }
 }
