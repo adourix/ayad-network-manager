@@ -13,9 +13,6 @@ import { TrafficRate } from "./TrafficRate.js";
  *
  *   download: physical ingress -> IFB0 ingress redirect -> IFB0 egress HTB
  *   upload:   physical egress HTB
- *
- * The same shared HTB builder is used for both target devices. Only this
- * implementation knows which interface represents each direction.
  */
 export class SingleInterfaceIfbTrafficEnforcer implements TrafficEnforcer {
   constructor(
@@ -27,16 +24,12 @@ export class SingleInterfaceIfbTrafficEnforcer implements TrafficEnforcer {
   ) {}
 
   async initializeBaseState(): Promise<void> {
-    // Upload is shaped on the physical interface.
     await this.ensureRootState(this.lanInterface);
-
-    // Download is shaped on IFB0 after ingress redirection.
     const ifbName = await this.ifbManager.ensure(this.lanInterface);
     await this.ensureRootState(ifbName);
   }
 
   async clearBaseState(): Promise<void> {
-    // Remove only our ingress redirects first, then the IFB.
     await this.ifbManager.removeAllDownloadRedirects(this.lanInterface);
 
     for (const interfaceName of [this.lanInterface, this.ifbManager.getName()]) {
@@ -55,7 +48,6 @@ export class SingleInterfaceIfbTrafficEnforcer implements TrafficEnforcer {
 
   private getFilterPriority(classId: string): number {
     const value = Number.parseInt(classId, 16);
-    // Keep priority stable per device and outside the usual tc defaults.
     return Math.min(value + 100, 65535);
   }
 
@@ -67,23 +59,16 @@ export class SingleInterfaceIfbTrafficEnforcer implements TrafficEnforcer {
       throw new Error(`Interface ${interfaceName} already has root qdisc ${rootState.kind}`);
     }
 
+    const rate = TrafficRate.fromWholeMbps(this.uplinkBandwidthMbps).toTcRate();
     const rootClassState = await this.tcStateReader.getRootClassState(interfaceName);
     if (!rootClassState.exists) {
-      await this.executor.execute(
-        "tc",
-        TcBuilder.addRootClass(
-          interfaceName,
-          TrafficRate.fromWholeMbps(this.uplinkBandwidthMbps).toTcRate(),
-        ).args,
-      );
+      await this.executor.execute("tc", TcBuilder.addRootClass(interfaceName, rate).args);
+    } else if (rootClassState.rate !== rate || rootClassState.ceil !== rate) {
+      await this.executor.execute("tc", TcBuilder.changeRootClass(interfaceName, rate).args);
     }
   }
 
-  private async ensureDeviceClass(
-    interfaceName: string,
-    classId: string,
-    rate: string,
-  ): Promise<void> {
+  private async ensureDeviceClass(interfaceName: string, classId: string, rate: string): Promise<void> {
     const classState = await this.tcStateReader.getClassState(interfaceName, classId);
     if (!classState.exists) {
       await this.executor.execute("tc", TcBuilder.addClass(interfaceName, classId, rate).args);
@@ -114,13 +99,8 @@ export class SingleInterfaceIfbTrafficEnforcer implements TrafficEnforcer {
 
     if (filterState.ip === ip && filterState.priority === priority) return;
 
-    try {
-      await this.executor.execute(
-        "tc",
-        TcBuilder.deleteFilter(interfaceName, filterState.priority ?? priority).args,
-      );
-    } catch {
-      // The filter may already have disappeared during reconciliation.
+    if (filterState.priority !== null) {
+      await this.executor.execute("tc", TcBuilder.deleteFilter(interfaceName, filterState.priority).args);
     }
 
     const command = direction === "download"
@@ -131,39 +111,26 @@ export class SingleInterfaceIfbTrafficEnforcer implements TrafficEnforcer {
 
   async limitDownload(device: Device, input: TrafficPolicyInput): Promise<void> {
     if (!device.ip) throw new Error(`Device ${device.mac.toString()} has no IP address`);
-
     const ifbName = await this.ifbManager.ensure(this.lanInterface);
     await this.ifbManager.ensureDownloadRedirect(this.lanInterface, device.ip.toString());
-
     const classId = TcClassId.fromMac(device.mac.toString());
     await this.ensureRootState(ifbName);
-    await this.ensureDeviceClass(
-      ifbName,
-      classId,
-      TrafficRate.fromMbps(input.rateMbps).toTcRate(),
-    );
+    await this.ensureDeviceClass(ifbName, classId, TrafficRate.fromMbps(input.rateMbps).toTcRate());
     await this.ensureFilter(ifbName, device.ip.toString(), classId, "download");
   }
 
   async limitUpload(device: Device, input: TrafficPolicyInput): Promise<void> {
     if (!device.ip) throw new Error(`Device ${device.mac.toString()} has no IP address`);
-
     const classId = TcClassId.fromMac(device.mac.toString());
     await this.ensureRootState(this.lanInterface);
-    await this.ensureDeviceClass(
-      this.lanInterface,
-      classId,
-      TrafficRate.fromMbps(input.rateMbps).toTcRate(),
-    );
+    await this.ensureDeviceClass(this.lanInterface, classId, TrafficRate.fromMbps(input.rateMbps).toTcRate());
     await this.ensureFilter(this.lanInterface, device.ip.toString(), classId, "upload");
   }
 
   async limitDownloadBits(device: Device, bitsPerSecond: bigint): Promise<void> {
     if (!device.ip) throw new Error(`Device ${device.mac.toString()} has no IP address`);
-
     const ifbName = await this.ifbManager.ensure(this.lanInterface);
     await this.ifbManager.ensureDownloadRedirect(this.lanInterface, device.ip.toString());
-
     const classId = TcClassId.fromMac(device.mac.toString());
     await this.ensureRootState(ifbName);
     await this.ensureDeviceClass(ifbName, classId, `${bitsPerSecond.toString()}bit`);
@@ -172,7 +139,6 @@ export class SingleInterfaceIfbTrafficEnforcer implements TrafficEnforcer {
 
   async limitUploadBits(device: Device, bitsPerSecond: bigint): Promise<void> {
     if (!device.ip) throw new Error(`Device ${device.mac.toString()} has no IP address`);
-
     const classId = TcClassId.fromMac(device.mac.toString());
     await this.ensureRootState(this.lanInterface);
     await this.ensureDeviceClass(this.lanInterface, classId, `${bitsPerSecond.toString()}bit`);
@@ -181,13 +147,9 @@ export class SingleInterfaceIfbTrafficEnforcer implements TrafficEnforcer {
 
   async clearDownload(device: Device): Promise<void> {
     if (!(await this.ifbManager.exists())) return;
-
     const classId = TcClassId.fromMac(device.mac.toString());
     await this.clearClass(this.ifbManager.getName(), classId);
-
-    if (device.ip) {
-      await this.ifbManager.removeDownloadIp(this.lanInterface, device.ip.toString());
-    }
+    if (device.ip) await this.ifbManager.removeDownloadIp(this.lanInterface, device.ip.toString());
   }
 
   async clearUpload(device: Device): Promise<void> {
@@ -197,12 +159,9 @@ export class SingleInterfaceIfbTrafficEnforcer implements TrafficEnforcer {
 
   private async clearClass(interfaceName: string, classId: string): Promise<void> {
     const filterState = await this.tcStateReader.getFilterState(interfaceName, classId);
-    if (filterState.exists) {
+    if (filterState.exists && filterState.priority !== null) {
       try {
-        await this.executor.execute(
-          "tc",
-          TcBuilder.deleteFilter(interfaceName, filterState.priority ?? this.getFilterPriority(classId)).args,
-        );
+        await this.executor.execute("tc", TcBuilder.deleteFilter(interfaceName, filterState.priority).args);
       } catch {
         // Already gone.
       }
@@ -227,24 +186,24 @@ export class SingleInterfaceIfbTrafficEnforcer implements TrafficEnforcer {
     await this.reconcileInterfaceState(this.lanInterface, expectedClassIds);
   }
 
-  private async reconcileInterfaceState(
-    interfaceName: string,
-    expectedClassIds: Set<string>,
-  ): Promise<void> {
+  private async reconcileInterfaceState(interfaceName: string, expectedClassIds: Set<string>): Promise<void> {
     const actualClasses = await this.tcStateReader.getDeviceClasses(interfaceName);
     const actualFilters = await this.tcStateReader.getDeviceFilters(interfaceName);
+
+    for (const filter of actualFilters) {
+      const classId = filter.classId.trim().toLowerCase();
+      if (expectedClassIds.has(classId)) continue;
+
+      try {
+        await this.executor.execute("tc", TcBuilder.deleteFilter(interfaceName, filter.priority).args);
+      } catch {
+        // Already gone.
+      }
+    }
 
     for (const actual of actualClasses) {
       const classId = actual.classId.trim().toLowerCase();
       if (expectedClassIds.has(classId)) continue;
-
-      for (const filter of actualFilters.filter((value) => value.classId === classId)) {
-        try {
-          await this.executor.execute("tc", TcBuilder.deleteFilter(interfaceName, filter.priority).args);
-        } catch {
-          // Already gone.
-        }
-      }
 
       try {
         await this.executor.execute("tc", TcBuilder.deleteClass(interfaceName, classId).args);
