@@ -16,28 +16,36 @@ function valid(command: string, args: string[]): boolean {
 }
 
 function isBackgroundRead(command: string, args: string[]): boolean {
+  // nft reads are NOT background work. NftEnforcer performs nft list-chain
+  // reads from inside mutation requests (for example before inserting an
+  // owned rule). If an nft list were queued behind the currently running
+  // mutation, the mutation would wait for a read that can never start:
+  // priority mutation -> backend request -> nft list -> background queue.
+  // That is a scheduler deadlock and was the direct cause of the 5s/7s
+  // enforcement timeouts.
+  if (command === "nft") return false;
+
   if (command === "tc") {
     return (args[0] === "filter" && args[1] === "show") ||
       (args[0] === "class" && args[1] === "show") ||
       (args[0] === "qdisc" && args[1] === "show");
   }
+
   if (command === "ip") {
     return (args[0] === "neigh" && args[1] === "show") ||
       (args[0] === "-j" && args[1] === "neigh");
   }
-  if (command === "nft") {
-    return (args[0] === "list");
-  }
+
   return false;
 }
 
 /**
  * Serialize every privileged kernel command through one worker.
  *
- * Background reads are deliberately lower priority. They must never execute
- * concurrently with a mutation: nft/tc state inspection can otherwise
- * contend with an in-flight mutation and turn a fast enforcement request
- * into a timeout. Priority work always drains first.
+ * Background tc/ip reads are deliberately lower priority. nft commands stay
+ * in the priority lane because the enforcement implementation legitimately
+ * performs nft read-before-write operations as part of a single mutation.
+ * Nothing is executed concurrently with another privileged command.
  */
 class EnforcementScheduler {
   private running = false;
