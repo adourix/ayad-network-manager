@@ -77,10 +77,7 @@ test("ensure creates the ingress qdisc only when it is absent", async () => {
   executor.on(isCommand("ip", "link", "set", "dev", "ifb0", "up"), result());
   executor.on(isCommand("tc", "filter", "show", "dev", "eno1", "ingress"), result(""));
   executor.on(isCommand("tc", "qdisc", "show", "dev", "eno1"), result("qdisc pfifo_fast 0: dev eno1 root bands 3\\n"));
-  executor.on(
-    isCommand("tc", "qdisc", "add", "dev", "eno1", "handle", "ffff:", "ingress"),
-    result(),
-  );
+  executor.on(isCommand("tc", "qdisc", "add", "dev", "eno1", "handle", "ffff:", "ingress"), result());
 
   await new LinuxIfbManager(executor).ensureDownloadRedirect("eno1", "192.168.1.115");
 
@@ -92,7 +89,7 @@ test("ensure creates the ingress qdisc only when it is absent", async () => {
 
 test("priority collision is probed instead of overwriting another ingress filter", async () => {
   const ip = "192.168.1.115";
-  const collidingIp = "192.168.1.116";
+  const collidingIp = "10.0.220.42";
   const priority = priorityForIp(ip);
   assert.equal(priorityForIp(collidingIp), priorityForIp(ip), "test fixture must collide");
 
