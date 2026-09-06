@@ -21,32 +21,24 @@ export class LinuxIfbManager implements IfbManager {
 
   async ensure(_interfaceName: string): Promise<string> {
     if (!(await this.exists())) {
-      await this.executor.execute("ip", [
-        "link", "add", IFB_NAME, "type", "ifb",
-      ]);
+      await this.executor.execute("ip", ["link", "add", IFB_NAME, "type", "ifb"]);
     }
 
-    await this.executor.execute("ip", [
-      "link", "set", "dev", IFB_NAME, "up",
-    ]);
-
+    await this.executor.execute("ip", ["link", "set", "dev", IFB_NAME, "up"]);
     return IFB_NAME;
   }
 
-  async ensureUploadRedirect(
-    interfaceName: string,
-    uploadIp: string,
-  ): Promise<void> {
+  async ensureDownloadRedirect(interfaceName: string, downloadIp: string): Promise<void> {
     await this.ensure(interfaceName);
 
-    const priority = this.priorityForIp(uploadIp);
+    const priority = this.priorityForIp(downloadIp);
     const result = await this.executor.execute("tc", [
       "filter", "show", "dev", interfaceName, "ingress",
     ]);
 
     if (
       result.stdout.includes(`pref ${priority}`) &&
-      result.stdout.includes(`src_ip ${uploadIp}`) &&
+      result.stdout.includes(`dst_ip ${downloadIp}`) &&
       result.stdout.includes(`dev ${IFB_NAME}`)
     ) {
       return;
@@ -63,23 +55,23 @@ export class LinuxIfbManager implements IfbManager {
       "pref", priority.toString(),
       "protocol", "ip",
       "flower",
-      "src_ip", uploadIp,
+      "dst_ip", downloadIp,
       "action", "mirred", "egress", "redirect", "dev", IFB_NAME,
     ]);
   }
 
-  async removeUploadIp(interfaceName: string, uploadIp: string): Promise<void> {
+  async removeDownloadIp(interfaceName: string, downloadIp: string): Promise<void> {
     try {
       await this.executor.execute("tc", [
         "filter", "del", "dev", interfaceName,
-        "parent", "ffff:", "pref", this.priorityForIp(uploadIp).toString(),
+        "parent", "ffff:", "pref", this.priorityForIp(downloadIp).toString(),
       ]);
     } catch {
-      // The policy-specific redirect may already be absent.
+      // Idempotent cleanup.
     }
   }
 
-  async removeAllUploadRedirects(interfaceName: string): Promise<void> {
+  async removeAllDownloadRedirects(interfaceName: string): Promise<void> {
     try {
       let result = await this.executor.execute("tc", [
         "filter", "show", "dev", interfaceName, "ingress",
@@ -88,11 +80,7 @@ export class LinuxIfbManager implements IfbManager {
       const priorities = new Set<number>();
       for (const line of result.stdout.split("\n")) {
         const priority = line.match(/\bpref\s+(\d+)\b/)?.[1];
-        if (
-          priority &&
-          line.includes("mirred") &&
-          line.includes(`dev ${IFB_NAME}`)
-        ) {
+        if (priority && line.includes("mirred") && line.includes(`dev ${IFB_NAME}`)) {
           priorities.add(Number(priority));
         }
       }
@@ -122,17 +110,15 @@ export class LinuxIfbManager implements IfbManager {
         }
       }
     } catch {
-      // No ingress qdisc exists before the first upload policy.
+      // No ingress qdisc exists before the first download policy.
     }
   }
 
   async remove(interfaceName: string): Promise<void> {
-    await this.removeAllUploadRedirects(interfaceName);
+    await this.removeAllDownloadRedirects(interfaceName);
 
     try {
-      await this.executor.execute("ip", [
-        "link", "delete", IFB_NAME, "type", "ifb",
-      ]);
+      await this.executor.execute("ip", ["link", "delete", IFB_NAME, "type", "ifb"]);
     } catch {
       // IFB may already be absent.
     }
