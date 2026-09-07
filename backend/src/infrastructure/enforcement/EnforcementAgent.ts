@@ -1,9 +1,12 @@
 import { createServer } from "node:net";
+import { promises as fs } from "node:fs";
+import { dirname } from "node:path";
 import { unlinkSync } from "node:fs";
 import { LinuxSystemCommandExecutor } from "./LinuxSystemCommandExecutor.js";
 
 const socketPath = process.env.ENFORCEMENT_SOCKET_PATH ?? "/run/network-control/enforcement.sock";
-const allowed = new Set(["nft", "tc", "ip", "systemctl"]);
+const vpnConfigPath = process.env.SING_BOX_CONFIG_PATH ?? "/etc/sing-box/config.json";
+const allowed = new Set(["nft", "tc", "ip", "systemctl", "write-sing-box-config"]);
 const local = new LinuxSystemCommandExecutor(true);
 const backgroundRead = new LinuxSystemCommandExecutor(true, 1_000);
 
@@ -12,7 +15,11 @@ type Job = () => Promise<void>;
 
 function valid(command: string, args: string[]): boolean {
   if (allowed.has(command) === false || args.length > 64 || args.some((arg) => arg.length > 512 || /[\r\n\0]/.test(arg))) return false;
-  return command !== "systemctl" || args.every((arg) => /^[a-zA-Z0-9_.@:/-]+$/.test(arg));
+  if (command === "systemctl" && !args.every((arg) => /^[a-zA-Z0-9_.@:/-]+$/.test(arg))) return false;
+  if (command === "write-sing-box-config") {
+    if (args.length < 2 || args[0] !== vpnConfigPath || args.length > 64) return false;
+  }
+  return true;
 }
 
 function isBackgroundRead(command: string, args: string[]): boolean {
@@ -92,6 +99,37 @@ class EnforcementScheduler {
 
 const scheduler = new EnforcementScheduler();
 
+async function writeSingBoxConfig(args: string[]): Promise<void> {
+  const target = args[0];
+  if (target !== vpnConfigPath) throw new Error("sing-box config path rejected");
+
+  const content = args.slice(1).join("");
+  if (content.length === 0 || content.length > 32 * 1024) {
+    throw new Error("sing-box config payload rejected");
+  }
+
+  try {
+    JSON.parse(content);
+  } catch {
+    throw new Error("sing-box config must be valid JSON");
+  }
+
+  await fs.mkdir(dirname(target), { recursive: true, mode: 0o750 });
+  try {
+    await fs.copyFile(target, `${target}.bak`);
+  } catch {
+    // No previous config is normal on first setup.
+  }
+
+  const temporary = `${target}.tmp`;
+  await fs.writeFile(temporary, content, { encoding: "utf8", mode: 0o600 });
+  await fs.chmod(temporary, 0o600);
+  await fs.chown(temporary, "sing-box", "sing-box");
+  await fs.rename(temporary, target);
+  await fs.chmod(target, 0o600);
+  await fs.chown(target, "sing-box", "sing-box");
+}
+
 try { unlinkSync(socketPath); } catch {}
 
 const server = createServer((socket) => {
@@ -103,8 +141,16 @@ const server = createServer((socket) => {
   };
 
   const executeRequest = async (request: Request, background: boolean): Promise<void> => {
-    const executor = background ? backgroundRead : local;
     try {
+      if (request.command === "write-sing-box-config") {
+        console.error("enforcement execute write-sing-box-config priority");
+        await writeSingBoxConfig(request.args);
+        console.error("enforcement completed write-sing-box-config");
+        send({ ok: true, stdout: "", stderr: "" });
+        return;
+      }
+
+      const executor = background ? backgroundRead : local;
       console.error(
         "enforcement execute",
         request.command,
