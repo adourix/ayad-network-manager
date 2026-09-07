@@ -5,6 +5,7 @@ import type { SystemCommandExecutor, SystemCommandResult } from "../src/infrastr
 import type { IfbManager } from "../src/infrastructure/enforcement/IfbManager.js";
 import type { TcStateReader, TcClassState, TcQdiscState, TcRootClassState, TcFilterState, TcDeviceClassState, TcDeviceFilterState } from "../src/infrastructure/enforcement/TcStateReader.js";
 import { SingleInterfaceIfbTrafficEnforcer } from "../src/infrastructure/enforcement/SingleInterfaceIfbTrafficEnforcer.js";
+import { TcClassId } from "../src/infrastructure/enforcement/TcClassId.js";
 
 const ok: SystemCommandResult = { stdout: "", stderr: "" };
 class FakeExecutor implements SystemCommandExecutor {
@@ -18,15 +19,14 @@ class FakeExecutor implements SystemCommandExecutor {
 }
 
 class FakeIfb implements IfbManager {
-  redirects: string[] = [];
-  constructor(private readonly present = true) {}
+  removed = false;
   getName(): string { return "ifb0"; }
-  async exists(): Promise<boolean> { return this.present; }
+  async exists(): Promise<boolean> { return false; }
   async ensure(): Promise<string> { return "ifb0"; }
-  async ensureDownloadRedirect(_iface: string, ip: string): Promise<void> { this.redirects.push(ip); }
-  async removeDownloadIp(_iface: string, ip: string): Promise<void> { this.redirects = this.redirects.filter((value) => value !== ip); }
-  async removeAllDownloadRedirects(): Promise<void> { this.redirects = []; }
-  async remove(): Promise<void> { this.redirects = []; }
+  async ensureDownloadRedirect(): Promise<void> { throw new Error("legacy IFB redirect must not be used"); }
+  async removeDownloadIp(): Promise<void> {}
+  async removeAllDownloadRedirects(): Promise<void> {}
+  async remove(): Promise<void> { this.removed = true; }
 }
 
 class FakeReader implements TcStateReader {
@@ -61,34 +61,37 @@ test("corrects root class rate and ceil when desired state differs", async () =>
 
   await enforcer.initializeBaseState();
   const changes = executor.calls.filter((call) => call.command === "tc" && call.args[0] === "class" && call.args[1] === "change");
-  assert.equal(changes.length, 2);
+  assert.equal(changes.length, 1);
   assert.ok(changes.every((call) => call.args.includes("100000000bit")));
 });
 
-test("download uses IFB while upload uses the physical interface", async () => {
+test("download and upload both use physical egress with distinct classes", async () => {
   const executor = new FakeExecutor();
   const reader = new FakeReader();
-  const ifb = new FakeIfb();
-  const enforcer = new SingleInterfaceIfbTrafficEnforcer(100n, "eno1", executor, ifb, reader);
+  const enforcer = new SingleInterfaceIfbTrafficEnforcer(100n, "eno1", executor, new FakeIfb(), reader);
 
-  await enforcer.limitDownloadBits(device, 500000n);
-  await enforcer.limitUploadBits(device, 500000n);
+  await enforcer.limitDownloadBits(device, 5000000n);
+  await enforcer.limitUploadBits(device, 7000000n);
 
-  assert.deepEqual(ifb.redirects, ["192.168.1.115"]);
   const classAdds = executor.calls.filter((call) => call.command === "tc" && call.args[0] === "class" && call.args[1] === "add");
   assert.equal(classAdds.length, 2);
-  assert.equal(classAdds[0]?.args.includes("dev") && classAdds[0]?.args.includes("ifb0"), true);
-  assert.equal(classAdds[1]?.args.includes("dev") && classAdds[1]?.args.includes("eno1"), true);
+  assert.ok(classAdds.every((call) => call.args.includes("eno1")));
+  assert.notEqual(TcClassId.fromMac(device.mac.toString(), "download"), TcClassId.fromMac(device.mac.toString(), "upload"));
+
+  const filterAdds = executor.calls.filter((call) => call.command === "tc" && call.args[0] === "filter" && call.args[1] === "add");
+  assert.equal(filterAdds.length, 2);
+  assert.ok(filterAdds.some((call) => call.args.includes("dst") && call.args.includes("192.168.1.115/32")));
+  assert.ok(filterAdds.some((call) => call.args.includes("src") && call.args.includes("192.168.1.115/32")));
 });
 
-test("reconcile removes orphan filters and classes", async () => {
+test("reconcile removes orphan filters and classes on shared egress", async () => {
   const executor = new FakeExecutor();
   const reader = new FakeReader();
   reader.classes = [{ classId: "2", rate: "500000bit", ceil: "500000bit" }];
   reader.filters = [{ classId: "2", priority: 102, ip: "192.168.1.115" }];
   const enforcer = new SingleInterfaceIfbTrafficEnforcer(100n, "eno1", executor, new FakeIfb(), reader);
 
-  await enforcer.reconcileUploadState(new Set());
+  await enforcer.reconcileTrafficState(new Set());
 
   const deletes = executor.calls.filter((call) => call.command === "tc" && call.args[0] === "filter" && call.args[1] === "del");
   assert.equal(deletes.length, 1);
@@ -107,5 +110,5 @@ test("reconcile propagates state-reader failures", async () => {
     getDeviceFilters: async () => { throw new Error("tc unavailable"); },
   };
   const enforcer = new SingleInterfaceIfbTrafficEnforcer(100n, "eno1", executor, new FakeIfb(), failingReader);
-  await assert.rejects(() => enforcer.reconcileUploadState(new Set()), /tc unavailable/);
+  await assert.rejects(() => enforcer.reconcileTrafficState(new Set()), /tc unavailable/);
 });
