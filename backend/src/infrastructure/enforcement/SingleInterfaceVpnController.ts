@@ -29,6 +29,10 @@ export class SingleInterfaceVpnController implements VpnEnforcement {
     return connected;
   }
 
+  async syncConnectionState(enabled: boolean, connected: boolean): Promise<void> {
+    await this.setNat(connected, enabled);
+  }
+
   private parseVmessLink(link: string): Record<string, unknown> {
     const value = link.trim();
     if (!/^vmess:\/\//i.test(value)) throw new Error("Only vmess links are supported");
