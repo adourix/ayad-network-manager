@@ -134,9 +134,9 @@ export class NftTrafficUsageReader implements TrafficUsageReader {
     const comment = this.ruleComment(mac, direction);
     const existingRule = rules.find((rule) => rule.comment === comment);
 
-    if (existingRule && this.ruleMatches(existingRule.raw, direction, mac, ip)) return;
+    if (existingRule && this.ruleMatches(existingRule.raw, direction, ip)) return;
 
-    const expressions = this.buildRuleExpressions(direction, mac, ip);
+    const expressions = this.buildRuleExpressions(direction, ip);
     if (!existingRule) {
       await this.addRule(expressions, counterName, comment);
     } else {
@@ -144,7 +144,7 @@ export class NftTrafficUsageReader implements TrafficUsageReader {
     }
   }
 
-  private ruleMatches(raw: unknown, direction: "download" | "upload", _mac: string, ip: string): boolean {
+  private ruleMatches(raw: unknown, direction: "download" | "upload", ip: string): boolean {
     const serialized = JSON.stringify(raw);
     if (!serialized.includes(ip)) return false;
 
@@ -174,16 +174,16 @@ export class NftTrafficUsageReader implements TrafficUsageReader {
     await this.execNftMutation(["delete", "rule", TABLE_FAMILY, TABLE_NAME, CHAIN_NAME, "handle", String(handle)]);
   }
 
-  private buildRuleExpressions(direction: "download" | "upload", _mac: string, ip: string): string[] {
-    const { mode, clientInterface, uplinkInterface, clientSubnet } = this.topology;
+  private buildRuleExpressions(direction: "download" | "upload", ip: string): string[] {
+    const { mode, clientInterface, uplinkInterface } = this.topology;
 
     if (mode === "single-interface-ifb") {
       if (direction === "download") {
         return ["iifname", clientInterface, "ip", "daddr", ip];
       }
-      // In a single-interface topology an AP/proxy may rewrite the L2 source
-      // MAC. IP is the stable per-device identity for accounting in this path.
-      return ["iifname", clientInterface, "ip", "saddr", ip, "ip", "saddr", clientSubnet];
+      // A single-interface AP/proxy may rewrite the L2 source MAC, so account
+      // upload traffic by the stable device IP instead of the observed MAC.
+      return ["iifname", clientInterface, "ip", "saddr", ip];
     }
 
     if (!uplinkInterface) throw new Error("Dual-interface accounting requires an uplink interface");
@@ -192,7 +192,7 @@ export class NftTrafficUsageReader implements TrafficUsageReader {
       return ["iifname", uplinkInterface, "oifname", clientInterface, "ip", "daddr", ip];
     }
 
-    return ["iifname", clientInterface, "oifname", uplinkInterface, "ip", "saddr", clientSubnet, "ether", "saddr", _mac];
+    return ["iifname", clientInterface, "oifname", uplinkInterface, "ip", "saddr", this.topology.clientSubnet, "ether", "saddr", ip];
   }
 
   private async readRules(): Promise<NftRule[]> {
