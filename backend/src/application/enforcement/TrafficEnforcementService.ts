@@ -192,9 +192,6 @@ export class TrafficEnforcementService {
    *
    * This does NOT modify downloadLimit/uploadLimit
    * in DevicePolicy.
-   *
-   * The user's normal manual limits remain stored
-   * in the database.
    */
 
   async applyQuotaThrottle(
@@ -209,11 +206,6 @@ export class TrafficEnforcementService {
       );
     }
 
-    /*
-     * 0.5 Mbps =
-     *
-     * 500,000 bits/sec
-     */
     if (!Number.isFinite(this.quotaThrottleMbps) || this.quotaThrottleMbps <= 0) {
       throw new Error("Quota throttle rate must be greater than zero");
     }
@@ -222,17 +214,14 @@ export class TrafficEnforcementService {
       BigInt(Math.round(this.quotaThrottleMbps * 1_000_000));
 
     /*
-     * Download is enforced on the physical
-     * interface in the single-interface setup.
+     * In the single-interface setup both download and upload
+     * throttles are enforced on physical-interface egress.
      */
     await this.trafficEnforcer.limitDownloadBits(
       device,
       bitsPerSecond,
     );
 
-    /*
-     * Upload is enforced through IFB.
-     */
     await this.trafficEnforcer.limitUploadBits(
       device,
       bitsPerSecond,
@@ -243,11 +232,6 @@ export class TrafficEnforcementService {
    * ============================================================
    * CLEAR QUOTA THROTTLE
    * ============================================================
-   *
-   * Restore the user's normal manual policy.
-   *
-   * The quota throttle itself is NOT stored in
-   * DevicePolicy.downloadLimit/uploadLimit.
    */
 
   async clearQuotaThrottle(
@@ -267,10 +251,6 @@ export class TrafficEnforcementService {
         device.id,
       );
 
-    /*
-     * No policy means there is no manual speed
-     * policy to restore.
-     */
     if (!policy) {
       await this.trafficEnforcer.clearDownload(
         device,
@@ -282,12 +262,6 @@ export class TrafficEnforcementService {
 
       return;
     }
-
-    /*
-     * ==========================================================
-     * RESTORE DOWNLOAD
-     * ==========================================================
-     */
 
     if (
       policy.downloadLimit !== null
@@ -304,12 +278,6 @@ export class TrafficEnforcementService {
         device,
       );
     }
-
-    /*
-     * ==========================================================
-     * RESTORE UPLOAD
-     * ==========================================================
-     */
 
     if (
       policy.uploadLimit !== null
