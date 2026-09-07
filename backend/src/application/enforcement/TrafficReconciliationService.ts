@@ -19,15 +19,22 @@ export class TrafficReconciliationService {
       })),
     );
 
-    const hasTrafficPolicy = policies.some(
-      ({ policy }) =>
+    // Traffic enforcement must never target an unvalidated identity. A stored
+    // policy may remain pending while discovery/identity reconciliation obtains
+    // sufficient evidence to validate the device.
+    const enforceablePolicies = policies.filter(
+      ({ device, policy }) =>
+        device.identityValidated &&
+        device.ip !== null &&
         policy !== null &&
         (policy.downloadLimit !== null || policy.uploadLimit !== null),
     );
 
-    if (!hasTrafficPolicy) {
+    if (enforceablePolicies.length === 0) {
       await this.trafficEnforcer.clearBaseState();
-      console.log("Traffic policy reconciliation completed: no active traffic policies.");
+      console.log(
+        "Traffic policy reconciliation completed: no active policies for validated devices.",
+      );
       return;
     }
 
@@ -37,19 +44,24 @@ export class TrafficReconciliationService {
     const expectedUploadClasses = new Set<string>();
     const failures: Error[] = [];
 
-    for (const { device, policy } of policies) {
+    for (const { device, policy } of enforceablePolicies) {
       try {
+        // enforceablePolicies guarantees both policy and IP are present.
         if (!policy || !device.ip) continue;
 
         if (policy.downloadLimit !== null) {
-          expectedDownloadClasses.add(TcClassId.fromMac(device.mac.toString(), "download"));
+          expectedDownloadClasses.add(
+            TcClassId.fromMac(device.mac.toString(), "download"),
+          );
           await this.trafficEnforcer.limitDownload(device, {
             rateMbps: policy.downloadLimit,
           });
         }
 
         if (policy.uploadLimit !== null) {
-          expectedUploadClasses.add(TcClassId.fromMac(device.mac.toString(), "upload"));
+          expectedUploadClasses.add(
+            TcClassId.fromMac(device.mac.toString(), "upload"),
+          );
           await this.trafficEnforcer.limitUpload(device, {
             rateMbps: policy.uploadLimit,
           });
@@ -69,14 +81,22 @@ export class TrafficReconciliationService {
       await this.trafficEnforcer.reconcileDownloadState(expectedDownloadClasses);
     } catch (error) {
       const failure = error instanceof Error ? error : new Error(String(error));
-      failures.push(new Error(`Failed to reconcile stale download tc state: ${failure.message}`, { cause: failure }));
+      failures.push(
+        new Error(`Failed to reconcile stale download tc state: ${failure.message}`, {
+          cause: failure,
+        }),
+      );
     }
 
     try {
       await this.trafficEnforcer.reconcileUploadState(expectedUploadClasses);
     } catch (error) {
       const failure = error instanceof Error ? error : new Error(String(error));
-      failures.push(new Error(`Failed to reconcile stale upload tc state: ${failure.message}`, { cause: failure }));
+      failures.push(
+        new Error(`Failed to reconcile stale upload tc state: ${failure.message}`, {
+          cause: failure,
+        }),
+      );
     }
 
     if (failures.length > 0) {
