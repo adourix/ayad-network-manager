@@ -5,6 +5,7 @@ export interface VpnEnforcement {
   apply(enabled: boolean): Promise<boolean>;
   configure?(link: string): Promise<void>;
   getStatus?(): Promise<{ enabled: boolean; connected: boolean }>;
+  syncConnectionState?(enabled: boolean, connected: boolean): Promise<void>;
 }
 
 export class VpnService {
@@ -96,6 +97,7 @@ export class VpnService {
       if (!desired.enabled) return;
       const live = await this.enforcement.getStatus();
       if (live.connected) {
+        await this.enforcement.syncConnectionState?.(true, true);
         if (!desired.connected) {
           await this.repository.setConnected(true);
           await this.audit?.audit({ action: "vpn-state-change", details: { from: false, to: true, result: "connected" } });
