@@ -113,7 +113,16 @@ export class SingleInterfaceVpnController implements VpnEnforcement {
       }],
       dns: {
         servers: [
-          { type: "local", tag: "bootstrap-local" },
+          {
+            type: "https",
+            tag: "bootstrap-dns",
+            server: "1.1.1.1",
+            server_port: 443,
+            path: "/dns-query",
+            headers: { Host: "cloudflare-dns.com" },
+            tls: { enabled: true, server_name: "cloudflare-dns.com" },
+            detour: "direct",
+          },
           {
             type: "https",
             tag: "vpn-doh",
@@ -128,7 +137,10 @@ export class SingleInterfaceVpnController implements VpnEnforcement {
         final: "vpn-doh",
         strategy: "ipv4_only",
       },
-      outbounds: [outbound],
+      outbounds: [
+        { type: "direct", tag: "direct" },
+        outbound,
+      ],
       route: { auto_detect_interface: true, final: "proxy-out" },
     };
   }
@@ -150,7 +162,7 @@ export class SingleInterfaceVpnController implements VpnEnforcement {
       type: "vmess", tag: "proxy-out", server, server_port: port, uuid, security,
       alter_id: alterId,
       tls: tlsEnabled ? { enabled: true, ...(sni ? { server_name: sni } : {}) } : { enabled: false },
-      domain_resolver: { server: "bootstrap-local", strategy: "ipv4_only" },
+      domain_resolver: { server: "bootstrap-dns", strategy: "ipv4_only" },
     };
     this.addTransport(outbound, network, host, path, parsed);
     return outbound;
@@ -172,7 +184,7 @@ export class SingleInterfaceVpnController implements VpnEnforcement {
       server,
       server_port: port,
       uuid,
-      domain_resolver: { server: "bootstrap-local", strategy: "ipv4_only" },
+      domain_resolver: { server: "bootstrap-dns", strategy: "ipv4_only" },
       ...(typeof parsed.flow === "string" && parsed.flow ? { flow: parsed.flow } : {}),
     };
 
