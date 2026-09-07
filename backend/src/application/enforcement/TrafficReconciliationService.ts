@@ -33,7 +33,8 @@ export class TrafficReconciliationService {
 
     await this.trafficEnforcer.initializeBaseState();
 
-    const expectedTrafficClasses = new Set<string>();
+    const expectedDownloadClasses = new Set<string>();
+    const expectedUploadClasses = new Set<string>();
     const failures: Error[] = [];
 
     for (const { device, policy } of policies) {
@@ -41,14 +42,14 @@ export class TrafficReconciliationService {
         if (!policy || !device.ip) continue;
 
         if (policy.downloadLimit !== null) {
-          expectedTrafficClasses.add(TcClassId.fromMac(device.mac.toString(), "download"));
+          expectedDownloadClasses.add(TcClassId.fromMac(device.mac.toString(), "download"));
           await this.trafficEnforcer.limitDownload(device, {
             rateMbps: policy.downloadLimit,
           });
         }
 
         if (policy.uploadLimit !== null) {
-          expectedTrafficClasses.add(TcClassId.fromMac(device.mac.toString(), "upload"));
+          expectedUploadClasses.add(TcClassId.fromMac(device.mac.toString(), "upload"));
           await this.trafficEnforcer.limitUpload(device, {
             rateMbps: policy.uploadLimit,
           });
@@ -65,10 +66,17 @@ export class TrafficReconciliationService {
     }
 
     try {
-      await this.trafficEnforcer.reconcileTrafficState(expectedTrafficClasses);
+      await this.trafficEnforcer.reconcileDownloadState(expectedDownloadClasses);
     } catch (error) {
       const failure = error instanceof Error ? error : new Error(String(error));
-      failures.push(new Error(`Failed to reconcile stale traffic tc state: ${failure.message}`, { cause: failure }));
+      failures.push(new Error(`Failed to reconcile stale download tc state: ${failure.message}`, { cause: failure }));
+    }
+
+    try {
+      await this.trafficEnforcer.reconcileUploadState(expectedUploadClasses);
+    } catch (error) {
+      const failure = error instanceof Error ? error : new Error(String(error));
+      failures.push(new Error(`Failed to reconcile stale upload tc state: ${failure.message}`, { cause: failure }));
     }
 
     if (failures.length > 0) {
