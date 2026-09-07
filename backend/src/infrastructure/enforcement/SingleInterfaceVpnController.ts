@@ -65,9 +65,14 @@ export class SingleInterfaceVpnController implements VpnEnforcement {
     const path = typeof parsed.path === "string" ? parsed.path : "";
     const sni = typeof parsed.sni === "string" && parsed.sni ? parsed.sni : host || undefined;
     if (!Number.isSafeInteger(alterId) || alterId < 0) throw new Error("invalid VMess alterId");
+
+    // `net` describes the VMess transport (TCP/WS/HTTP/gRPC/QUIC). It must not
+    // be copied into VMess `network`: that field controls whether the VMess
+    // protocol accepts proxied TCP and/or UDP. Leaving it unset enables both,
+    // which is required for a TUN gateway and avoids the previous UDP failure.
     const outbound: Record<string, unknown> = {
       type: "vmess", tag: "vmess-out", server, server_port: port, uuid, security,
-      alter_id: alterId, network: "tcp",
+      alter_id: alterId,
       tls: tlsEnabled ? { enabled: true, ...(sni ? { server_name: sni } : {}) } : { enabled: false },
     };
     if (network === "ws") outbound.transport = { type: "ws", ...(path ? { path } : {}), ...(host ? { headers: { Host: host } } : {}) };
@@ -75,9 +80,36 @@ export class SingleInterfaceVpnController implements VpnEnforcement {
     else if (network === "grpc") outbound.transport = { type: "grpc", ...(path ? { service_name: path } : {}) };
     else if (network === "httpupgrade") outbound.transport = { type: "httpupgrade", ...(host ? { host } : {}), ...(path ? { path } : {}) };
     else if (network === "quic") outbound.transport = { type: "quic" };
+
     return {
       log: { level: "info" },
-      inbounds: [{ type: "tun", tag: "tun-in", interface_name: this.tunnelInterface, address: [config.network.vpnTunAddress], auto_route: true, auto_redirect: true, strict_route: true }],
+      inbounds: [{
+        type: "tun",
+        tag: "tun-in",
+        interface_name: this.tunnelInterface,
+        address: [config.network.vpnTunAddress],
+        auto_route: true,
+        auto_redirect: true,
+        strict_route: true,
+      }],
+      dns: {
+        // Never inherit the host resolver. On this gateway the host resolver
+        // may be managed by Tailscale and can expose an unreachable IPv6 DNS
+        // address inside the TUN routing domain. Use DoH over the VMess TCP
+        // connection instead, with an IP endpoint so bootstrap needs no DNS.
+        servers: [{
+          type: "https",
+          tag: "vpn-doh",
+          server: "1.1.1.1",
+          server_port: 443,
+          path: "/dns-query",
+          headers: { Host: "cloudflare-dns.com" },
+          tls: { enabled: true, server_name: "cloudflare-dns.com" },
+          detour: "vmess-out",
+        }],
+        final: "vpn-doh",
+        strategy: "ipv4_only",
+      },
       outbounds: [outbound],
       route: { auto_detect_interface: true, final: "vmess-out" },
     };
