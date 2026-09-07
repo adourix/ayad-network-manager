@@ -43,15 +43,38 @@ function tokenFrom(request: FastifyRequest): string | null {
   return header.slice("Bearer ".length).trim() || null;
 }
 
+export async function validateSessionToken(token: string | null): Promise<boolean> {
+  if (!token) return false;
+  const session = await prisma.authSession.findUnique({
+    where: { tokenHash: tokenHash(token) },
+  });
+  if (!session) return false;
+  if (session.expiresAt.getTime() <= Date.now()) {
+    await prisma.authSession.delete({ where: { id: session.id } }).catch(() => undefined);
+    return false;
+  }
+  return true;
+}
+
+export function websocketTokenFrom(request: FastifyRequest): string | null {
+  const protocols = request.headers["sec-websocket-protocol"];
+  if (typeof protocols !== "string") return null;
+
+  for (const protocol of protocols.split(",")) {
+    const value = protocol.trim();
+    if (value.startsWith("bearer.")) return value.slice("bearer.".length) || null;
+  }
+
+  return null;
+}
+
 export function registerAuthentication(app: FastifyInstance): void {
   app.addHook("preHandler", async (request, reply) => {
     if (request.url.split("?")[0] === "/api/auth/login" ||
         request.url.split("?")[0] === "/api/health") return;
 
     const token = tokenFrom(request);
-    const session = token ? await prisma.authSession.findUnique({ where: { tokenHash: tokenHash(token) } }) : null;
-    if (!session || session.expiresAt.getTime() <= Date.now()) {
-      if (session) await prisma.authSession.delete({ where: { id: session.id } }).catch(() => undefined);
+    if (!(await validateSessionToken(token))) {
       return reply.code(401).send({ error: "Authentication required" });
     }
   });
