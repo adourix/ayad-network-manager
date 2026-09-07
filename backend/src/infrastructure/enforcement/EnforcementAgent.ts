@@ -14,11 +14,12 @@ type Request = { command: string; args: string[] };
 type Job = () => Promise<void>;
 
 function valid(command: string, args: string[]): boolean {
-  if (allowed.has(command) === false || args.length > 64 || args.some((arg) => arg.length > 512 || /[\r\n\0]/.test(arg))) return false;
+  if (allowed.has(command) === false || args.length > 64 || args.some((arg) => arg.length > 512 || /\0/.test(arg))) return false;
+  if (command !== "write-sing-box-config" && args.some((arg) => /[\r\n]/.test(arg))) return false;
   if (command === "systemctl" && !args.every((arg) => /^[a-zA-Z0-9_.@:/-]+$/.test(arg))) return false;
   if (command === "write-sing-box-config") {
     if (args.length < 2 || args[0] !== vpnConfigPath || args.length > 64) return false;
-    if (args.slice(1).some((arg) => !/^[A-Za-z0-9+/=]+$/.test(arg))) return false;
+    if (args.slice(1).some((arg) => arg.length > 512)) return false;
   }
   return true;
 }
@@ -89,8 +90,7 @@ async function writeSingBoxConfig(args: string[]): Promise<void> {
   const target = args[0];
   if (target !== vpnConfigPath) throw new Error("sing-box config path rejected");
 
-  const encoded = args.slice(1).join("");
-  const content = Buffer.from(encoded, "base64").toString("utf8");
+  const content = args.slice(1).join("");
   if (content.length === 0 || content.length > 32 * 1024) {
     throw new Error("sing-box config payload rejected");
   }
