@@ -177,10 +177,8 @@ export class SingleInterfaceIfbTrafficEnforcer implements TrafficEnforcer {
   }
 
   async reconcileTrafficState(expectedClassIds: Set<string>): Promise<void> {
-    await this.reconcileInterfaceState(this.lanInterface, expectedClassIds);
-    if (await this.ifbManager.exists()) {
-      await this.reconcileInterfaceState(this.ifbManager.getName(), expectedClassIds);
-    }
+    await this.reconcileDownloadState(expectedClassIds);
+    await this.reconcileUploadState(expectedClassIds);
   }
 
   async reconcileDownloadState(expectedClassIds: Set<string>): Promise<void> {
@@ -188,8 +186,24 @@ export class SingleInterfaceIfbTrafficEnforcer implements TrafficEnforcer {
   }
 
   async reconcileUploadState(expectedClassIds: Set<string>): Promise<void> {
-    if (!(await this.ifbManager.exists())) return;
-    await this.reconcileInterfaceState(this.ifbManager.getName(), expectedClassIds);
+    if (!(await this.ifbManager.exists())) {
+      if (expectedClassIds.size > 0) {
+        throw new Error("IFB is missing while upload traffic policies are active");
+      }
+      return;
+    }
+
+    const ifbName = this.ifbManager.getName();
+    await this.reconcileInterfaceState(ifbName, expectedClassIds);
+
+    const actualFilters = await this.tcStateReader.getDeviceFilters(ifbName);
+    const expectedIps = new Set(
+      actualFilters
+        .filter((filter) => expectedClassIds.has(filter.classId.trim().toLowerCase()))
+        .map((filter) => filter.ip)
+        .filter((ip): ip is string => ip !== null),
+    );
+    await this.ifbManager.reconcileUploadRedirects(this.lanInterface, expectedIps);
   }
 
   private async reconcileInterfaceState(interfaceName: string, expectedClassIds: Set<string>): Promise<void> {
