@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SetupService } from "../src/application/setup/SetupService.js";
 
-test("setup inspection enumerates interfaces and proposes a non-overlapping subnet", async () => {
+test("setup inspection proposes the existing uplink subnet for single-interface IFB", async () => {
   const probe = {
     run: async (command: string, args: string[]) => ({
       stdout:
@@ -23,7 +23,7 @@ test("setup inspection enumerates interfaces and proposes a non-overlapping subn
   const report = await new SetupService(probe).inspectNetwork();
   assert.equal(report.defaultUplink, "eno1");
   assert.deepEqual(report.interfaces[0]?.addresses, ["192.168.1.254/24"]);
-  assert.ok(report.proposedClientSubnets.includes("192.168.50.0/24"));
+  assert.deepEqual(report.proposedClientSubnets, ["192.168.1.0/24"]);
 });
 
 test("setup apply refuses an unhealthy configuration without destroying the existing config", async () => {
