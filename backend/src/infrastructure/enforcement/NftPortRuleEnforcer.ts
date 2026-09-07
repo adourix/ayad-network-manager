@@ -4,7 +4,6 @@ import type { SystemCommandExecutor } from "./SystemCommandExecutor.js";
 import type { OperationsRepository } from "../../domain/repositories/OperationsRepository.js";
 import { config } from "../../config.js";
 
-const MAC_REGEX = /^([0-9a-f]{2}:){5}[0-9a-f]{2}$/i;
 const IPV4_REGEX = /^(?:\d{1,3}\.){3}\d{1,3}$/;
 const PORT_RULE_POSITION = "2";
 
@@ -28,7 +27,6 @@ export class NftPortRuleEnforcer implements PortRuleEnforcer {
 
   async apply(device: { mac: string; ip: string }, rule: PortRuleRecord): Promise<void> {
     if (
-      !MAC_REGEX.test(device.mac) ||
       !validIpv4(device.ip) ||
       !["tcp", "udp"].includes(rule.protocol) ||
       !["allow", "block"].includes(rule.action) ||
@@ -41,14 +39,19 @@ export class NftPortRuleEnforcer implements PortRuleEnforcer {
     const comment = `ayad_nm_port_${rule.id}`;
 
     /*
-     * Blocked-device MAC/IP rules occupy positions 0 and 1. Port rules must
-     * never precede them, otherwise an explicit allow could bypass a device
-     * block. Position 2 is the first project-owned slot after those rules.
+     * Single-interface + IFB is an L3 enforcement topology. The client-facing
+     * interface may see an AP/proxy MAC instead of the real client MAC, and
+     * the return packet's destination MAC can therefore be the proxy MAC.
+     * Match the validated client IP instead of Ethernet identity.
+     *
+     * Blocked-device rules occupy positions 0 and 1. Port rules start at the
+     * first project-owned slot after them so an allow rule cannot bypass a
+     * device-wide block.
      */
     const upload = [
       "insert", "rule", "ip", "filter", "FORWARD", "position", PORT_RULE_POSITION,
       "iifname", config.network.clientInterface,
-      "ether", "saddr", device.mac.toLowerCase(),
+      "ip", "saddr", device.ip,
       rule.protocol, "dport", String(rule.port),
       "oifname", config.network.uplinkInterface,
       verdict, "comment", comment,
@@ -57,7 +60,7 @@ export class NftPortRuleEnforcer implements PortRuleEnforcer {
     const download = [
       "insert", "rule", "ip", "filter", "FORWARD", "position", PORT_RULE_POSITION,
       "iifname", config.network.uplinkInterface,
-      "ether", "daddr", device.mac.toLowerCase(),
+      "ip", "daddr", device.ip,
       rule.protocol, "sport", String(rule.port),
       "oifname", config.network.clientInterface,
       verdict, "comment", `${comment}_return`,
