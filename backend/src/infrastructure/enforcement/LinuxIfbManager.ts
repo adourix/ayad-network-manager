@@ -31,7 +31,7 @@ export class LinuxIfbManager implements IfbManager {
     return IFB_NAME;
   }
 
-  async ensureDownloadRedirect(interfaceName: string, downloadIp: string): Promise<void> {
+  async ensureUploadRedirect(interfaceName: string, uploadIp: string): Promise<void> {
     await this.ensure(interfaceName);
 
     const result = await this.executor.execute("tc", [
@@ -39,11 +39,11 @@ export class LinuxIfbManager implements IfbManager {
     ]);
 
     const filters = this.parseRedirectFilters(result.stdout);
-    const existing = filters.find((filter) => filter.ip === downloadIp);
-    if (existing?.device === IFB_NAME) return;
+    const existing = filters.find((filter) => filter.ip === uploadIp);
+    if (existing?.device === IFB_NAME && existing.direction === "src") return;
 
     const priority = this.findAvailablePriority(
-      this.priorityForIp(downloadIp),
+      this.priorityForIp(uploadIp),
       new Set(filters.map((filter) => filter.priority)),
     );
 
@@ -56,18 +56,18 @@ export class LinuxIfbManager implements IfbManager {
       "pref", priority.toString(),
       "protocol", "ip",
       "flower",
-      "dst_ip", downloadIp,
+      "src_ip", uploadIp,
       "action", "mirred", "egress", "redirect", "dev", IFB_NAME,
     ]);
   }
 
-  async removeDownloadIp(interfaceName: string, downloadIp: string): Promise<void> {
+  async removeUploadIp(interfaceName: string, uploadIp: string): Promise<void> {
     const result = await this.executor.execute("tc", [
       "filter", "show", "dev", interfaceName, "ingress",
     ]);
 
     const priorities = this.parseRedirectFilters(result.stdout)
-      .filter((filter) => filter.ip === downloadIp && filter.device === IFB_NAME)
+      .filter((filter) => filter.ip === uploadIp && filter.device === IFB_NAME && filter.direction === "src")
       .map((filter) => filter.priority);
 
     for (const priority of priorities) {
@@ -75,27 +75,39 @@ export class LinuxIfbManager implements IfbManager {
     }
   }
 
-  async removeAllDownloadRedirects(interfaceName: string): Promise<void> {
+  async removeAllUploadRedirects(interfaceName: string): Promise<void> {
     const result = await this.executor.execute("tc", [
       "filter", "show", "dev", interfaceName, "ingress",
     ]);
 
     const priorities = new Set(
       this.parseRedirectFilters(result.stdout)
-        .filter((filter) => filter.device === IFB_NAME)
+        .filter((filter) => filter.device === IFB_NAME && filter.direction === "src")
         .map((filter) => filter.priority),
     );
 
     for (const priority of priorities) {
       await this.deleteRedirectFilter(interfaceName, priority);
     }
+  }
 
-    // Keep the ingress qdisc: it may be operator-owned and our filters do not
-    // require the qdisc to be deleted after cleanup.
+  async reconcileUploadRedirects(interfaceName: string, expectedIps: Set<string>): Promise<void> {
+    const result = await this.executor.execute("tc", [
+      "filter", "show", "dev", interfaceName, "ingress",
+    ]);
+
+    const stalePriorities = this.parseRedirectFilters(result.stdout)
+      .filter((filter) => filter.device === IFB_NAME && filter.direction === "src")
+      .filter((filter) => filter.ip === null || !expectedIps.has(filter.ip))
+      .map((filter) => filter.priority);
+
+    for (const priority of stalePriorities) {
+      await this.deleteRedirectFilter(interfaceName, priority);
+    }
   }
 
   async remove(interfaceName: string): Promise<void> {
-    await this.removeAllDownloadRedirects(interfaceName);
+    await this.removeAllUploadRedirects(interfaceName);
 
     try {
       await this.executor.execute("ip", ["link", "delete", IFB_NAME, "type", "ifb"]);
@@ -131,16 +143,19 @@ export class LinuxIfbManager implements IfbManager {
     priority: number;
     ip: string | null;
     device: string | null;
+    direction: "src" | "dst" | null;
   }> {
     const filters: Array<{
       priority: number;
       ip: string | null;
       device: string | null;
+      direction: "src" | "dst" | null;
     }> = [];
 
     let currentPriority: number | null = null;
     let currentIp: string | null = null;
     let currentDevice: string | null = null;
+    let currentDirection: "src" | "dst" | null = null;
 
     for (const line of output.split("\n")) {
       const priority = line.match(/\bpref\s+(\d+)\b/)?.[1];
@@ -148,24 +163,34 @@ export class LinuxIfbManager implements IfbManager {
         currentPriority = Number.parseInt(priority, 10);
         currentIp = null;
         currentDevice = null;
+        currentDirection = null;
       }
 
-      const ip = line.match(/\bdst_ip\s+([0-9]{1,3}(?:\.[0-9]{1,3}){3})\b/)?.[1];
-      if (ip !== undefined) currentIp = ip;
+      const srcIp = line.match(/\bsrc_ip\s+([0-9]{1,3}(?:\.[0-9]{1,3}){3})\b/)?.[1];
+      const dstIp = line.match(/\bdst_ip\s+([0-9]{1,3}(?:\.[0-9]{1,3}){3})\b/)?.[1];
+      if (srcIp !== undefined) {
+        currentIp = srcIp;
+        currentDirection = "src";
+      } else if (dstIp !== undefined) {
+        currentIp = dstIp;
+        currentDirection = "dst";
+      }
 
       const device = line.match(/\bredirect\s+dev\s+(\S+)/)?.[1];
       if (device !== undefined) currentDevice = device;
 
-      if (currentPriority !== null && (ip !== undefined || device !== undefined)) {
+      if (currentPriority !== null && (srcIp !== undefined || dstIp !== undefined || device !== undefined)) {
         const last = filters[filters.length - 1];
         if (last?.priority === currentPriority) {
           last.ip = currentIp;
           last.device = currentDevice;
+          last.direction = currentDirection;
         } else {
           filters.push({
             priority: currentPriority,
             ip: currentIp,
             device: currentDevice,
+            direction: currentDirection,
           });
         }
       }
