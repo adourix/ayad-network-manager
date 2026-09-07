@@ -12,11 +12,8 @@ import { TrafficRate } from "./TrafficRate.js";
  * Single-interface topology:
  *
  *   download: physical egress HTB, classified by destination IP
- *   upload:   physical egress HTB, classified by source IP
- *
- * Both directions share the physical interface, so they must use distinct
- * HTB classes. The IFB manager is retained only to remove legacy IFB state
- * created by older single-interface deployments during migration.
+ *   upload:   physical ingress -> IFB redirect -> IFB egress HTB,
+ *             classified by source IP
  */
 export class SingleInterfaceIfbTrafficEnforcer implements TrafficEnforcer {
   constructor(
@@ -42,7 +39,9 @@ export class SingleInterfaceIfbTrafficEnforcer implements TrafficEnforcer {
       }
     }
 
-    await this.removeLegacyIfbState();
+    if (await this.ifbManager.exists()) {
+      await this.ifbManager.remove(this.lanInterface);
+    }
   }
 
   private async removeLegacyIfbState(): Promise<void> {
@@ -122,9 +121,11 @@ export class SingleInterfaceIfbTrafficEnforcer implements TrafficEnforcer {
   async limitUpload(device: Device, input: TrafficPolicyInput): Promise<void> {
     if (!device.ip) throw new Error(`Device ${device.mac.toString()} has no IP address`);
     const classId = this.getClassId(device, "upload");
-    await this.ensureRootState(this.lanInterface);
-    await this.ensureDeviceClass(this.lanInterface, classId, TrafficRate.fromMbps(input.rateMbps).toTcRate());
-    await this.ensureFilter(this.lanInterface, device.ip.toString(), classId, "upload");
+    const ifbName = await this.ifbManager.ensure(this.lanInterface);
+    await this.ensureRootState(ifbName);
+    await this.ensureDeviceClass(ifbName, classId, TrafficRate.fromMbps(input.rateMbps).toTcRate());
+    await this.ensureFilter(ifbName, device.ip.toString(), classId, "upload");
+    await this.ifbManager.ensureUploadRedirect(this.lanInterface, device.ip.toString());
   }
 
   async limitDownloadBits(device: Device, bitsPerSecond: bigint): Promise<void> {
@@ -138,9 +139,11 @@ export class SingleInterfaceIfbTrafficEnforcer implements TrafficEnforcer {
   async limitUploadBits(device: Device, bitsPerSecond: bigint): Promise<void> {
     if (!device.ip) throw new Error(`Device ${device.mac.toString()} has no IP address`);
     const classId = this.getClassId(device, "upload");
-    await this.ensureRootState(this.lanInterface);
-    await this.ensureDeviceClass(this.lanInterface, classId, `${bitsPerSecond.toString()}bit`);
-    await this.ensureFilter(this.lanInterface, device.ip.toString(), classId, "upload");
+    const ifbName = await this.ifbManager.ensure(this.lanInterface);
+    await this.ensureRootState(ifbName);
+    await this.ensureDeviceClass(ifbName, classId, `${bitsPerSecond.toString()}bit`);
+    await this.ensureFilter(ifbName, device.ip.toString(), classId, "upload");
+    await this.ifbManager.ensureUploadRedirect(this.lanInterface, device.ip.toString());
   }
 
   async clearDownload(device: Device): Promise<void> {
@@ -148,7 +151,9 @@ export class SingleInterfaceIfbTrafficEnforcer implements TrafficEnforcer {
   }
 
   async clearUpload(device: Device): Promise<void> {
-    await this.clearClass(this.lanInterface, this.getClassId(device, "upload"));
+    if (device.ip) await this.ifbManager.removeUploadIp(this.lanInterface, device.ip.toString());
+    if (!(await this.ifbManager.exists())) return;
+    await this.clearClass(this.ifbManager.getName(), this.getClassId(device, "upload"));
   }
 
   private async clearClass(interfaceName: string, classId: string): Promise<void> {
@@ -173,6 +178,9 @@ export class SingleInterfaceIfbTrafficEnforcer implements TrafficEnforcer {
 
   async reconcileTrafficState(expectedClassIds: Set<string>): Promise<void> {
     await this.reconcileInterfaceState(this.lanInterface, expectedClassIds);
+    if (await this.ifbManager.exists()) {
+      await this.reconcileInterfaceState(this.ifbManager.getName(), expectedClassIds);
+    }
   }
 
   async reconcileDownloadState(expectedClassIds: Set<string>): Promise<void> {
@@ -180,7 +188,8 @@ export class SingleInterfaceIfbTrafficEnforcer implements TrafficEnforcer {
   }
 
   async reconcileUploadState(expectedClassIds: Set<string>): Promise<void> {
-    await this.reconcileInterfaceState(this.lanInterface, expectedClassIds);
+    if (!(await this.ifbManager.exists())) return;
+    await this.reconcileInterfaceState(this.ifbManager.getName(), expectedClassIds);
   }
 
   private async reconcileInterfaceState(interfaceName: string, expectedClassIds: Set<string>): Promise<void> {
