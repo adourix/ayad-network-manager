@@ -86,6 +86,21 @@ class EnforcementScheduler {
 
 const scheduler = new EnforcementScheduler();
 
+async function getSingBoxIds(): Promise<{ uid: number; gid: number }> {
+  const passwd = await fs.readFile("/etc/passwd", "utf8");
+  const entry = passwd.split("\n").find((line) => line.startsWith("sing-box:"));
+  if (!entry) throw new Error("sing-box user not found");
+
+  const fields = entry.split(":");
+  const uid = Number(fields[2]);
+  const gid = Number(fields[3]);
+  if (!Number.isSafeInteger(uid) || !Number.isSafeInteger(gid) || uid < 0 || gid < 0) {
+    throw new Error("invalid sing-box user/group ids");
+  }
+
+  return { uid, gid };
+}
+
 async function writeSingBoxConfig(args: string[]): Promise<void> {
   const target = args[0];
   if (target !== vpnConfigPath) throw new Error("sing-box config path rejected");
@@ -101,6 +116,7 @@ async function writeSingBoxConfig(args: string[]): Promise<void> {
     throw new Error("sing-box config must be valid JSON");
   }
 
+  const { uid, gid } = await getSingBoxIds();
   await fs.mkdir(dirname(target), { recursive: true, mode: 0o750 });
   try {
     await fs.copyFile(target, `${target}.bak`);
@@ -111,10 +127,10 @@ async function writeSingBoxConfig(args: string[]): Promise<void> {
   const temporary = `${target}.tmp`;
   await fs.writeFile(temporary, content, { encoding: "utf8", mode: 0o600 });
   await fs.chmod(temporary, 0o600);
-  await fs.chown(temporary, "sing-box", "sing-box");
+  await fs.chown(temporary, uid, gid);
   await fs.rename(temporary, target);
   await fs.chmod(target, 0o600);
-  await fs.chown(target, "sing-box", "sing-box");
+  await fs.chown(target, uid, gid);
 }
 
 try { unlinkSync(socketPath); } catch {}
