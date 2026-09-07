@@ -22,13 +22,87 @@ export class PrismaBlockedDeviceRepository implements BlockedDeviceRepository {
   async releaseBlock(deviceId: number): Promise<void> {
     const record = await prisma.blockedDevice.findUnique({ where: { deviceId } });
     if (!record) return;
-    await prisma.$transaction([
-      prisma.blockedDevice.update({ where: { id: record.id }, data: { active: false } }),
-      prisma.ipBinding.updateMany({ where: { blockedDeviceId: record.id, active: true }, data: { active: false, releasedAt: new Date(), releaseReason: "explicit_unblock" } }),
-    ]);
+
+    await prisma.$transaction(async (tx) => {
+      await tx.blockedDevice.update({ where: { id: record.id }, data: { active: false } });
+
+      const activeBindings = await tx.ipBinding.findMany({
+        where: { blockedDeviceId: record.id, active: true },
+      });
+
+      for (const binding of activeBindings) {
+        const releasedAt = new Date();
+        const existingReleased = await tx.ipBinding.findUnique({
+          where: {
+            blockedDeviceId_ip_active: {
+              blockedDeviceId: record.id,
+              ip: binding.ip,
+              active: false,
+            },
+          },
+        });
+
+        if (existingReleased) {
+          await tx.ipBinding.update({
+            where: { id: existingReleased.id },
+            data: {
+              releasedAt,
+              releaseReason: "explicit_unblock",
+            },
+          });
+          await tx.ipBinding.delete({ where: { id: binding.id } });
+        } else {
+          await tx.ipBinding.update({
+            where: { id: binding.id },
+            data: {
+              active: false,
+              releasedAt,
+              releaseReason: "explicit_unblock",
+            },
+          });
+        }
+      }
+    });
   }
 
   async releaseIp(ip: string, reason: string): Promise<void> {
-    await prisma.ipBinding.updateMany({ where: { ip, active: true }, data: { active: false, releasedAt: new Date(), releaseReason: reason } });
+    await prisma.$transaction(async (tx) => {
+      const activeBindings = await tx.ipBinding.findMany({
+        where: { ip, active: true },
+      });
+
+      for (const binding of activeBindings) {
+        const releasedAt = new Date();
+        const existingReleased = await tx.ipBinding.findUnique({
+          where: {
+            blockedDeviceId_ip_active: {
+              blockedDeviceId: binding.blockedDeviceId,
+              ip: binding.ip,
+              active: false,
+            },
+          },
+        });
+
+        if (existingReleased) {
+          await tx.ipBinding.update({
+            where: { id: existingReleased.id },
+            data: {
+              releasedAt,
+              releaseReason: reason,
+            },
+          });
+          await tx.ipBinding.delete({ where: { id: binding.id } });
+        } else {
+          await tx.ipBinding.update({
+            where: { id: binding.id },
+            data: {
+              active: false,
+              releasedAt,
+              releaseReason: reason,
+            },
+          });
+        }
+      }
+    });
   }
 }
