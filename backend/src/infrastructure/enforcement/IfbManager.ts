@@ -5,11 +5,13 @@ export interface IfbManager {
 
   ensure(interfaceName: string): Promise<string>;
 
-  ensureDownloadRedirect(interfaceName: string, downloadIp: string): Promise<void>;
+  ensureUploadRedirect(interfaceName: string, uploadIp: string): Promise<void>;
 
-  removeDownloadIp(interfaceName: string, downloadIp: string): Promise<void>;
+  removeUploadIp(interfaceName: string, uploadIp: string): Promise<void>;
 
-  removeAllDownloadRedirects(interfaceName: string): Promise<void>;
+  removeAllUploadRedirects(interfaceName: string): Promise<void>;
+
+  reconcileUploadRedirects(interfaceName: string, expectedIps: Set<string>): Promise<void>;
 
   remove(interfaceName: string): Promise<void>;
 }
