@@ -1,5 +1,3 @@
-import { promises as fs } from "node:fs";
-import { dirname } from "node:path";
 import type { SystemCommandExecutor } from "./SystemCommandExecutor.js";
 import type { VpnEnforcement } from "../../application/vpn/VpnService.js";
 import { config } from "../../config.js";
@@ -14,24 +12,17 @@ export class SingleInterfaceVpnController implements VpnEnforcement {
   async configure(link: string): Promise<void> {
     const parsed = this.parseVmessLink(link);
     const generated = this.buildConfig(parsed);
+    const content = JSON.stringify(generated, null, 2);
+    const chunks = content.match(/.{1,480}/gs) ?? [];
 
-    await fs.mkdir(dirname(config.network.vpnConfigPath), { recursive: true });
-    try {
-      await fs.copyFile(
-        config.network.vpnConfigPath,
-        `${config.network.vpnConfigPath}.bak`,
-      );
-    } catch {
-      // No previous config is normal on first setup.
+    if (chunks.length === 0 || chunks.length > 63) {
+      throw new Error("generated sing-box config is too large");
     }
 
-    const temporary = `${config.network.vpnConfigPath}.tmp`;
-    await fs.writeFile(
-      temporary,
-      JSON.stringify(generated, null, 2),
-      { encoding: "utf8", mode: 0o600 },
-    );
-    await fs.rename(temporary, config.network.vpnConfigPath);
+    await this.executor.execute("write-sing-box-config", [
+      config.network.vpnConfigPath,
+      ...chunks,
+    ]);
   }
 
   async apply(enabled: boolean): Promise<boolean> {
@@ -126,9 +117,7 @@ export class SingleInterfaceVpnController implements VpnEnforcement {
       uuid,
       security,
       alter_id: alterId,
-      network: network === "ws" || network === "http" || network === "grpc" || network === "httpupgrade" || network === "quic"
-        ? "tcp"
-        : "tcp",
+      network: "tcp",
       tls: tlsEnabled
         ? {
             enabled: true,
