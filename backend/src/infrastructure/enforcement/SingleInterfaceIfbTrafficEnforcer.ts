@@ -32,7 +32,10 @@ export class SingleInterfaceIfbTrafficEnforcer implements TrafficEnforcer {
   async clearBaseState(): Promise<void> {
     await this.ifbManager.removeAllDownloadRedirects(this.lanInterface);
 
-    for (const interfaceName of [this.lanInterface, this.ifbManager.getName()]) {
+    const interfaces = [this.lanInterface];
+    if (await this.ifbManager.exists()) interfaces.push(this.ifbManager.getName());
+
+    for (const interfaceName of interfaces) {
       const rootState = await this.tcStateReader.getRootQdiscState(interfaceName);
       if (!rootState.exists || rootState.kind !== "htb") continue;
       try {
@@ -42,7 +45,9 @@ export class SingleInterfaceIfbTrafficEnforcer implements TrafficEnforcer {
       }
     }
 
-    await this.ifbManager.remove(this.lanInterface);
+    if (await this.ifbManager.exists()) {
+      await this.ifbManager.remove(this.lanInterface);
+    }
   }
 
   private getFilterPriority(classId: string): number {
