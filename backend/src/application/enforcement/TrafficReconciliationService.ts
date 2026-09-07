@@ -33,25 +33,22 @@ export class TrafficReconciliationService {
 
     await this.trafficEnforcer.initializeBaseState();
 
-    const expectedDownloadClasses = new Set<string>();
-    const expectedUploadClasses = new Set<string>();
+    const expectedTrafficClasses = new Set<string>();
     const failures: Error[] = [];
 
     for (const { device, policy } of policies) {
       try {
         if (!policy || !device.ip) continue;
 
-        const classId = TcClassId.fromMac(device.mac.toString());
-
         if (policy.downloadLimit !== null) {
-          expectedDownloadClasses.add(classId);
+          expectedTrafficClasses.add(TcClassId.fromMac(device.mac.toString(), "download"));
           await this.trafficEnforcer.limitDownload(device, {
             rateMbps: policy.downloadLimit,
           });
         }
 
         if (policy.uploadLimit !== null) {
-          expectedUploadClasses.add(classId);
+          expectedTrafficClasses.add(TcClassId.fromMac(device.mac.toString(), "upload"));
           await this.trafficEnforcer.limitUpload(device, {
             rateMbps: policy.uploadLimit,
           });
@@ -68,17 +65,10 @@ export class TrafficReconciliationService {
     }
 
     try {
-      await this.trafficEnforcer.reconcileDownloadState(expectedDownloadClasses);
+      await this.trafficEnforcer.reconcileTrafficState(expectedTrafficClasses);
     } catch (error) {
       const failure = error instanceof Error ? error : new Error(String(error));
-      failures.push(new Error(`Failed to reconcile stale download tc state: ${failure.message}`, { cause: failure }));
-    }
-
-    try {
-      await this.trafficEnforcer.reconcileUploadState(expectedUploadClasses);
-    } catch (error) {
-      const failure = error instanceof Error ? error : new Error(String(error));
-      failures.push(new Error(`Failed to reconcile stale upload tc state: ${failure.message}`, { cause: failure }));
+      failures.push(new Error(`Failed to reconcile stale traffic tc state: ${failure.message}`, { cause: failure }));
     }
 
     if (failures.length > 0) {
