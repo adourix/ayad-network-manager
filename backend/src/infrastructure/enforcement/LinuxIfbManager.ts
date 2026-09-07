@@ -65,6 +65,7 @@ export class LinuxIfbManager implements IfbManager {
   async remove(interfaceName: string): Promise<void> {
     await this.removeAllUploadRedirects(interfaceName);
     await this.removeAllDownloadRedirects(interfaceName);
+    await this.removeIngressQdisc(interfaceName);
     try {
       await this.executor.execute("ip", ["link", "delete", IFB_NAME, "type", "ifb"]);
     } catch (error) {
@@ -108,6 +109,14 @@ export class LinuxIfbManager implements IfbManager {
     const result = await this.executor.execute("tc", ["qdisc", "show", "dev", interfaceName]);
     if (/\bqdisc\s+ingress\s+ffff:\s+dev\s+\S+/i.test(result.stdout)) return;
     await this.executor.execute("tc", ["qdisc", "add", "dev", interfaceName, "handle", "ffff:", "ingress"]);
+  }
+
+  private async removeIngressQdisc(interfaceName: string): Promise<void> {
+    try {
+      await this.executor.execute("tc", ["qdisc", "del", "dev", interfaceName, "ingress"]);
+    } catch (error) {
+      if (!this.isMissingIngressQdiscError(error)) throw error;
+    }
   }
 
   private async deleteRedirectFilter(interfaceName: string, priority: number): Promise<void> {
@@ -168,6 +177,14 @@ export class LinuxIfbManager implements IfbManager {
     const message = this.errorMessage(error).toLowerCase();
     return message.includes("cannot find device") || message.includes("cannot find dev") ||
       message.includes("no such device") || message.includes("device \"ifb0\" does not exist");
+  }
+
+  private isMissingIngressQdiscError(error: unknown): boolean {
+    const message = this.errorMessage(error).toLowerCase();
+    return message.includes("cannot find ingress") ||
+      message.includes("ingress qdisc") && message.includes("not found") ||
+      message.includes("no such file or directory") ||
+      message.includes("cannot delete qdisc") && message.includes("not found");
   }
 
   private isMissingFilterError(error: unknown): boolean {
