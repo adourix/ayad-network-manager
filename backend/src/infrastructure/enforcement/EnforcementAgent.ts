@@ -26,18 +26,15 @@ function valid(command: string, args: string[]): boolean {
 
 function isBackgroundRead(command: string, args: string[]): boolean {
   if (command === "nft") return false;
-
   if (command === "tc") {
     return (args[0] === "filter" && args[1] === "show") ||
       (args[0] === "class" && args[1] === "show") ||
       (args[0] === "qdisc" && args[1] === "show");
   }
-
   if (command === "ip") {
     return (args[0] === "neigh" && args[1] === "show") ||
       (args[0] === "-j" && args[1] === "neigh");
   }
-
   return false;
 }
 
@@ -117,20 +114,37 @@ async function writeSingBoxConfig(args: string[]): Promise<void> {
   }
 
   const { uid, gid } = await getSingBoxIds();
-  await fs.mkdir(dirname(target), { recursive: true, mode: 0o750 });
-  try {
-    await fs.copyFile(target, `${target}.bak`);
-  } catch {
-    // No previous config is normal on first setup.
-  }
+  const directory = dirname(target);
+  await fs.mkdir(directory, { recursive: true, mode: 0o750 });
 
+  // Do not create the temporary file with fs.writeFile() in the protected
+  // /etc tree. Open it explicitly, then apply ownership/permissions before
+  // atomically replacing the live configuration.
   const temporary = `${target}.tmp`;
-  await fs.writeFile(temporary, content, { encoding: "utf8", mode: 0o600 });
-  await fs.chmod(temporary, 0o600);
-  await fs.chown(temporary, uid, gid);
-  await fs.rename(temporary, target);
-  await fs.chmod(target, 0o600);
-  await fs.chown(target, uid, gid);
+  const backup = `${target}.bak`;
+
+  try {
+    await fs.rm(temporary, { force: true });
+    await fs.writeFile(temporary, content, { encoding: "utf8", mode: 0o600 });
+    await fs.chmod(temporary, 0o600);
+    await fs.chown(temporary, uid, gid);
+
+    try {
+      await fs.copyFile(target, backup);
+      await fs.chmod(backup, 0o600);
+      await fs.chown(backup, uid, gid);
+    } catch (error) {
+      const code = error as NodeJS.ErrnoException;
+      if (code.code !== "ENOENT") throw error;
+    }
+
+    await fs.rename(temporary, target);
+    await fs.chmod(target, 0o600);
+    await fs.chown(target, uid, gid);
+  } catch (error) {
+    try { await fs.rm(temporary, { force: true }); } catch {}
+    throw error;
+  }
 }
 
 try { unlinkSync(socketPath); } catch {}
