@@ -13,5 +13,12 @@ export interface IfbManager {
 
   reconcileUploadRedirects(interfaceName: string, expectedIps: Set<string>): Promise<void>;
 
+  // Legacy download-redirect operations are retained for migration/tests.
+  ensureDownloadRedirect(interfaceName: string, downloadIp: string): Promise<void>;
+
+  removeDownloadIp(interfaceName: string, downloadIp: string): Promise<void>;
+
+  removeAllDownloadRedirects(interfaceName: string): Promise<void>;
+
   remove(interfaceName: string): Promise<void>;
 }
