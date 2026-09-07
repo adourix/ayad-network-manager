@@ -1,0 +1,12 @@
+[Unit]
+Description=Network Control System sing-box config installer
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=@SYSTEMD_HELPER_DIR@/install-sing-box-config.sh
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
