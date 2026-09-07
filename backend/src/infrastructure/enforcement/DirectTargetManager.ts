@@ -24,5 +24,12 @@ export class DirectTargetManager implements IfbManager {
 
   async reconcileUploadRedirects(_interfaceName: string, _expectedIps: Set<string>): Promise<void> {}
 
+  // Legacy download-redirect operations are retained for migration/tests.
+  async ensureDownloadRedirect(_interfaceName: string, _downloadIp: string): Promise<void> {}
+
+  async removeDownloadIp(_interfaceName: string, _downloadIp: string): Promise<void> {}
+
+  async removeAllDownloadRedirects(_interfaceName: string): Promise<void> {}
+
   async remove(_interfaceName: string): Promise<void> {}
 }
