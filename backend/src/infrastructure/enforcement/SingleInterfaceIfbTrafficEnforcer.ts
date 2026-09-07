@@ -35,11 +35,10 @@ export class SingleInterfaceIfbTrafficEnforcer implements TrafficEnforcer {
     for (const interfaceName of [this.lanInterface, this.ifbManager.getName()]) {
       const rootState = await this.tcStateReader.getRootQdiscState(interfaceName);
       if (!rootState.exists || rootState.kind !== "htb") continue;
-
       try {
         await this.executor.execute("tc", TcBuilder.deleteRootQdisc(interfaceName).args);
-      } catch {
-        // Idempotent cleanup.
+      } catch (error) {
+        if (!this.isMissingTcObjectError(error)) throw error;
       }
     }
 
@@ -74,18 +73,12 @@ export class SingleInterfaceIfbTrafficEnforcer implements TrafficEnforcer {
       await this.executor.execute("tc", TcBuilder.addClass(interfaceName, classId, rate).args);
       return;
     }
-
     if (classState.rate !== rate || classState.ceil !== rate) {
       await this.executor.execute("tc", TcBuilder.changeClassRate(interfaceName, classId, rate).args);
     }
   }
 
-  private async ensureFilter(
-    interfaceName: string,
-    ip: string,
-    classId: string,
-    direction: "download" | "upload",
-  ): Promise<void> {
+  private async ensureFilter(interfaceName: string, ip: string, classId: string, direction: "download" | "upload"): Promise<void> {
     const priority = this.getFilterPriority(classId);
     const filterState = await this.tcStateReader.getFilterState(interfaceName, classId);
 
@@ -162,8 +155,8 @@ export class SingleInterfaceIfbTrafficEnforcer implements TrafficEnforcer {
     if (filterState.exists && filterState.priority !== null) {
       try {
         await this.executor.execute("tc", TcBuilder.deleteFilter(interfaceName, filterState.priority).args);
-      } catch {
-        // Already gone.
+      } catch (error) {
+        if (!this.isMissingTcObjectError(error)) throw error;
       }
     }
 
@@ -171,8 +164,8 @@ export class SingleInterfaceIfbTrafficEnforcer implements TrafficEnforcer {
     if (classState.exists) {
       try {
         await this.executor.execute("tc", TcBuilder.deleteClass(interfaceName, classId).args);
-      } catch {
-        // Already gone.
+      } catch (error) {
+        if (!this.isMissingTcObjectError(error)) throw error;
       }
     }
   }
@@ -193,23 +186,29 @@ export class SingleInterfaceIfbTrafficEnforcer implements TrafficEnforcer {
     for (const filter of actualFilters) {
       const classId = filter.classId.trim().toLowerCase();
       if (expectedClassIds.has(classId)) continue;
-
       try {
         await this.executor.execute("tc", TcBuilder.deleteFilter(interfaceName, filter.priority).args);
-      } catch {
-        // Already gone.
+      } catch (error) {
+        if (!this.isMissingTcObjectError(error)) throw error;
       }
     }
 
     for (const actual of actualClasses) {
       const classId = actual.classId.trim().toLowerCase();
       if (expectedClassIds.has(classId)) continue;
-
       try {
         await this.executor.execute("tc", TcBuilder.deleteClass(interfaceName, classId).args);
-      } catch {
-        // Already gone.
+      } catch (error) {
+        if (!this.isMissingTcObjectError(error)) throw error;
       }
     }
+  }
+
+  private isMissingTcObjectError(error: unknown): boolean {
+    const message = error instanceof Error ? error.message : String(error);
+    const normalized = message.toLowerCase();
+    return normalized.includes("cannot find") ||
+      normalized.includes("no such file or directory") ||
+      normalized.includes("not found");
   }
 }
