@@ -52,6 +52,8 @@ import { setupRoutes } from "./interfaces/http/routes/setup.js";
 import { DhcpReservationService } from "./application/setup/DhcpReservationService.js";
 import { AuditedSystemCommandExecutor } from "./infrastructure/enforcement/AuditedSystemCommandExecutor.js";
 import { NotificationDeliveryWorker } from "./infrastructure/notifications/NotificationDeliveryWorker.js";
+import { PrismaBlockedDeviceRepository } from "./infrastructure/database/PrismaBlockedDeviceRepository.js";
+import { PrismaNeighborObservationRepository } from "./infrastructure/database/PrismaNeighborObservationRepository.js";
 
 if (config.network.networkMode !== "single-interface-ifb") {
   throw new Error("Dual-interface mode is reserved for the next implementation phase; use NETWORK_MODE=single-interface-ifb");
