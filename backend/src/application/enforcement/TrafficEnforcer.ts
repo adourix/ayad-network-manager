@@ -39,6 +39,10 @@ export interface TrafficEnforcer {
     device: Device,
   ): Promise<void>;
 
+  reconcileTrafficState(
+    expectedClassIds: Set<string>,
+  ): Promise<void>;
+
   reconcileDownloadState(
     expectedClassIds: Set<string>,
   ): Promise<void>;
