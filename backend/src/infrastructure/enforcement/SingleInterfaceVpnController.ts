@@ -2,11 +2,16 @@ import type { SystemCommandExecutor } from "./SystemCommandExecutor.js";
 import type { VpnEnforcement } from "../../application/vpn/VpnService.js";
 import { config } from "../../config.js";
 
+type VpnLink = {
+  protocol: "vmess" | "vless";
+  parsed: Record<string, unknown>;
+};
+
 export class SingleInterfaceVpnController implements VpnEnforcement {
   constructor(private readonly executor: SystemCommandExecutor, private readonly tunnelInterface: string) {}
 
   async configure(link: string): Promise<void> {
-    const parsed = this.parseVmessLink(link);
+    const parsed = this.parseLink(link);
     const content = JSON.stringify(this.buildConfig(parsed), null, 2);
     const chunks = content.match(/.{1,480}/gs) ?? [];
     if (chunks.length === 0 || chunks.length > 63) throw new Error("generated sing-box config is too large");
@@ -33,10 +38,15 @@ export class SingleInterfaceVpnController implements VpnEnforcement {
     await this.setNat(connected, enabled);
   }
 
-  private parseVmessLink(link: string): Record<string, unknown> {
+  private parseLink(link: string): VpnLink {
     const value = link.trim();
-    if (!/^vmess:\/\//i.test(value)) throw new Error("Only vmess links are supported");
-    const encoded = value.slice("vmess://".length).trim();
+    if (/^vmess:\/\//i.test(value)) return { protocol: "vmess", parsed: this.parseVmessLink(value) };
+    if (/^vless:\/\//i.test(value)) return { protocol: "vless", parsed: this.parseVlessLink(value) };
+    throw new Error("Only vmess and vless links are supported");
+  }
+
+  private parseVmessLink(link: string): Record<string, unknown> {
+    const encoded = link.slice("vmess://".length).trim();
     if (!encoded) throw new Error("vmess link is empty");
     const normalized = encoded.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(encoded.length / 4) * 4, "=");
     let parsed: Record<string, unknown>;
@@ -53,33 +63,42 @@ export class SingleInterfaceVpnController implements VpnEnforcement {
     return parsed;
   }
 
-  private buildConfig(parsed: Record<string, unknown>) {
-    const network = String(parsed.net ?? "tcp").toLowerCase();
-    const tlsEnabled = String(parsed.tls ?? "").toLowerCase() === "tls";
-    const server = String(parsed.add);
-    const port = Number(parsed.port);
-    const uuid = String(parsed.id);
-    const alterId = Number(parsed.aid ?? 0);
-    const security = String(parsed.scy ?? "auto");
-    const host = typeof parsed.host === "string" ? parsed.host : "";
-    const path = typeof parsed.path === "string" ? parsed.path : "";
-    const sni = typeof parsed.sni === "string" && parsed.sni ? parsed.sni : host || undefined;
-    if (!Number.isSafeInteger(alterId) || alterId < 0) throw new Error("invalid VMess alterId");
+  private parseVlessLink(link: string): Record<string, unknown> {
+    let url: URL;
+    try { url = new URL(link); } catch { throw new Error("vless link is not a valid URL"); }
+    if (url.protocol.toLowerCase() !== "vless:") throw new Error("invalid vless scheme");
+    const uuid = decodeURIComponent(url.username);
+    const server = url.hostname;
+    const port = Number(url.port);
+    if (!uuid || !server || !Number.isInteger(port) || port < 1 || port > 65535) throw new Error("vless link is missing server, port, or id");
 
-    // `net` describes the VMess transport (TCP/WS/HTTP/gRPC/QUIC). It must not
-    // be copied into VMess `network`: that field controls whether the VMess
-    // protocol accepts proxied TCP and/or UDP. Leaving it unset enables both,
-    // which is required for a TUN gateway and avoids the previous UDP failure.
-    const outbound: Record<string, unknown> = {
-      type: "vmess", tag: "vmess-out", server, server_port: port, uuid, security,
-      alter_id: alterId,
-      tls: tlsEnabled ? { enabled: true, ...(sni ? { server_name: sni } : {}) } : { enabled: false },
+    const query: Record<string, string> = {};
+    for (const [key, value] of url.searchParams.entries()) query[key.toLowerCase()] = value;
+
+    const network = (query.type || "tcp").toLowerCase();
+    if (!["tcp", "ws", "grpc", "httpupgrade", "http"].includes(network)) throw new Error(`Unsupported VLESS transport: ${network}`);
+
+    return {
+      add: server,
+      port,
+      id: uuid,
+      net: network,
+      tls: query.security === "tls" ? "tls" : "",
+      sni: query.sni || "",
+      alpn: query.alpn || "",
+      fp: query.fp || "",
+      allowInsecure: query.allowinsecure === "1" || query.allowinsecure === "true",
+      path: query.path || "",
+      host: query.host || "",
+      serviceName: query.servicename || query.serviceName || "",
+      flow: query.flow || "",
     };
-    if (network === "ws") outbound.transport = { type: "ws", ...(path ? { path } : {}), ...(host ? { headers: { Host: host } } : {}) };
-    else if (network === "http") outbound.transport = { type: "http", ...(host ? { host: [host] } : {}), ...(path ? { path } : {}) };
-    else if (network === "grpc") outbound.transport = { type: "grpc", ...(path ? { service_name: path } : {}) };
-    else if (network === "httpupgrade") outbound.transport = { type: "httpupgrade", ...(host ? { host } : {}), ...(path ? { path } : {}) };
-    else if (network === "quic") outbound.transport = { type: "quic" };
+  }
+
+  private buildConfig(link: VpnLink) {
+    const outbound = link.protocol === "vmess"
+      ? this.buildVmessOutbound(link.parsed)
+      : this.buildVlessOutbound(link.parsed);
 
     return {
       log: { level: "info" },
@@ -93,10 +112,6 @@ export class SingleInterfaceVpnController implements VpnEnforcement {
         strict_route: true,
       }],
       dns: {
-        // Never inherit the host resolver. On this gateway the host resolver
-        // may be managed by Tailscale and can expose an unreachable IPv6 DNS
-        // address inside the TUN routing domain. Use DoH over the VMess TCP
-        // connection instead, with an IP endpoint so bootstrap needs no DNS.
         servers: [{
           type: "https",
           tag: "vpn-doh",
@@ -105,14 +120,79 @@ export class SingleInterfaceVpnController implements VpnEnforcement {
           path: "/dns-query",
           headers: { Host: "cloudflare-dns.com" },
           tls: { enabled: true, server_name: "cloudflare-dns.com" },
-          detour: "vmess-out",
+          detour: "proxy-out",
         }],
         final: "vpn-doh",
         strategy: "ipv4_only",
       },
       outbounds: [outbound],
-      route: { auto_detect_interface: true, final: "vmess-out" },
+      route: { auto_detect_interface: true, final: "proxy-out" },
     };
+  }
+
+  private buildVmessOutbound(parsed: Record<string, unknown>): Record<string, unknown> {
+    const network = String(parsed.net ?? "tcp").toLowerCase();
+    const tlsEnabled = String(parsed.tls ?? "").toLowerCase() === "tls";
+    const server = String(parsed.add);
+    const port = Number(parsed.port);
+    const uuid = String(parsed.id);
+    const alterId = Number(parsed.aid ?? 0);
+    const security = String(parsed.scy ?? "auto");
+    const host = typeof parsed.host === "string" ? parsed.host : "";
+    const path = typeof parsed.path === "string" ? parsed.path : "";
+    const sni = typeof parsed.sni === "string" && parsed.sni ? parsed.sni : host || undefined;
+    if (!Number.isSafeInteger(alterId) || alterId < 0) throw new Error("invalid VMess alterId");
+
+    const outbound: Record<string, unknown> = {
+      type: "vmess", tag: "proxy-out", server, server_port: port, uuid, security,
+      alter_id: alterId,
+      tls: tlsEnabled ? { enabled: true, ...(sni ? { server_name: sni } : {}) } : { enabled: false },
+    };
+    this.addTransport(outbound, network, host, path, parsed);
+    return outbound;
+  }
+
+  private buildVlessOutbound(parsed: Record<string, unknown>): Record<string, unknown> {
+    const network = String(parsed.net ?? "tcp").toLowerCase();
+    const server = String(parsed.add);
+    const port = Number(parsed.port);
+    const uuid = String(parsed.id);
+    const sni = typeof parsed.sni === "string" && parsed.sni ? parsed.sni : undefined;
+    const alpn = typeof parsed.alpn === "string" && parsed.alpn ? parsed.alpn.split(",").map((value) => value.trim()).filter(Boolean) : [];
+    const fingerprint = typeof parsed.fp === "string" && parsed.fp ? parsed.fp : undefined;
+    const tlsEnabled = String(parsed.tls ?? "").toLowerCase() === "tls";
+
+    const outbound: Record<string, unknown> = {
+      type: "vless",
+      tag: "proxy-out",
+      server,
+      server_port: port,
+      uuid,
+      ...(typeof parsed.flow === "string" && parsed.flow ? { flow: parsed.flow } : {}),
+    };
+
+    if (tlsEnabled) {
+      outbound.tls = {
+        enabled: true,
+        ...(sni ? { server_name: sni } : {}),
+        ...(alpn.length ? { alpn } : {}),
+        ...(parsed.allowInsecure === true ? { insecure: true } : {}),
+        ...(fingerprint ? { utls: { enabled: true, fingerprint } } : {}),
+      };
+    }
+
+    const host = typeof parsed.host === "string" ? parsed.host : "";
+    const path = typeof parsed.path === "string" ? parsed.path : "";
+    this.addTransport(outbound, network, host, path, parsed);
+    return outbound;
+  }
+
+  private addTransport(outbound: Record<string, unknown>, network: string, host: string, path: string, parsed: Record<string, unknown>): void {
+    if (network === "ws") outbound.transport = { type: "ws", ...(path ? { path } : {}), ...(host ? { headers: { Host: host } } : {}) };
+    else if (network === "http") outbound.transport = { type: "http", ...(host ? { host: [host] } : {}), ...(path ? { path } : {}) };
+    else if (network === "grpc") outbound.transport = { type: "grpc", ...(typeof parsed.serviceName === "string" && parsed.serviceName ? { service_name: parsed.serviceName } : path ? { service_name: path } : {}) };
+    else if (network === "httpupgrade") outbound.transport = { type: "httpupgrade", ...(host ? { host } : {}), ...(path ? { path } : {}) };
+    else if (network === "quic") outbound.transport = { type: "quic" };
   }
 
   private async safe(command: string, args: string[]): Promise<boolean> {
