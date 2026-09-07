@@ -22,7 +22,7 @@ export class VpnService {
 
   async configure(link: string): Promise<VpnState> {
     const normalized = link.trim();
-    if (!/^vmess:\/\//i.test(normalized)) throw new Error("Only vmess links are supported");
+    if (!/^(vmess|vless):\/\//i.test(normalized)) throw new Error("Only vmess and vless links are supported");
     try {
       await this.enforcement.configure?.(normalized);
       const result = await this.repository.saveLink(normalized);
@@ -36,7 +36,7 @@ export class VpnService {
 
   async setEnabled(enabled: boolean): Promise<VpnState> {
     const state = await this.repository.get();
-    if (enabled && !state.vmessLink) throw new Error("Configure a vmess link first");
+    if (enabled && !state.vmessLink) throw new Error("Configure a vmess or vless link first");
     try {
       const connected = await this.enforcement.apply(enabled);
       await this.repository.setEnabled(enabled);
