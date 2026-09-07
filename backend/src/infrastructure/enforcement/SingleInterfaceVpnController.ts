@@ -121,7 +121,6 @@ export class SingleInterfaceVpnController implements VpnEnforcement {
             path: "/dns-query",
             headers: { Host: "cloudflare-dns.com" },
             tls: { enabled: true, server_name: "cloudflare-dns.com" },
-            detour: "direct",
           },
           {
             type: "https",
@@ -143,6 +142,9 @@ export class SingleInterfaceVpnController implements VpnEnforcement {
       ],
       route: {
         auto_detect_interface: true,
+        rules: [
+          { ip_cidr: ["1.1.1.1/32"], outbound: "direct" },
+        ],
         default_domain_resolver: { server: "bootstrap-dns", strategy: "ipv4_only" },
         final: "proxy-out",
       },
