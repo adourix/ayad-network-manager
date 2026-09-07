@@ -60,7 +60,7 @@ export class SingleInterfaceIfbTrafficEnforcer implements TrafficEnforcer {
     if (!rootState.exists) {
       await this.executor.execute("tc", TcBuilder.addHtbRootQdisc(interfaceName).args);
     } else if (rootState.kind !== "htb") {
-      throw new Error(`Interface ${interfaceName} already has root qdisc ${rootState.kind}`);
+      await this.executor.execute("tc", TcBuilder.replaceHtbRootQdisc(interfaceName).args);
     }
 
     const rate = TrafficRate.fromWholeMbps(this.uplinkBandwidthMbps).toTcRate();
