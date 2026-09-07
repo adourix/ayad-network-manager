@@ -39,8 +39,6 @@ import { PrismaOperationsRepository } from "./infrastructure/database/PrismaOper
 import { OperationsService } from "./application/operations/OperationsService.js";
 import { operationsRoutes } from "./interfaces/http/routes/operations.js";
 import { PrismaVpnRepository } from "./infrastructure/database/PrismaVpnRepository.js";
-import { PrismaBlockedDeviceRepository } from "./infrastructure/database/PrismaBlockedDeviceRepository.js";
-import { PrismaNeighborObservationRepository } from "./infrastructure/database/PrismaNeighborObservationRepository.js";
 import { VpnService } from "./application/vpn/VpnService.js";
 import { SingleInterfaceVpnController } from "./infrastructure/enforcement/SingleInterfaceVpnController.js";
 import { vpnRoutes } from "./interfaces/http/routes/vpn.js";
@@ -72,29 +70,11 @@ const app = Fastify({
 });
 
 app.setErrorHandler((error, _request, reply) => {
-  const failure = error as {
-    validation?: unknown;
-    statusCode?: number;
-    message?: string;
-    response?: string;
-    deviceId?: number;
-    desiredBlocked?: boolean;
-  };
-  const message = failure.message ?? "Request failed";
-
-  if (failure.response === "pending_enforcement" && failure.statusCode === 202) {
-    return reply.code(202).send({
-      status: "pending_enforcement",
-      deviceId: failure.deviceId,
-      desiredState: { blocked: failure.desiredBlocked },
-      actualState: null,
-      enforcement: { status: "pending", retry: "reconciliation", reason: message },
-    });
-  }
-
+  const failure = error as { validation?: unknown; statusCode?: number; message?: string; response?: string; deviceId?: number };
+  const message = failure.message ?? "Internal server error";
   const status = failure.validation
     ? 400
-    : failure.statusCode && failure.statusCode < 500
+    : failure.statusCode && failure.statusCode >= 400 && failure.statusCode < 500
       ? failure.statusCode
       : /not found/i.test(message)
         ? 404
@@ -145,7 +125,7 @@ const tcStateReader = new LinuxTcStateReader(systemCommandExecutor);
 const trafficPolicyValidator = new DefaultTrafficPolicyValidator(config.network.uplinkBandwidthMbps);
 const trafficEnforcer = new SingleInterfaceIfbTrafficEnforcer(config.network.uplinkBandwidthMbps, config.network.lanInterface, systemCommandExecutor, ifbManager, tcStateReader);
 const trafficEnforcementService = new TrafficEnforcementService(trafficEnforcer, trafficPolicyValidator, deviceRepository, policyRepository, config.network.quotaThrottleMbps, operationsRepository);
-const devicePolicyService = new DevicePolicyService(deviceRepository, policyRepository, policyCatalogRepository, trafficEnforcementService);
+const devicePolicyService = new DevicePolicyService(deviceRepository, policyRepository, policyCatalogRepository);
 const notificationRepository = new PrismaNotificationRepository();
 const quotaService = new QuotaService(deviceRepository, policyRepository, trafficEnforcementService, firewallService, notificationRepository);
 const trafficUsageReader = new NftTrafficUsageReader({ mode: config.network.networkMode, clientInterface: config.network.clientInterface, uplinkInterface: null, clientSubnet: config.network.clientSubnet }, systemCommandExecutor);
@@ -178,15 +158,27 @@ for (const device of await deviceRepository.findAll()) {
 }
 
 await trafficReconciliationService.reconcile();
-
+await blockedIpReconciliationService.reconcile();
+await profileEnforcementService.reconcile();
+await scheduleEnforcementService.start();
+await trafficAccountingService.start();
+await trafficRetentionService.start();
 await deviceDiscoverySyncService.start();
 await liveMonitoringService.start();
 await blockedIpReconciliationService.start();
-await trafficAccountingService.start();
-await scheduleEnforcementService.start();
-await trafficRetentionService.start();
-await profileEnforcementService.start();
-const notificationDeliveryWorker = new NotificationDeliveryWorker(config.setup.notificationWebhookUrl);
-notificationDeliveryWorker.start();
 
-await app.listen({ host: config.server.host, port: config.server.port });
+const host = config.server.host;
+const port = config.server.port;
+await app.listen({ host, port });
+app.log.info(`Server listening at ${config.server.tlsCertPath ? "https" : "http"}://${host}:${port}`);
+
+process.on("SIGTERM", async () => {
+  trafficAccountingService.stop();
+  trafficRetentionService.stop();
+  deviceDiscoverySyncService.stop();
+  liveMonitoringService.stop();
+  blockedIpReconciliationService.stop();
+  scheduleEnforcementService.stop();
+  broadcastCaptureReader.stop();
+  await app.close();
+});
