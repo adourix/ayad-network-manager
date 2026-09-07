@@ -35,6 +35,7 @@ export class NftTrafficUsageReader implements TrafficUsageReader {
     return this.executor.execute("nft", args);
   }
 
+  /** Validate an nft mutation before applying it, as required by the spec. */
   private async execNftMutation(args: string[]): Promise<void> {
     await this.execNft(["-c", ...args]);
     await this.execNft(args);
@@ -136,7 +137,7 @@ export class NftTrafficUsageReader implements TrafficUsageReader {
 
     if (existingRule && this.ruleMatches(existingRule.raw, direction, ip)) return;
 
-    const expressions = this.buildRuleExpressions(direction, ip);
+    const expressions = this.buildRuleExpressions(direction, mac, ip);
     if (!existingRule) {
       await this.addRule(expressions, counterName, comment);
     } else {
@@ -174,8 +175,8 @@ export class NftTrafficUsageReader implements TrafficUsageReader {
     await this.execNftMutation(["delete", "rule", TABLE_FAMILY, TABLE_NAME, CHAIN_NAME, "handle", String(handle)]);
   }
 
-  private buildRuleExpressions(direction: "download" | "upload", ip: string): string[] {
-    const { mode, clientInterface, uplinkInterface } = this.topology;
+  private buildRuleExpressions(direction: "download" | "upload", mac: string, ip: string): string[] {
+    const { mode, clientInterface, uplinkInterface, clientSubnet } = this.topology;
 
     if (mode === "single-interface-ifb") {
       if (direction === "download") {
@@ -192,7 +193,7 @@ export class NftTrafficUsageReader implements TrafficUsageReader {
       return ["iifname", uplinkInterface, "oifname", clientInterface, "ip", "daddr", ip];
     }
 
-    return ["iifname", clientInterface, "oifname", uplinkInterface, "ip", "saddr", this.topology.clientSubnet, "ether", "saddr", ip];
+    return ["iifname", clientInterface, "oifname", uplinkInterface, "ip", "saddr", clientSubnet, "ether", "saddr", mac];
   }
 
   private async readRules(): Promise<NftRule[]> {
