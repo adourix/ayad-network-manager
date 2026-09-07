@@ -1,11 +1,12 @@
 import { createServer } from "node:net";
 import { promises as fs } from "node:fs";
-import { dirname } from "node:path";
 import { unlinkSync } from "node:fs";
 import { LinuxSystemCommandExecutor } from "./LinuxSystemCommandExecutor.js";
 
 const socketPath = process.env.ENFORCEMENT_SOCKET_PATH ?? "/run/network-control/enforcement.sock";
 const vpnConfigPath = process.env.SING_BOX_CONFIG_PATH ?? "/etc/sing-box/config.json";
+const vpnConfigStagePath = "/run/network-control/sing-box-config.json";
+const vpnConfigInstallUnit = "network-control-sing-box-config.service";
 const allowed = new Set(["nft", "tc", "ip", "systemctl", "sing-box", "write-sing-box-config"]);
 const local = new LinuxSystemCommandExecutor(true);
 const backgroundRead = new LinuxSystemCommandExecutor(true, 1_000);
@@ -19,7 +20,7 @@ function valid(command: string, args: string[]): boolean {
   if (command === "systemctl" && !args.every((arg) => /^[a-zA-Z0-9_.@:/-]+$/.test(arg))) return false;
   if (command === "sing-box") {
     if (args.length !== 3 || args[0] !== "check" || args[1] !== "-c") return false;
-    if (args[2] !== `${vpnConfigPath}.tmp`) return false;
+    if (args[2] !== vpnConfigStagePath) return false;
   }
   if (command === "write-sing-box-config") {
     if (args.length < 2 || args[0] !== vpnConfigPath || args.length > 64) return false;
@@ -64,16 +65,6 @@ class EnforcementScheduler {
 
 const scheduler = new EnforcementScheduler();
 
-async function getSingBoxIds(): Promise<{ uid: number; gid: number }> {
-  const passwd = await fs.readFile("/etc/passwd", "utf8");
-  const entry = passwd.split("\n").find((line) => line.startsWith("sing-box:"));
-  if (!entry) throw new Error("sing-box user not found");
-  const fields = entry.split(":");
-  const uid = Number(fields[2]); const gid = Number(fields[3]);
-  if (!Number.isSafeInteger(uid) || !Number.isSafeInteger(gid) || uid < 0 || gid < 0) throw new Error("invalid sing-box user/group ids");
-  return { uid, gid };
-}
-
 async function writeSingBoxConfig(args: string[]): Promise<void> {
   const target = args[0];
   if (target !== vpnConfigPath) throw new Error("sing-box config path rejected");
@@ -81,30 +72,17 @@ async function writeSingBoxConfig(args: string[]): Promise<void> {
   if (!content || content.length > 32 * 1024) throw new Error("sing-box config payload rejected");
   try { JSON.parse(content); } catch { throw new Error("sing-box config must be valid JSON"); }
 
-  const { uid, gid } = await getSingBoxIds();
-  const directory = dirname(target);
-  await fs.mkdir(directory, { recursive: true, mode: 0o750 });
-  const temporary = `${target}.tmp`;
-  const backup = `${target}.bak`;
-
   try {
-    await fs.rm(temporary, { force: true });
-    await fs.writeFile(temporary, content, { encoding: "utf8", mode: 0o600 });
-    await fs.chmod(temporary, 0o600); await fs.chown(temporary, uid, gid);
-    await local.execute("sing-box", ["check", "-c", temporary]);
-
-    try {
-      await fs.copyFile(target, backup); await fs.chmod(backup, 0o600); await fs.chown(backup, uid, gid);
-    } catch (error) {
-      const code = error as NodeJS.ErrnoException;
-      if (code.code !== "ENOENT") throw error;
-    }
-    await fs.rename(temporary, target);
-    await fs.chmod(target, 0o600); await fs.chown(target, uid, gid);
+    await fs.writeFile(vpnConfigStagePath, content, { encoding: "utf8", mode: 0o600 });
+    await fs.chmod(vpnConfigStagePath, 0o600);
+    await local.execute("sing-box", ["check", "-c", vpnConfigStagePath]);
+    await local.execute("systemctl", ["start", vpnConfigInstallUnit]);
   } catch (error) {
-    try { await fs.rm(temporary, { force: true }); } catch {}
+    try { await fs.rm(vpnConfigStagePath, { force: true }); } catch {}
     throw error;
   }
+
+  await fs.rm(vpnConfigStagePath, { force: true });
 }
 
 try { unlinkSync(socketPath); } catch {}
