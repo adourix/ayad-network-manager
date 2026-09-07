@@ -26,6 +26,16 @@ if [[ ! -f "${CONFIG_FILE}" ]]; then
   exit 1
 fi
 
+if [[ ! -f "${APP_ROOT}/package.json" ]]; then
+  echo "backend package.json not found: ${APP_ROOT}/package.json" >&2
+  exit 1
+fi
+
+# systemd executes the compiled backend/enforcement agent from dist/. Always
+# rebuild before installing units so a git pull cannot leave dist/ stale.
+cd "${APP_ROOT}"
+npm run build
+
 render_and_install \
   "network-control-enforcement.service.template" \
   "network-control-enforcement.service"
@@ -34,7 +44,14 @@ render_and_install \
   "network-control-backend.service.template" \
   "network-control-backend.service"
 
+if grep -qE '@APP_ROOT@|@CONFIG_FILE@' \
+  "${SYSTEMD_DIR}/network-control-enforcement.service" \
+  "${SYSTEMD_DIR}/network-control-backend.service"; then
+  echo "rendered systemd unit still contains template placeholders" >&2
+  exit 1
+fi
+
 systemctl daemon-reload
 systemctl enable network-control-enforcement.service network-control-backend.service
 
-echo "Installed network-control-enforcement.service and network-control-backend.service"
+echo "Built backend and installed network-control-enforcement.service and network-control-backend.service"
