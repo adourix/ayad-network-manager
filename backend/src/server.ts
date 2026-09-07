@@ -139,7 +139,8 @@ await deviceRoutes(app, deviceService, devicePolicyService, firewallService, liv
 const portRuleEnforcer = new NftPortRuleEnforcer(systemCommandExecutor, operationsRepository);
 await policyCatalogRoutes(app, new PolicyCatalogService(policyCatalogRepository, deviceRepository, portRuleEnforcer));
 await operationsRoutes(app, new OperationsService(operationsRepository));
-await vpnRoutes(app, new VpnService(new PrismaVpnRepository(), new SingleInterfaceVpnController(systemCommandExecutor, config.network.vpnTunnelInterface), operationsRepository));
+const vpnService = new VpnService(new PrismaVpnRepository(), new SingleInterfaceVpnController(systemCommandExecutor, config.network.vpnTunnelInterface), operationsRepository);
+await vpnRoutes(app, vpnService);
 await setupRoutes(app, new SetupService(new LinuxSetupProbe()));
 const scheduleEnforcementService = new ScheduleEnforcementService(deviceRepository, policyRepository, policyCatalogRepository, trafficEnforcementService, firewallService);
 const trafficRetentionService = new TrafficRetentionService();
@@ -162,6 +163,7 @@ for (const device of await deviceRepository.findAll()) {
 await trafficReconciliationService.reconcile();
 await blockedIpReconciliationService.reconcile();
 await profileEnforcementService.reconcile();
+await vpnService.reconcile();
 await scheduleEnforcementService.start();
 await trafficAccountingService.start();
 await trafficRetentionService.start();
