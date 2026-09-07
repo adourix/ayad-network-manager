@@ -42,9 +42,10 @@ export class LinuxIfbManager implements IfbManager {
 
   async reconcileUploadRedirects(interfaceName: string, expectedIps: Set<string>): Promise<void> {
     const result = await this.executor.execute("tc", ["filter", "show", "dev", interfaceName, "ingress"]);
-    const stalePriorities = this.parseRedirectFilters(result.stdout)
-      .filter((filter) => filter.device === IFB_NAME && filter.direction === "src")
-      .filter((filter) => filter.ip === null || !expectedIps.has(filter.ip))
+    const filters = this.parseRedirectFilters(result.stdout);
+    const stalePriorities = filters
+      .filter((filter) => filter.device === IFB_NAME)
+      .filter((filter) => filter.direction !== "src" || filter.ip === null || !expectedIps.has(filter.ip))
       .map((filter) => filter.priority);
     for (const priority of stalePriorities) await this.deleteRedirectFilter(interfaceName, priority);
   }
@@ -77,10 +78,23 @@ export class LinuxIfbManager implements IfbManager {
     await this.ensure(interfaceName);
     const result = await this.executor.execute("tc", ["filter", "show", "dev", interfaceName, "ingress"]);
     const filters = this.parseRedirectFilters(result.stdout);
-    const existing = filters.find((filter) => filter.ip === ip && filter.direction === direction);
-    if (existing?.device === IFB_NAME) return;
+    const matching = filters.filter((filter) => filter.ip === ip && filter.direction === direction);
 
-    const priority = this.findAvailablePriority(this.priorityForIp(ip), new Set(filters.map((filter) => filter.priority)));
+    const existing = matching.find((filter) => filter.device === IFB_NAME);
+    if (existing) {
+      // Remove duplicate filters for the same target/direction while keeping one valid IFB redirect.
+      for (const duplicate of matching) {
+        if (duplicate.priority !== existing.priority) await this.deleteRedirectFilter(interfaceName, duplicate.priority);
+      }
+      return;
+    }
+
+    // A matching filter with a different target is stale/conflicting. Remove it
+    // before installing the desired IFB redirect instead of creating duplicates.
+    for (const conflict of matching) await this.deleteRedirectFilter(interfaceName, conflict.priority);
+
+    const remainingFilters = filters.filter((filter) => !matching.some((match) => match.priority === filter.priority));
+    const priority = this.findAvailablePriority(this.priorityForIp(ip), new Set(remainingFilters.map((filter) => filter.priority)));
     await this.ensureIngressQdisc(interfaceName);
     await this.executor.execute("tc", [
       "filter", "add", "dev", interfaceName, "parent", "ffff:", "pref", priority.toString(),
@@ -182,9 +196,9 @@ export class LinuxIfbManager implements IfbManager {
   private isMissingIngressQdiscError(error: unknown): boolean {
     const message = this.errorMessage(error).toLowerCase();
     return message.includes("cannot find ingress") ||
-      message.includes("ingress qdisc") && message.includes("not found") ||
+      (message.includes("ingress qdisc") && message.includes("not found")) ||
       message.includes("no such file or directory") ||
-      message.includes("cannot delete qdisc") && message.includes("not found");
+      (message.includes("cannot delete qdisc") && message.includes("not found"));
   }
 
   private isMissingFilterError(error: unknown): boolean {
