@@ -141,7 +141,11 @@ export class SingleInterfaceVpnController implements VpnEnforcement {
         { type: "direct", tag: "direct" },
         outbound,
       ],
-      route: { auto_detect_interface: true, final: "proxy-out" },
+      route: {
+        auto_detect_interface: true,
+        default_domain_resolver: { server: "bootstrap-dns", strategy: "ipv4_only" },
+        final: "proxy-out",
+      },
     };
   }
 
