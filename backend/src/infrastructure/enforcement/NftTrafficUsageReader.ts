@@ -35,7 +35,6 @@ export class NftTrafficUsageReader implements TrafficUsageReader {
     return this.executor.execute("nft", args);
   }
 
-  /** Validate an nft mutation before applying it, as required by the spec. */
   private async execNftMutation(args: string[]): Promise<void> {
     await this.execNft(["-c", ...args]);
     await this.execNft(args);
@@ -150,10 +149,10 @@ export class NftTrafficUsageReader implements TrafficUsageReader {
     if (!serialized.includes(ip)) return false;
 
     if (direction === "download") {
-      return serialized.includes("daddr") && !serialized.includes("saddr");
+      return serialized.includes("daddr") && serialized.includes("oifname");
     }
 
-    return serialized.includes("saddr");
+    return serialized.includes("saddr") && serialized.includes("iifname");
   }
 
   private async addRule(expressions: string[], counterName: string, comment: string): Promise<void> {
@@ -180,10 +179,12 @@ export class NftTrafficUsageReader implements TrafficUsageReader {
 
     if (mode === "single-interface-ifb") {
       if (direction === "download") {
-        return ["iifname", clientInterface, "ip", "daddr", ip];
+        // In the single-interface topology, download reaches the client on
+        // physical-interface egress. Do not classify it as client-side ingress.
+        return ["oifname", clientInterface, "ip", "daddr", ip];
       }
-      // A single-interface AP/proxy may rewrite the L2 source MAC, so account
-      // upload traffic by the stable device IP instead of the observed MAC.
+      // Upload enters the physical interface from the client side. The L2
+      // source can be an AP/proxy MAC, so the stable client IP is authoritative.
       return ["iifname", clientInterface, "ip", "saddr", ip];
     }
 
