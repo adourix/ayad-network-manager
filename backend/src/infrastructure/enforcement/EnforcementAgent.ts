@@ -18,18 +18,12 @@ function valid(command: string, args: string[]): boolean {
   if (command === "systemctl" && !args.every((arg) => /^[a-zA-Z0-9_.@:/-]+$/.test(arg))) return false;
   if (command === "write-sing-box-config") {
     if (args.length < 2 || args[0] !== vpnConfigPath || args.length > 64) return false;
+    if (args.slice(1).some((arg) => !/^[A-Za-z0-9+/=]+$/.test(arg))) return false;
   }
   return true;
 }
 
 function isBackgroundRead(command: string, args: string[]): boolean {
-  // nft reads are NOT background work. NftEnforcer performs nft list-chain
-  // reads from inside mutation requests (for example before inserting an
-  // owned rule). If an nft list were queued behind the currently running
-  // mutation, the mutation would wait for a read that can never start:
-  // priority mutation -> backend request -> nft list -> background queue.
-  // That is a scheduler deadlock and was the direct cause of the 5s/7s
-  // enforcement timeouts.
   if (command === "nft") return false;
 
   if (command === "tc") {
@@ -46,14 +40,6 @@ function isBackgroundRead(command: string, args: string[]): boolean {
   return false;
 }
 
-/**
- * Serialize every privileged kernel command through one worker.
- *
- * Background tc/ip reads are deliberately lower priority. nft commands stay
- * in the priority lane because the enforcement implementation legitimately
- * performs nft read-before-write operations as part of a single mutation.
- * Nothing is executed concurrently with another privileged command.
- */
 class EnforcementScheduler {
   private running = false;
   private readonly priority: Job[] = [];
@@ -103,7 +89,8 @@ async function writeSingBoxConfig(args: string[]): Promise<void> {
   const target = args[0];
   if (target !== vpnConfigPath) throw new Error("sing-box config path rejected");
 
-  const content = args.slice(1).join("");
+  const encoded = args.slice(1).join("");
+  const content = Buffer.from(encoded, "base64").toString("utf8");
   if (content.length === 0 || content.length > 32 * 1024) {
     throw new Error("sing-box config payload rejected");
   }
