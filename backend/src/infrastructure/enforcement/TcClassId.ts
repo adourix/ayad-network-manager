@@ -1,9 +1,11 @@
 import { createHash } from "node:crypto";
 
+export type TcTrafficDirection = "download" | "upload";
+
 export class TcClassId {
-  static fromMac(mac: string): string {
+  static fromMac(mac: string, direction: TcTrafficDirection = "upload"): string {
     const normalized = mac.trim().toLowerCase();
-    const hash = createHash("sha256").update(normalized).digest("hex");
+    const hash = createHash("sha256").update(`${direction}:${normalized}`).digest("hex");
 
     // HTB minor class IDs are 16-bit. Keep 1 reserved for the root class.
     const value = Number.parseInt(hash.slice(0, 4), 16) || 2;
