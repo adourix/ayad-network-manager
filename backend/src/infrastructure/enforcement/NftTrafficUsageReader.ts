@@ -35,6 +35,11 @@ export class NftTrafficUsageReader implements TrafficUsageReader {
     return this.executor.execute("nft", args);
   }
 
+  private async execNftMutation(args: string[]): Promise<void> {
+    await this.execNft(["-c", ...args]);
+    await this.execNft(args);
+  }
+
   async readDeviceUsage(mac: string): Promise<TrafficUsage> {
     const normalizedMac = validateMac(mac);
     const counters = await this.readCounters();
@@ -89,7 +94,7 @@ export class NftTrafficUsageReader implements TrafficUsageReader {
     for (const direction of ["download", "upload"] as const) {
       const name = this.counterName(mac, direction);
       if (counters.has(name)) continue;
-      await this.execNft(["add", "counter", TABLE_FAMILY, TABLE_NAME, name]);
+      await this.execNftMutation(["add", "counter", TABLE_FAMILY, TABLE_NAME, name]);
       counters.set(name, 0n);
     }
   }
@@ -106,13 +111,13 @@ export class NftTrafficUsageReader implements TrafficUsageReader {
     try {
       await this.execNft(["list", "table", TABLE_FAMILY, TABLE_NAME]);
     } catch {
-      await this.execNft(["add", "table", TABLE_FAMILY, TABLE_NAME]);
+      await this.execNftMutation(["add", "table", TABLE_FAMILY, TABLE_NAME]);
     }
 
     try {
       await this.execNft(["list", "chain", TABLE_FAMILY, TABLE_NAME, CHAIN_NAME]);
     } catch {
-      await this.execNft([
+      await this.execNftMutation([
         "add", "chain", TABLE_FAMILY, TABLE_NAME, CHAIN_NAME,
         "{", "type", "filter", "hook", "forward", "priority", "filter", ";", "policy", "accept", ";", "}",
       ]);
@@ -139,9 +144,9 @@ export class NftTrafficUsageReader implements TrafficUsageReader {
     }
   }
 
-  private ruleMatches(raw: unknown, direction: "download" | "upload", mac: string, ip: string): boolean {
+  private ruleMatches(raw: unknown, direction: "download" | "upload", _mac: string, ip: string): boolean {
     const serialized = JSON.stringify(raw);
-    if (!serialized.includes(ip) || !serialized.includes(mac)) return false;
+    if (!serialized.includes(ip)) return false;
 
     if (direction === "download") {
       return serialized.includes("daddr") && !serialized.includes("saddr");
@@ -151,14 +156,14 @@ export class NftTrafficUsageReader implements TrafficUsageReader {
   }
 
   private async addRule(expressions: string[], counterName: string, comment: string): Promise<void> {
-    await this.execNft([
+    await this.execNftMutation([
       "add", "rule", TABLE_FAMILY, TABLE_NAME, CHAIN_NAME,
       ...expressions, "counter", "name", counterName, "comment", comment,
     ]);
   }
 
   private async replaceRule(handle: number, expressions: string[], counterName: string, comment: string): Promise<void> {
-    await this.execNft([
+    await this.execNftMutation([
       "replace", "rule", TABLE_FAMILY, TABLE_NAME, CHAIN_NAME,
       "handle", String(handle), ...expressions,
       "counter", "name", counterName, "comment", comment,
@@ -166,17 +171,19 @@ export class NftTrafficUsageReader implements TrafficUsageReader {
   }
 
   private async deleteRule(handle: number): Promise<void> {
-    await this.execNft(["delete", "rule", TABLE_FAMILY, TABLE_NAME, CHAIN_NAME, "handle", String(handle)]);
+    await this.execNftMutation(["delete", "rule", TABLE_FAMILY, TABLE_NAME, CHAIN_NAME, "handle", String(handle)]);
   }
 
-  private buildRuleExpressions(direction: "download" | "upload", mac: string, ip: string): string[] {
+  private buildRuleExpressions(direction: "download" | "upload", _mac: string, ip: string): string[] {
     const { mode, clientInterface, uplinkInterface, clientSubnet } = this.topology;
 
     if (mode === "single-interface-ifb") {
       if (direction === "download") {
         return ["iifname", clientInterface, "ip", "daddr", ip];
       }
-      return ["iifname", clientInterface, "ip", "saddr", clientSubnet, "ether", "saddr", mac];
+      // In a single-interface topology an AP/proxy may rewrite the L2 source
+      // MAC. IP is the stable per-device identity for accounting in this path.
+      return ["iifname", clientInterface, "ip", "saddr", ip, "ip", "saddr", clientSubnet];
     }
 
     if (!uplinkInterface) throw new Error("Dual-interface accounting requires an uplink interface");
@@ -185,7 +192,7 @@ export class NftTrafficUsageReader implements TrafficUsageReader {
       return ["iifname", uplinkInterface, "oifname", clientInterface, "ip", "daddr", ip];
     }
 
-    return ["iifname", clientInterface, "oifname", uplinkInterface, "ip", "saddr", clientSubnet, "ether", "saddr", mac];
+    return ["iifname", clientInterface, "oifname", uplinkInterface, "ip", "saddr", clientSubnet, "ether", "saddr", _mac];
   }
 
   private async readRules(): Promise<NftRule[]> {
