@@ -1,16 +1,12 @@
-import type { DhcpLeaseReader } from "../devices/DhcpLeaseReader.js";
-import type { NeighborTableReader } from "../devices/NeighborTableReader.js";
+import type { DhcpLeaseReader, NeighborTableReader, BroadcastCaptureReader } from "../../domain/value-objects/NetworkObservation.js";
 import type { DeviceRepository } from "../../domain/repositories/DeviceRepository.js";
 import type { DevicePolicyRepository } from "../../domain/repositories/DevicePolicyRepository.js";
-import type { BroadcastCaptureReader } from "../devices/BroadcastCaptureReader.js";
 import type { BlockedDeviceRepository } from "../../domain/repositories/BlockedDeviceRepository.js";
 import type { DeviceBlocker } from "./DeviceBlocker.js";
-
 function normalizeMac(mac:string):string{return mac.trim().toLowerCase();}
 function normalizeIp(ip:string):string{return ip.trim();}
 function isLeaseActive(expiry:number,nowSeconds:number):boolean{return expiry===0||expiry>nowSeconds;}
 function isUsableNeighborState(state:string):boolean{return new Set(["REACHABLE","STALE","PERMANENT"]).has(state.trim().toUpperCase());}
-
 export class BlockedIpReconciliationService {
   private timer:NodeJS.Timeout|undefined;private running=false;
   constructor(private readonly deviceRepository:DeviceRepository,private readonly policyRepository:DevicePolicyRepository,private readonly dhcpLeaseReader:DhcpLeaseReader,private readonly neighborTableReader:NeighborTableReader,private readonly lanInterface:string,private readonly broadcastCaptureReader:BroadcastCaptureReader|undefined,private readonly intervalMs=10_000,private readonly blockedDeviceRepository?:BlockedDeviceRepository,private readonly deviceBlocker?:DeviceBlocker){}
