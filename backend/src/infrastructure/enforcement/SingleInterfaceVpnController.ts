@@ -1,6 +1,7 @@
 import type { SystemCommandExecutor } from "./SystemCommandExecutor.js";
 import type { VpnEnforcement } from "../../application/vpn/VpnService.js";
 import { config } from "../../config.js";
+import { setVpnBlockedIpGuardEnabled } from "./NftEnforcer.js";
 
 type VpnLink = { protocol: "vmess" | "vless"; parsed: Record<string, unknown> };
 
@@ -11,8 +12,23 @@ export class SingleInterfaceVpnController implements VpnEnforcement {
   constructor(private readonly executor: SystemCommandExecutor, private readonly tunnelInterface: string) {}
   async configure(link: string): Promise<void> { const parsed = this.parseLink(link); const content = JSON.stringify(this.buildConfig(parsed)); const chunks = content.match(/.{1,480}/gs) ?? []; if (chunks.length === 0 || chunks.length > 63) throw new Error("generated sing-box config is too large"); await this.executor.execute("write-sing-box-config", [config.network.vpnConfigPath, ...chunks]); }
   async getStatus(): Promise<{ enabled: boolean; connected: boolean }> { const serviceActive = await this.safe("systemctl", ["is-active", "--quiet", "sing-box"]); const tunnelPresent = serviceActive && await this.hasTunnelInterface(); return { enabled: serviceActive, connected: serviceActive && tunnelPresent }; }
-  async apply(enabled: boolean): Promise<boolean> { if (!enabled) { await this.safe("systemctl", ["stop", "sing-box"]); await this.setNat(false, false); return false; } await this.safe("systemctl", ["restart", "sing-box"]); const connected = await this.waitForReadiness(); await this.setNat(connected, true); return connected; }
-  async syncConnectionState(enabled: boolean, connected: boolean): Promise<void> { await this.setNat(connected, enabled); }
+  async apply(enabled: boolean): Promise<boolean> {
+    if (!enabled) {
+      await this.safe("systemctl", ["stop", "sing-box"]);
+      await this.setNat(false, false);
+      await setVpnBlockedIpGuardEnabled(false);
+      return false;
+    }
+    await this.safe("systemctl", ["restart", "sing-box"]);
+    const connected = await this.waitForReadiness();
+    await this.setNat(connected, true);
+    await setVpnBlockedIpGuardEnabled(true);
+    return connected;
+  }
+  async syncConnectionState(enabled: boolean, connected: boolean): Promise<void> {
+    await this.setNat(connected, enabled);
+    await setVpnBlockedIpGuardEnabled(enabled);
+  }
   private async waitForReadiness(): Promise<boolean> { const deadline = Date.now() + VPN_READINESS_TIMEOUT_MS; while (Date.now() < deadline) { const serviceActive = await this.safe("systemctl", ["is-active", "--quiet", "sing-box"]); if (serviceActive && await this.hasTunnelInterface()) return true; await new Promise((resolve) => setTimeout(resolve, VPN_READINESS_POLL_MS)); } return false; }
   private async hasTunnelInterface(): Promise<boolean> { try { const result = await this.executor.execute("ip", ["-j", "link", "show"]); const links = JSON.parse(result.stdout) as Array<{ ifname?: unknown }>; return Array.isArray(links) && links.some((link) => link?.ifname === this.tunnelInterface); } catch { return false; } }
   private parseLink(link: string): VpnLink { const value = link.trim(); if (/^vmess:\/\//i.test(value)) return { protocol: "vmess", parsed: this.parseVmessLink(value) }; if (/^vless:\/\//i.test(value)) return { protocol: "vless", parsed: this.parseVlessLink(value) }; throw new Error("Only vmess and vless links are supported"); }
