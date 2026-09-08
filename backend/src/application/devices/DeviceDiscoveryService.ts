@@ -1,8 +1,19 @@
-import type { DhcpLeaseReader } from "./DhcpLeaseReader.js";
-import type { NeighborTableReader } from "./NeighborTableReader.js";
-import type { BroadcastCaptureReader } from "./BroadcastCaptureReader.js";
+import type { DhcpLease, NeighborEntry, CapturedIdentity } from "../../domain/value-objects/NetworkObservation.js";
 import type { NeighborObservationRepository } from "../../domain/repositories/NeighborObservationRepository.js";
 import type { DeviceIdentityValidator, ValidatedDeviceIdentity } from "../../domain/services/DeviceIdentityValidator.js";
+
+export interface DhcpLeaseReader {
+  read(): Promise<DhcpLease[]>;
+}
+
+export interface NeighborTableReader {
+  read(interfaceName: string): Promise<NeighborEntry[]>;
+}
+
+export interface BroadcastCaptureReader {
+  recentIdentities(maxAgeMs?: number): CapturedIdentity[];
+  status(): { lastDhcp: { messageType: string | null; clientMac: string | null; capturedAt: Date } | null };
+}
 
 export class DeviceDiscoveryService {
   constructor(
@@ -15,13 +26,27 @@ export class DeviceDiscoveryService {
   ) {}
 
   async discover(): Promise<ValidatedDeviceIdentity[]> {
-    const [leases, neighbors] = await Promise.all([this.dhcpLeaseReader.read(), this.neighborTableReader.read(this.lanInterface)]);
+    const [leases, neighbors] = await Promise.all([
+      this.dhcpLeaseReader.read(),
+      this.neighborTableReader.read(this.lanInterface),
+    ]);
     const captures = this.broadcastCaptureReader?.recentIdentities() ?? [];
     const renewalObservedMacs = new Set<string>();
     const lastDhcp = this.broadcastCaptureReader?.status().lastDhcp;
-    if (lastDhcp?.clientMac && lastDhcp.messageType?.toLowerCase() === "request" && Date.now() - lastDhcp.capturedAt.getTime() <= 60_000) renewalObservedMacs.add(lastDhcp.clientMac.trim().toLowerCase());
+    if (
+      lastDhcp?.clientMac &&
+      lastDhcp.messageType?.toLowerCase() === "request" &&
+      Date.now() - lastDhcp.capturedAt.getTime() <= 60_000
+    ) {
+      renewalObservedMacs.add(lastDhcp.clientMac.trim().toLowerCase());
+    }
 
-    const observations = this.identityValidator.validate(leases, neighbors, captures, renewalObservedMacs);
+    const observations = this.identityValidator.validate(
+      leases,
+      neighbors,
+      captures,
+      renewalObservedMacs,
+    );
     if (!this.observationRepository) return observations;
 
     const now = new Date();
@@ -39,13 +64,30 @@ export class DeviceDiscoveryService {
     }
     await this.observationRepository.resetMissing(keys, now);
 
-    return observations.filter((observation) => {
-      if (observation.identitySource === "STATIC_ARP") return (counts.get(`${observation.mac}|${observation.ip}`) ?? 0) >= 3;
-      if (observation.proxyMac && observation.identitySource === "PROXY_UNCONFIRMED") return (counts.get(`${observation.proxyMac}|${observation.ip}`) ?? 0) >= 3;
-      return true;
-    }).map((observation) => {
-      if (observation.proxyMac && observation.identitySource === "PROXY_UNCONFIRMED" && (counts.get(`${observation.proxyMac}|${observation.ip}`) ?? 0) < 3) return { ...observation, identitySource: "DHCP" as const, identityValidated: false, deferred: true };
-      return observation;
-    });
+    return observations
+      .filter((observation) => {
+        if (observation.identitySource === "STATIC_ARP") {
+          return (counts.get(`${observation.mac}|${observation.ip}`) ?? 0) >= 3;
+        }
+        if (observation.proxyMac && observation.identitySource === "PROXY_UNCONFIRMED") {
+          return (counts.get(`${observation.proxyMac}|${observation.ip}`) ?? 0) >= 3;
+        }
+        return true;
+      })
+      .map((observation) => {
+        if (
+          observation.proxyMac &&
+          observation.identitySource === "PROXY_UNCONFIRMED" &&
+          (counts.get(`${observation.proxyMac}|${observation.ip}`) ?? 0) < 3
+        ) {
+          return {
+            ...observation,
+            identitySource: "DHCP" as const,
+            identityValidated: false,
+            deferred: true,
+          };
+        }
+        return observation;
+      });
   }
 }
