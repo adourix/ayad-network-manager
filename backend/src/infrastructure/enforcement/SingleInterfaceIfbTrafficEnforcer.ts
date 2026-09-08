@@ -5,7 +5,7 @@ import type { SystemCommandExecutor } from "./SystemCommandExecutor.js";
 import type { IfbManager } from "./IfbManager.js";
 import type { TcStateReader } from "./TcStateReader.js";
 import { TcBuilder } from "./TcBuilder.js";
-import { TcClassId, type TcTrafficDirection } from "./TcClassId.js";
+import { TcClassId, type TcTrafficDirection } from "../../domain/value-objects/TcClassId.js";
 import { TrafficRate } from "./TrafficRate.js";
 
 /**

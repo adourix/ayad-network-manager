@@ -2,6 +2,11 @@ import { createHash } from "node:crypto";
 
 export type TcTrafficDirection = "download" | "upload";
 
+/**
+ * Stable traffic-class identity derived from the managed device identity.
+ * The enforcement implementation owns how the ID is applied to tc; this
+ * value object only provides a deterministic, topology-independent identity.
+ */
 export class TcClassId {
   static fromMac(mac: string, direction: TcTrafficDirection = "upload"): string {
     const normalized = mac.trim().toLowerCase();

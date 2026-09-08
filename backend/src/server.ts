@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import websocket from "@fastify/websocket";
 import { PrismaNotificationRepository } from "./infrastructure/database/PrismaNotificationRepository.js";
 import { BlockedIpReconciliationService } from "./application/enforcement/BlockedIpReconciliationService.js";
+import { IpBindingLifecycleService } from "./application/enforcement/IpBindingLifecycleService.js";
 import { TrafficReconciliationService } from "./application/enforcement/TrafficReconciliationService.js";
 import { TrafficEnforcementService } from "./application/enforcement/TrafficEnforcementService.js";
 import { DefaultTrafficPolicyValidator } from "./application/enforcement/DefaultTrafficPolicyValidator.js";
@@ -51,9 +52,9 @@ import { LinuxSetupProbe } from "./infrastructure/setup/LinuxSetupProbe.js";
 import { setupRoutes } from "./interfaces/http/routes/setup.js";
 import { DhcpReservationService } from "./application/setup/DhcpReservationService.js";
 import { AuditedSystemCommandExecutor } from "./infrastructure/enforcement/AuditedSystemCommandExecutor.js";
-import { NotificationDeliveryWorker } from "./infrastructure/notifications/NotificationDeliveryWorker.js";
 import { PrismaBlockedDeviceRepository } from "./infrastructure/database/PrismaBlockedDeviceRepository.js";
 import { PrismaNeighborObservationRepository } from "./infrastructure/database/PrismaNeighborObservationRepository.js";
+import { PrismaQuotaPeriodRepository } from "./infrastructure/database/PrismaQuotaPeriodRepository.js";
 
 if (config.network.networkMode !== "single-interface-ifb") throw new Error("Dual-interface mode is reserved for the next implementation phase; use NETWORK_MODE=single-interface-ifb");
 if (config.nodeEnv === "production" && (!config.server.tlsCertPath || !config.server.tlsKeyPath)) throw new Error("TLS_CERT_PATH and TLS_KEY_PATH are required in production");
@@ -76,22 +77,25 @@ const dhcpLeaseReader = new LinuxDhcpLeaseReader(config.setup.dhcpLeasesPath);
 const neighborTableReader = new LinuxNeighborTableReader(systemCommandExecutor);
 const identityValidator = new DhcpNeighborIdentityValidator(config.network.clientSubnet, false);
 const broadcastCaptureReader = new BroadcastCaptureReader(config.network.clientInterface); broadcastCaptureReader.start();
-app.post<{ Params: { mac: string } }>("/api/devices/:mac/recheck-identity", { schema: { params: { type: "object", required: ["mac"], additionalProperties: false, properties: { mac: { type: "string", pattern: "^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$" } } } } }, async (request) => { const result = await broadcastCaptureReader.recheck(request.params.mac); await operationsRepository.audit({ action: "recheck-identity", mac: request.params.mac, details: { observed: result.observed, passiveOnly: true } }); return { mac: request.params.mac.toLowerCase(), observed: result.observed, passiveOnly: true, windowMs: 10_000 }; });
+app.post<{ Params: { mac: string } }>("/api/devices/:mac/recheck-identity", { schema: { params: { type: "object", required: ["mac"], additionalProperties: false, properties: { mac: { type: "string", pattern: "^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$" } } } } }, async (request) => { const result = await broadcastCaptureReader.recheck(request.params.mac); await operationsRepository.audit({ action: "recheck-identity", mac: request.params.mac, actor: process.env.ADMIN_USERNAME ?? "admin", details: { observed: result.observed, passiveOnly: true } }); return { mac: request.params.mac.toLowerCase(), observed: result.observed, passiveOnly: true, windowMs: 10_000 }; });
 
 const discoveryService = new DeviceDiscoveryService(dhcpLeaseReader, neighborTableReader, identityValidator, config.network.lanInterface, broadcastCaptureReader, new PrismaNeighborObservationRepository());
 const deviceRepository = new PrismaDeviceRepository(); const policyRepository = new PrismaDevicePolicyRepository(); const policyCatalogRepository = new PrismaPolicyCatalogRepository();
 const deviceDiscoverySyncService = new DeviceDiscoverySyncService(discoveryService, deviceRepository, 10_000);
 const deviceBlocker = new NftDeviceBlocker(); const blockedDeviceReader = new NftBlockedDeviceReader(); const blockedDeviceRepository = new PrismaBlockedDeviceRepository();
 const firewallService = new FirewallService(deviceBlocker, deviceRepository, policyRepository, operationsRepository, blockedDeviceRepository);
-const blockedIpReconciliationService = new BlockedIpReconciliationService(deviceRepository, policyRepository, dhcpLeaseReader, neighborTableReader, config.network.lanInterface, broadcastCaptureReader, 10_000, blockedDeviceRepository);
-const deviceService = new DeviceService(discoveryService, deviceRepository, blockedDeviceReader);
-const liveMonitoringService = new LiveMonitoringService(discoveryService, neighborTableReader, blockedDeviceReader, config.network.lanInterface);
+const blockedIpReconciliationService = new BlockedIpReconciliationService(deviceRepository, policyRepository, dhcpLeaseReader, neighborTableReader, config.network.lanInterface, broadcastCaptureReader, 10_000, blockedDeviceRepository, deviceBlocker);
+const ipBindingLifecycleService = new IpBindingLifecycleService(deviceRepository, policyRepository, dhcpLeaseReader, blockedDeviceRepository, deviceBlocker, 10_000);
+const deviceService = new DeviceService(discoveryService, deviceRepository, policyRepository);
+const liveMonitoringService = new LiveMonitoringService(discoveryService, neighborTableReader, blockedDeviceReader, deviceRepository, config.network.lanInterface, blockedDeviceRepository);
 const ifbManager = new LinuxIfbManager(systemCommandExecutor); const tcStateReader = new LinuxTcStateReader(systemCommandExecutor);
 const trafficPolicyValidator = new DefaultTrafficPolicyValidator(config.network.uplinkBandwidthMbps);
 const trafficEnforcer = new SingleInterfaceIfbTrafficEnforcer(config.network.uplinkBandwidthMbps, config.network.lanInterface, systemCommandExecutor, ifbManager, tcStateReader);
 const trafficEnforcementService = new TrafficEnforcementService(trafficEnforcer, trafficPolicyValidator, deviceRepository, policyRepository, config.network.quotaThrottleMbps, operationsRepository);
 const devicePolicyService = new DevicePolicyService(deviceRepository, policyRepository, policyCatalogRepository);
-const notificationRepository = new PrismaNotificationRepository(); const quotaService = new QuotaService(deviceRepository, policyRepository, trafficEnforcementService, firewallService, notificationRepository);
+const notificationRepository = new PrismaNotificationRepository();
+const quotaPeriodRepository = new PrismaQuotaPeriodRepository();
+const quotaService = new QuotaService(deviceRepository, policyRepository, trafficEnforcementService, firewallService, notificationRepository, quotaPeriodRepository);
 const trafficUsageReader = new NftTrafficUsageReader({ mode: config.network.networkMode, clientInterface: config.network.clientInterface, uplinkInterface: null, clientSubnet: config.network.clientSubnet }, systemCommandExecutor);
 const trafficSampleRepository = new PrismaTrafficSampleRepository(); const trafficAccountingService = new TrafficAccountingService(deviceRepository, discoveryService, trafficUsageReader, trafficSampleRepository, quotaService);
 const trafficReconciliationService = new TrafficReconciliationService(deviceRepository, policyRepository, trafficEnforcer);
@@ -107,12 +111,12 @@ app.get("/api/health", async () => ({ status: "ok", capture: broadcastCaptureRea
 
 await ensureFirewallState(); await ensureSingleInterfaceNat(config.network.clientSubnet); await firewallService.reconcile(); await dhcpReservationService.reconcile();
 for (const device of await deviceRepository.findAll()) { if (!device.ip) continue; for (const rule of await policyCatalogRepository.portRules(device.id)) if (rule.enabled) await portRuleEnforcer.apply({ mac: device.mac.toString(), ip: device.ip.toString() }, rule); }
-await trafficReconciliationService.reconcile(); await blockedIpReconciliationService.reconcile(); await profileEnforcementService.reconcile(); await vpnService.reconcile();
+await trafficReconciliationService.reconcile(); await blockedIpReconciliationService.reconcile(); await ipBindingLifecycleService.reconcile(); await profileEnforcementService.reconcile(); await vpnService.reconcile();
 vpnService.startMonitor();
-await scheduleEnforcementService.start(); await trafficAccountingService.start(); await trafficRetentionService.start(); await deviceDiscoverySyncService.start(); await liveMonitoringService.start(); await blockedIpReconciliationService.start();
+await scheduleEnforcementService.start(); await trafficAccountingService.start(); await trafficRetentionService.start(); await deviceDiscoverySyncService.start(); await liveMonitoringService.start(); await blockedIpReconciliationService.start(); await ipBindingLifecycleService.start(); await trafficReconciliationService.start();
 
 await app.listen({ host: config.server.host, port: config.server.port });
 app.log.info(`Server listening at ${config.server.tlsCertPath ? "https" : "http"}://${config.server.host}:${config.server.port}`);
 process.on("SIGTERM", async () => {
-  vpnService.stopMonitor(); trafficAccountingService.stop(); trafficRetentionService.stop(); deviceDiscoverySyncService.stop(); liveMonitoringService.stop(); blockedIpReconciliationService.stop(); scheduleEnforcementService.stop(); broadcastCaptureReader.stop(); await app.close();
+  vpnService.stopMonitor(); trafficAccountingService.stop(); trafficRetentionService.stop(); deviceDiscoverySyncService.stop(); liveMonitoringService.stop(); blockedIpReconciliationService.stop(); ipBindingLifecycleService.stop(); trafficReconciliationService.stop(); scheduleEnforcementService.stop(); broadcastCaptureReader.stop(); await app.close();
 });

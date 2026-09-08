@@ -2,251 +2,27 @@ import type { SystemCommandExecutor } from "./SystemCommandExecutor.js";
 import type { VpnEnforcement } from "../../application/vpn/VpnService.js";
 import { config } from "../../config.js";
 
-type VpnLink = {
-  protocol: "vmess" | "vless";
-  parsed: Record<string, unknown>;
-};
+type VpnLink = { protocol: "vmess" | "vless"; parsed: Record<string, unknown> };
+
+const VPN_READINESS_TIMEOUT_MS = 5_000;
+const VPN_READINESS_POLL_MS = 250;
 
 export class SingleInterfaceVpnController implements VpnEnforcement {
   constructor(private readonly executor: SystemCommandExecutor, private readonly tunnelInterface: string) {}
-
-  async configure(link: string): Promise<void> {
-    const parsed = this.parseLink(link);
-    const content = JSON.stringify(this.buildConfig(parsed), null, 2);
-    const chunks = content.match(/.{1,480}/gs) ?? [];
-    if (chunks.length === 0 || chunks.length > 63) throw new Error("generated sing-box config is too large");
-    await this.executor.execute("write-sing-box-config", [config.network.vpnConfigPath, ...chunks]);
-  }
-
-  async getStatus(): Promise<{ enabled: boolean; connected: boolean }> {
-    const serviceActive = await this.safe("systemctl", ["is-active", "--quiet", "sing-box"]);
-    const tunnelPresent = await this.safe("ip", ["link", "show", "dev", this.tunnelInterface]);
-    return { enabled: serviceActive, connected: serviceActive && tunnelPresent };
-  }
-
-  async apply(enabled: boolean): Promise<boolean> {
-    if (enabled) await this.safe("systemctl", ["restart", "sing-box"]);
-    else await this.safe("systemctl", ["stop", "sing-box"]);
-    const serviceActive = await this.safe("systemctl", ["is-active", "--quiet", "sing-box"]);
-    const tunnelPresent = await this.safe("ip", ["link", "show", "dev", this.tunnelInterface]);
-    const connected = enabled && serviceActive && tunnelPresent;
-    await this.setNat(connected, enabled);
-    return connected;
-  }
-
-  async syncConnectionState(enabled: boolean, connected: boolean): Promise<void> {
-    await this.setNat(connected, enabled);
-  }
-
-  private parseLink(link: string): VpnLink {
-    const value = link.trim();
-    if (/^vmess:\/\//i.test(value)) return { protocol: "vmess", parsed: this.parseVmessLink(value) };
-    if (/^vless:\/\//i.test(value)) return { protocol: "vless", parsed: this.parseVlessLink(value) };
-    throw new Error("Only vmess and vless links are supported");
-  }
-
-  private parseVmessLink(link: string): Record<string, unknown> {
-    const encoded = link.slice("vmess://".length).trim();
-    if (!encoded) throw new Error("vmess link is empty");
-    const normalized = encoded.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(encoded.length / 4) * 4, "=");
-    let parsed: Record<string, unknown>;
-    try { parsed = JSON.parse(Buffer.from(normalized, "base64").toString("utf8")) as Record<string, unknown>; }
-    catch { throw new Error("vmess link is not valid base64 JSON"); }
-    const server = parsed.add;
-    const port = Number(parsed.port);
-    const uuid = parsed.id;
-    const network = String(parsed.net ?? "tcp").toLowerCase();
-    if (typeof server !== "string" || !server.trim() || !Number.isInteger(port) || port < 1 || port > 65535 || typeof uuid !== "string" || !uuid.trim()) {
-      throw new Error("vmess link is missing server, port, or id");
-    }
-    if (!["tcp", "ws", "http", "grpc", "quic", "httpupgrade"].includes(network)) throw new Error(`Unsupported VMess transport: ${network}`);
-    return parsed;
-  }
-
-  private parseVlessLink(link: string): Record<string, unknown> {
-    let url: URL;
-    try { url = new URL(link); } catch { throw new Error("vless link is not a valid URL"); }
-    if (url.protocol.toLowerCase() !== "vless:") throw new Error("invalid vless scheme");
-    const uuid = decodeURIComponent(url.username);
-    const server = url.hostname;
-    const port = Number(url.port);
-    if (!uuid || !server || !Number.isInteger(port) || port < 1 || port > 65535) throw new Error("vless link is missing server, port, or id");
-
-    const query: Record<string, string> = {};
-    for (const [key, value] of url.searchParams.entries()) query[key.toLowerCase()] = value;
-
-    const network = (query.type || "tcp").toLowerCase();
-    if (!["tcp", "ws", "grpc", "httpupgrade", "http"].includes(network)) throw new Error(`Unsupported VLESS transport: ${network}`);
-
-    return {
-      add: server,
-      port,
-      id: uuid,
-      net: network,
-      tls: query.security === "tls" ? "tls" : "",
-      sni: query.sni || "",
-      alpn: query.alpn || "",
-      fp: query.fp || "",
-      allowInsecure: query.allowinsecure === "1" || query.allowinsecure === "true",
-      path: query.path || "",
-      host: query.host || "",
-      serviceName: query.servicename || query.serviceName || "",
-      flow: query.flow || "",
-    };
-  }
-
-  private buildConfig(link: VpnLink) {
-    const outbound = link.protocol === "vmess"
-      ? this.buildVmessOutbound(link.parsed)
-      : this.buildVlessOutbound(link.parsed);
-
-    return {
-      log: { level: "info" },
-      inbounds: [{
-        type: "tun",
-        tag: "tun-in",
-        interface_name: this.tunnelInterface,
-        address: [config.network.vpnTunAddress],
-        auto_route: true,
-        auto_redirect: true,
-        strict_route: true,
-      }],
-      dns: {
-        servers: [
-          {
-            type: "https",
-            tag: "bootstrap-dns",
-            server: "1.1.1.1",
-            server_port: 443,
-            path: "/dns-query",
-            headers: { Host: "cloudflare-dns.com" },
-            tls: { enabled: true, server_name: "cloudflare-dns.com" },
-          },
-          {
-            type: "https",
-            tag: "vpn-doh",
-            server: "1.1.1.1",
-            server_port: 443,
-            path: "/dns-query",
-            headers: { Host: "cloudflare-dns.com" },
-            tls: { enabled: true, server_name: "cloudflare-dns.com" },
-            detour: "proxy-out",
-          },
-        ],
-        final: "vpn-doh",
-        strategy: "ipv4_only",
-      },
-      outbounds: [
-        { type: "direct", tag: "direct" },
-        outbound,
-      ],
-      route: {
-        auto_detect_interface: true,
-        rules: [
-          { ip_cidr: ["1.1.1.1/32"], outbound: "direct" },
-        ],
-        default_domain_resolver: { server: "bootstrap-dns", strategy: "ipv4_only" },
-        final: "proxy-out",
-      },
-    };
-  }
-
-  private buildVmessOutbound(parsed: Record<string, unknown>): Record<string, unknown> {
-    const network = String(parsed.net ?? "tcp").toLowerCase();
-    const tlsEnabled = String(parsed.tls ?? "").toLowerCase() === "tls";
-    const server = String(parsed.add);
-    const port = Number(parsed.port);
-    const uuid = String(parsed.id);
-    const alterId = Number(parsed.aid ?? 0);
-    const security = String(parsed.scy ?? "auto");
-    const host = typeof parsed.host === "string" ? parsed.host : "";
-    const path = typeof parsed.path === "string" ? parsed.path : "";
-    const sni = typeof parsed.sni === "string" && parsed.sni ? parsed.sni : host || undefined;
-    if (!Number.isSafeInteger(alterId) || alterId < 0) throw new Error("invalid VMess alterId");
-
-    const outbound: Record<string, unknown> = {
-      type: "vmess", tag: "proxy-out", server, server_port: port, uuid, security,
-      alter_id: alterId,
-      tls: tlsEnabled ? { enabled: true, ...(sni ? { server_name: sni } : {}) } : { enabled: false },
-      domain_resolver: { server: "bootstrap-dns", strategy: "ipv4_only" },
-    };
-    this.addTransport(outbound, network, host, path, parsed);
-    return outbound;
-  }
-
-  private buildVlessOutbound(parsed: Record<string, unknown>): Record<string, unknown> {
-    const network = String(parsed.net ?? "tcp").toLowerCase();
-    const server = String(parsed.add);
-    const port = Number(parsed.port);
-    const uuid = String(parsed.id);
-    const sni = typeof parsed.sni === "string" && parsed.sni ? parsed.sni : undefined;
-    const alpn = typeof parsed.alpn === "string" && parsed.alpn ? parsed.alpn.split(",").map((value) => value.trim()).filter(Boolean) : [];
-    const fingerprint = typeof parsed.fp === "string" && parsed.fp ? parsed.fp : undefined;
-    const tlsEnabled = String(parsed.tls ?? "").toLowerCase() === "tls";
-
-    const outbound: Record<string, unknown> = {
-      type: "vless",
-      tag: "proxy-out",
-      server,
-      server_port: port,
-      uuid,
-      domain_resolver: { server: "bootstrap-dns", strategy: "ipv4_only" },
-      ...(typeof parsed.flow === "string" && parsed.flow ? { flow: parsed.flow } : {}),
-    };
-
-    if (tlsEnabled) {
-      outbound.tls = {
-        enabled: true,
-        ...(sni ? { server_name: sni } : {}),
-        ...(alpn.length ? { alpn } : {}),
-        ...(parsed.allowInsecure === true ? { insecure: true } : {}),
-        ...(fingerprint ? { utls: { enabled: true, fingerprint } } : {}),
-      };
-    }
-
-    const host = typeof parsed.host === "string" ? parsed.host : "";
-    const path = typeof parsed.path === "string" ? parsed.path : "";
-    this.addTransport(outbound, network, host, path, parsed);
-    return outbound;
-  }
-
-  private addTransport(outbound: Record<string, unknown>, network: string, host: string, path: string, parsed: Record<string, unknown>): void {
-    if (network === "ws") outbound.transport = { type: "ws", ...(path ? { path } : {}), ...(host ? { headers: { Host: host } } : {}) };
-    else if (network === "http") outbound.transport = { type: "http", ...(host ? { host: [host] } : {}), ...(path ? { path } : {}) };
-    else if (network === "grpc") outbound.transport = { type: "grpc", ...(typeof parsed.serviceName === "string" && parsed.serviceName ? { service_name: parsed.serviceName } : path ? { service_name: path } : {}) };
-    else if (network === "httpupgrade") outbound.transport = { type: "httpupgrade", ...(host ? { host } : {}), ...(path ? { path } : {}) };
-    else if (network === "quic") outbound.transport = { type: "quic" };
-  }
-
-  private async safe(command: string, args: string[]): Promise<boolean> {
-    try { await this.executor.execute(command, args); return true; } catch { return false; }
-  }
-
-  private async setNat(vpnConnected: boolean, vpnEnabled: boolean): Promise<void> {
-    const natRules = await this.rules("nat", "POSTROUTING");
-    for (const rule of natRules) if ((rule.comment === "ayad_nm_single_interface_nat" || rule.comment === "ayad_nm_vpn_nat") && rule.handle !== null) {
-      await this.executor.execute("nft", ["delete", "rule", "ip", "nat", "POSTROUTING", "handle", String(rule.handle)]);
-    }
-    const nat = ["add", "rule", "ip", "nat", "POSTROUTING", "ip", "saddr", config.network.clientSubnet, "oifname", vpnConnected ? this.tunnelInterface : config.network.uplinkInterface, "masquerade", "comment", vpnConnected ? "ayad_nm_vpn_nat" : "ayad_nm_single_interface_nat"];
-    await this.executor.execute("nft", ["-c", ...nat]);
-    await this.executor.execute("nft", nat);
-    const forwardRules = await this.rules("filter", "FORWARD");
-    for (const rule of forwardRules) if (rule.comment === "ayad_nm_vpn_fail_closed" && rule.handle !== null) {
-      await this.executor.execute("nft", ["delete", "rule", "ip", "filter", "FORWARD", "handle", String(rule.handle)]);
-    }
-    if (vpnEnabled && !vpnConnected) {
-      const drop = ["add", "rule", "ip", "filter", "FORWARD", "ip", "saddr", config.network.clientSubnet, "oifname", config.network.uplinkInterface, "drop", "comment", "ayad_nm_vpn_fail_closed"];
-      await this.executor.execute("nft", ["-c", ...drop]);
-      await this.executor.execute("nft", drop);
-    }
-  }
-
-  private async rules(table: string, chain: string): Promise<Array<{ handle: number | null; comment: string | null }>> {
-    const result = await this.executor.execute("nft", ["-j", "-a", "list", "chain", "ip", table, chain]);
-    const document = JSON.parse(result.stdout) as { nftables?: unknown[] };
-    return (document.nftables ?? []).flatMap((item) => {
-      const rule = (item as { rule?: Record<string, unknown> }).rule;
-      return rule ? [{ handle: typeof rule.handle === "number" ? rule.handle : null, comment: typeof rule.comment === "string" ? rule.comment : null }] : [];
-    });
-  }
+  async configure(link: string): Promise<void> { const parsed = this.parseLink(link); const content = JSON.stringify(this.buildConfig(parsed)); const chunks = content.match(/.{1,480}/gs) ?? []; if (chunks.length === 0 || chunks.length > 63) throw new Error("generated sing-box config is too large"); await this.executor.execute("write-sing-box-config", [config.network.vpnConfigPath, ...chunks]); }
+  async getStatus(): Promise<{ enabled: boolean; connected: boolean }> { const serviceActive = await this.safe("systemctl", ["is-active", "--quiet", "sing-box"]); const tunnelPresent = serviceActive && await this.hasTunnelInterface(); return { enabled: serviceActive, connected: serviceActive && tunnelPresent }; }
+  async apply(enabled: boolean): Promise<boolean> { if (!enabled) { await this.safe("systemctl", ["stop", "sing-box"]); await this.setNat(false, false); return false; } await this.safe("systemctl", ["restart", "sing-box"]); const connected = await this.waitForReadiness(); await this.setNat(connected, true); return connected; }
+  async syncConnectionState(enabled: boolean, connected: boolean): Promise<void> { await this.setNat(connected, enabled); }
+  private async waitForReadiness(): Promise<boolean> { const deadline = Date.now() + VPN_READINESS_TIMEOUT_MS; while (Date.now() < deadline) { const serviceActive = await this.safe("systemctl", ["is-active", "--quiet", "sing-box"]); if (serviceActive && await this.hasTunnelInterface()) return true; await new Promise((resolve) => setTimeout(resolve, VPN_READINESS_POLL_MS)); } return false; }
+  private async hasTunnelInterface(): Promise<boolean> { try { const result = await this.executor.execute("ip", ["-j", "link", "show"]); const links = JSON.parse(result.stdout) as Array<{ ifname?: unknown }>; return Array.isArray(links) && links.some((link) => link?.ifname === this.tunnelInterface); } catch { return false; } }
+  private parseLink(link: string): VpnLink { const value = link.trim(); if (/^vmess:\/\//i.test(value)) return { protocol: "vmess", parsed: this.parseVmessLink(value) }; if (/^vless:\/\//i.test(value)) return { protocol: "vless", parsed: this.parseVlessLink(value) }; throw new Error("Only vmess and vless links are supported"); }
+  private parseVmessLink(link: string): Record<string, unknown> { const encoded = link.slice("vmess://".length).trim(); if (!encoded) throw new Error("vmess link is empty"); const normalized = encoded.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(encoded.length / 4) * 4, "="); let parsed: Record<string, unknown>; try { parsed = JSON.parse(Buffer.from(normalized, "base64").toString("utf8")) as Record<string, unknown>; } catch { throw new Error("vmess link is not valid base64 JSON"); } const server = parsed.add; const port = Number(parsed.port); const uuid = parsed.id; const network = String(parsed.net ?? "tcp").toLowerCase(); if (typeof server !== "string" || !server.trim() || !Number.isInteger(port) || port < 1 || port > 65535 || typeof uuid !== "string" || !uuid.trim()) throw new Error("vmess link is missing server, port, or id"); if (!["tcp", "ws", "http", "grpc", "quic", "httpupgrade"].includes(network)) throw new Error(`Unsupported VMess transport: ${network}`); return parsed; }
+  private parseVlessLink(link: string): Record<string, unknown> { let url: URL; try { url = new URL(link); } catch { throw new Error("vless link is not a valid URL"); } if (url.protocol.toLowerCase() !== "vless:") throw new Error("invalid vless scheme"); const uuid = decodeURIComponent(url.username); const server = url.hostname; const port = Number(url.port); if (!uuid || !server || !Number.isInteger(port) || port < 1 || port > 65535) throw new Error("vless link is missing server, port, or id"); const query: Record<string, string> = {}; for (const [key, value] of url.searchParams.entries()) query[key.toLowerCase()] = value; const network = (query.type || "tcp").toLowerCase(); if (!["tcp", "ws", "grpc", "httpupgrade", "http"].includes(network)) throw new Error(`Unsupported VLESS transport: ${network}`); return { add: server, port, id: uuid, net: network, tls: query.security === "tls" ? "tls" : "", sni: query.sni || "", alpn: query.alpn || "", fp: query.fp || "", allowInsecure: query.allowinsecure === "1" || query.allowinsecure === "true", path: query.path || "", host: query.host || "", serviceName: query.servicename || query.servicename || "", flow: query.flow || "" }; }
+  private buildConfig(link: VpnLink) { const outbound = link.protocol === "vmess" ? this.buildVmessOutbound(link.parsed) : this.buildVlessOutbound(link.parsed); const dnsServers = config.network.dnsServers.map((server, index) => ({ type: "udp", tag: `configured-dns-${index}`, server, server_port: 53 })); const finalDns = dnsServers[0]?.tag ?? "configured-dns-0"; return { log: { level: "info" }, inbounds: [{ type: "tun", tag: "tun-in", interface_name: this.tunnelInterface, address: [config.network.vpnTunAddress], auto_route: true, auto_redirect: true, strict_route: true }], dns: { servers: dnsServers, final: finalDns, strategy: "ipv4_only" }, outbounds: [{ type: "direct", tag: "direct" }, outbound], route: { auto_detect_interface: true, rules: [{ ip_cidr: config.network.dnsServers.map((server) => `${server}/32`), outbound: "direct" }], default_domain_resolver: { server: finalDns, strategy: "ipv4_only" }, final: "proxy-out" } }; }
+  private buildVmessOutbound(parsed: Record<string, unknown>): Record<string, unknown> { const network = String(parsed.net ?? "tcp").toLowerCase(); const tlsEnabled = String(parsed.tls ?? "").toLowerCase() === "tls"; const server = String(parsed.add); const port = Number(parsed.port); const uuid = String(parsed.id); const alterId = Number(parsed.aid ?? 0); const security = String(parsed.scy ?? "auto"); const host = typeof parsed.host === "string" ? parsed.host : ""; const path = typeof parsed.path === "string" ? parsed.path : ""; const sni = typeof parsed.sni === "string" && parsed.sni ? parsed.sni : host || undefined; if (!Number.isSafeInteger(alterId) || alterId < 0) throw new Error("invalid VMess alterId"); const outbound: Record<string, unknown> = { type: "vmess", tag: "proxy-out", server, server_port: port, uuid, security, alter_id: alterId, tls: tlsEnabled ? { enabled: true, ...(sni ? { server_name: sni } : {}) } : { enabled: false }, domain_resolver: { server: "configured-dns-0", strategy: "ipv4_only" } }; this.addTransport(outbound, network, host, path, parsed); return outbound; }
+  private buildVlessOutbound(parsed: Record<string, unknown>): Record<string, unknown> { const network = String(parsed.net ?? "tcp").toLowerCase(); const server = String(parsed.add); const port = Number(parsed.port); const uuid = String(parsed.id); const sni = typeof parsed.sni === "string" && parsed.sni ? parsed.sni : undefined; const alpn = typeof parsed.alpn === "string" && parsed.alpn ? parsed.alpn.split(",").map((value) => value.trim()).filter(Boolean) : []; const fingerprint = typeof parsed.fp === "string" && parsed.fp ? parsed.fp : undefined; const tlsEnabled = String(parsed.tls ?? "").toLowerCase() === "tls"; const outbound: Record<string, unknown> = { type: "vless", tag: "proxy-out", server, server_port: port, uuid, domain_resolver: { server: "configured-dns-0", strategy: "ipv4_only" }, ...(typeof parsed.flow === "string" && parsed.flow ? { flow: parsed.flow } : {}) }; if (tlsEnabled) outbound.tls = { enabled: true, ...(sni ? { server_name: sni } : {}), ...(alpn.length ? { alpn } : {}), ...(parsed.allowInsecure === true ? { insecure: true } : {}), ...(fingerprint ? { utls: { enabled: true, fingerprint } } : {}) }; const host = typeof parsed.host === "string" ? parsed.host : ""; const path = typeof parsed.path === "string" ? parsed.path : ""; this.addTransport(outbound, network, host, path, parsed); return outbound; }
+  private addTransport(outbound: Record<string, unknown>, network: string, host: string, path: string, parsed: Record<string, unknown>): void { if (network === "ws") outbound.transport = { type: "ws", ...(path ? { path } : {}), ...(host ? { headers: { Host: host } } : {}) }; else if (network === "http") outbound.transport = { type: "http", ...(host ? { host: [host] } : {}), ...(path ? { path } : {}) }; else if (network === "grpc") outbound.transport = { type: "grpc", ...(typeof parsed.serviceName === "string" && parsed.serviceName ? { service_name: parsed.serviceName } : path ? { service_name: path } : {}) }; else if (network === "httpupgrade") outbound.transport = { type: "httpupgrade", ...(host ? { host } : {}), ...(path ? { path } : {}) }; else if (network === "quic") outbound.transport = { type: "quic" }; }
+  private async safe(command: string, args: string[]): Promise<boolean> { try { await this.executor.execute(command, args); return true; } catch { return false; } }
+  private async setNat(vpnConnected: boolean, vpnEnabled: boolean): Promise<void> { const natRules = await this.rules("nat", "POSTROUTING"); for (const rule of natRules) if ((rule.comment === "ayad_nm_single_interface_nat" || rule.comment === "ayad_nm_vpn_nat") && rule.handle !== null) await this.executor.execute("nft", ["delete", "rule", "ip", "nat", "POSTROUTING", "handle", String(rule.handle)]); const nat = ["add", "rule", "ip", "nat", "POSTROUTING", "ip", "saddr", config.network.clientSubnet, "oifname", vpnConnected ? this.tunnelInterface : config.network.uplinkInterface, "masquerade", "comment", vpnConnected ? "ayad_nm_vpn_nat" : "ayad_nm_single_interface_nat"]; await this.executor.execute("nft", ["-c", ...nat]); await this.executor.execute("nft", nat); const forwardRules = await this.rules("filter", "FORWARD"); for (const rule of forwardRules) if (rule.comment === "ayad_nm_vpn_fail_closed" && rule.handle !== null) await this.executor.execute("nft", ["delete", "rule", "ip", "filter", "FORWARD", "handle", String(rule.handle)]); if (vpnEnabled && !vpnConnected) { const drop = ["add", "rule", "ip", "filter", "FORWARD", "ip", "saddr", config.network.clientSubnet, "oifname", config.network.uplinkInterface, "drop", "comment", "ayad_nm_vpn_fail_closed"]; await this.executor.execute("nft", ["-c", ...drop]); await this.executor.execute("nft", drop); } }
+  private async rules(table: string, chain: string): Promise<Array<{ handle: number | null; comment: string | null }>> { const result = await this.executor.execute("nft", ["-j", "-a", "list", "chain", "ip", table, chain]); const document = JSON.parse(result.stdout) as { nftables?: unknown[] }; return (document.nftables ?? []).flatMap((item) => { const rule = (item as { rule?: Record<string, unknown> }).rule; return rule ? [{ handle: typeof rule.handle === "number" ? rule.handle : null, comment: typeof rule.comment === "string" ? rule.comment : null }] : []; }); }
 }

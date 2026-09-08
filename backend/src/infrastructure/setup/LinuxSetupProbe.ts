@@ -11,10 +11,6 @@ const PRIVILEGED_COMMANDS = new Set(["nft", "tc", "ip", "systemctl"]);
  * Setup may inspect ordinary host state directly, but commands capable of
  * changing or interrogating kernel/network enforcement state must use the
  * enforcement boundary.
- *
- * The default executor is remote, so even callers that have not yet been
- * migrated to dependency injection cannot accidentally shell out to nft/ip/
- * tc/systemctl from the backend process.
  */
 export class LinuxSetupProbe implements SetupProbe {
   constructor(
@@ -28,5 +24,14 @@ export class LinuxSetupProbe implements SetupProbe {
 
     const result = await execFileAsync(command, args);
     return { stdout: result.stdout, stderr: result.stderr };
+  }
+
+  async snapshotNft(): Promise<string> {
+    const result = await this.enforcement.execute("nft", ["list", "ruleset"]);
+    return result.stdout;
+  }
+
+  async restoreNft(snapshotPath: string): Promise<void> {
+    await this.enforcement.execute("nft", ["-f", snapshotPath]);
   }
 }
