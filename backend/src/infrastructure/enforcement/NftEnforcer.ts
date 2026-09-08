@@ -49,9 +49,39 @@ async function ensureSetUnlocked(name: string, type: string): Promise<void> { tr
 async function ensureRuleAtPosition(comment: string, ruleArgs: string[], position: number): Promise<void> { const rules = await getForwardRules(); const existing = rules.find((rule) => rule.comment === comment); if (existing?.index === position) return; if (existing) { const del = ["delete", "rule", TABLE_FAMILY, TABLE_NAME, FORWARD_CHAIN, "handle", String(existing.handle)]; await execNft(del); } const insert = ["insert", "rule", TABLE_FAMILY, TABLE_NAME, FORWARD_CHAIN, "position", String(position), ...ruleArgs, "comment", comment]; await execNft(insert); }
 async function ensureMacBlockRuleUnlocked(): Promise<void> { await ensureRuleAtPosition(MAC_BLOCK_COMMENT, ["ether", "saddr", `@${MAC_SET_NAME}`, "oifname", UPLINK_INTERFACE, "drop"], 0); }
 async function ensureIpBlockRuleUnlocked(): Promise<void> { await ensureRuleAtPosition(IP_BLOCK_COMMENT, ["ip", "saddr", `@${IP_SET_NAME}`, "oifname", UPLINK_INTERFACE, "drop"], 1); }
-export async function ensureFirewallState(): Promise<void> { await withMutationLock(async () => { await ensureSetUnlocked(MAC_SET_NAME, "ether_addr"); await ensureSetUnlocked(IP_SET_NAME, "ipv4_addr"); await ensureMacBlockRuleUnlocked(); await ensureIpBlockRuleUnlocked(); await ensureManagementAllowRulesUnlocked(); }); }
-export async function ensureSingleInterfaceNat(clientSubnet: string): Promise<void> { if (!validSubnet(clientSubnet)) throw new Error(`Invalid client subnet: ${clientSubnet}`); await withMutationLock(async () => { const rules = await getRulesInChain("nat", "POSTROUTING"); const existing = rules.find((rule) => rule.comment === NAT_COMMENT); const args = ["add", "rule", TABLE_FAMILY, "nat", "POSTROUTING", "ip", "saddr", clientSubnet, "oifname", UPLINK_INTERFACE, "masquerade", "comment", NAT_COMMENT]; if (existing) { await execNft(["delete", "rule", TABLE_FAMILY, "nat", "POSTROUTING", "handle", String(existing.handle)]); } await execNft(args); }); }
-async function ensureManagementAllowRulesUnlocked(): Promise<void> { for (const [chain, port, comment] of [["INPUT", config.network.sshPort, SSH_ALLOW_COMMENT], ["INPUT", config.server.port, DASHBOARD_ALLOW_COMMENT]] as const) { const rules = await getRulesInChain("filter", chain); if (rules.some((rule) => rule.comment === comment)) continue; await execNft(["insert", "rule", TABLE_FAMILY, "filter", chain, "position", "0", "tcp", "dport", String(port), "accept", "comment", comment]); } }
+
+export async function ensureFirewallState(): Promise<void> {
+  await withMutationLock(async () => {
+    await ensureSetUnlocked(MAC_SET_NAME, "ether_addr");
+    await ensureSetUnlocked(IP_SET_NAME, "ipv4_addr");
+    // Management access is established before any project-owned restrictive rules.
+    await ensureManagementAllowRulesUnlocked();
+    await ensureMacBlockRuleUnlocked();
+    await ensureIpBlockRuleUnlocked();
+  });
+}
+
+export async function ensureSingleInterfaceNat(clientSubnet: string): Promise<void> {
+  if (!validSubnet(clientSubnet)) throw new Error(`Invalid client subnet: ${clientSubnet}`);
+  await withMutationLock(async () => {
+    const rules = await getRulesInChain("nat", "POSTROUTING");
+    const existing = rules.find((rule) => rule.comment === NAT_COMMENT);
+    const args = ["add", "rule", TABLE_FAMILY, "nat", "POSTROUTING", "ip", "saddr", clientSubnet, "oifname", UPLINK_INTERFACE, "masquerade", "comment", NAT_COMMENT];
+    if (existing) {
+      await execNft(["delete", "rule", TABLE_FAMILY, "nat", "POSTROUTING", "handle", String(existing.handle)]);
+    }
+    await execNft(args);
+  });
+}
+
+async function ensureManagementAllowRulesUnlocked(): Promise<void> {
+  for (const [chain, port, comment] of [["INPUT", config.network.sshPort, SSH_ALLOW_COMMENT], ["INPUT", config.server.port, DASHBOARD_ALLOW_COMMENT]] as const) {
+    const rules = await getRulesInChain("filter", chain);
+    if (rules.some((rule) => rule.comment === comment)) continue;
+    await execNft(["insert", "rule", TABLE_FAMILY, "filter", chain, "position", "0", "tcp", "dport", String(port), "accept", "comment", comment]);
+  }
+}
+
 export async function getBlockedMacs(): Promise<Set<string>> { const { stdout } = await execNft(["list", "set", TABLE_FAMILY, TABLE_NAME, MAC_SET_NAME]); const blocked = new Set<string>(); const match = stdout.match(/elements\s*=\s*\{([^}]*)\}/); if (!match?.[1]) return blocked; for (const value of match[1].split(",")) { const mac = value.trim().toLowerCase(); if (MAC_REGEX.test(mac)) blocked.add(mac); } return blocked; }
 export async function getBlockedIps(): Promise<Set<string>> { const { stdout } = await execNft(["list", "set", TABLE_FAMILY, TABLE_NAME, IP_SET_NAME]); const blocked = new Set<string>(); const match = stdout.match(/elements\s*=\s*\{([^}]*)\}/); if (!match?.[1]) return blocked; for (const value of match[1].split(",")) { const ip = value.trim(); if (IPV4_REGEX.test(ip)) blocked.add(ip); } return blocked; }
 async function addElementUnlocked(setName: string, value: string): Promise<void> { const args = ["add", "element", TABLE_FAMILY, TABLE_NAME, setName, `{ ${value} }`]; try { await execNft(args); } catch (error) { if (!isAlreadyExists(error)) throw error; } }
