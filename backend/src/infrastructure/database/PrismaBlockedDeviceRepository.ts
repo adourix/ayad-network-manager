@@ -10,10 +10,9 @@ export class PrismaBlockedDeviceRepository implements BlockedDeviceRepository {
       update: { mac, active: true, reason: safeReason },
     });
     if (ip) {
-      await prisma.ipBinding.updateMany({
-        where: { blockedDeviceId: record.id, active: true, ip: { not: ip } },
-        data: { active: false, releasedAt: new Date(), releaseReason: "device_ip_changed" },
-      });
+      // Do not release older bindings here. A new IP is only an observation;
+      // the old binding must be released by positive identity evidence and its
+      // kernel rule must be removed atomically by the reconciliation layer.
       await prisma.ipBinding.upsert({
         where: { blockedDeviceId_ip_active: { blockedDeviceId: record.id, ip, active: true } },
         create: { blockedDeviceId: record.id, ip, active: true },
