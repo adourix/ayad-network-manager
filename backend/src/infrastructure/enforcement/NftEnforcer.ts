@@ -121,16 +121,30 @@ async function ensureSetUnlocked(name: string, type: string): Promise<void> {
   }
 }
 
+/** nft position expects a rule handle, not a zero-based rule index. */
 async function ensureRuleAtPosition(comment: string, ruleArgs: string[], position: number, forceReconcile = false): Promise<void> {
   const rules = await getForwardRules();
   const existing = rules.find((rule) => rule.comment === comment);
   if (existing?.index === position && !forceReconcile) return;
+
   if (existing) {
-    const del = ["delete", "rule", TABLE_FAMILY, TABLE_NAME, FORWARD_CHAIN, "handle", String(existing.handle)];
-    await execNft(del);
+    await execNft(["delete", "rule", TABLE_FAMILY, TABLE_NAME, FORWARD_CHAIN, "handle", String(existing.handle)]);
   }
-  const insert = ["insert", "rule", TABLE_FAMILY, TABLE_NAME, FORWARD_CHAIN, "position", String(position), ...ruleArgs, "comment", comment];
-  await execNft(insert);
+
+  const remaining = existing ? rules.filter((rule) => rule.handle !== existing.handle) : rules;
+  const target = remaining[position];
+
+  if (target) {
+    await execNft([
+      "insert", "rule", TABLE_FAMILY, TABLE_NAME, FORWARD_CHAIN,
+      "position", String(target.handle), ...ruleArgs, "comment", comment,
+    ]);
+  } else {
+    await execNft([
+      "add", "rule", TABLE_FAMILY, TABLE_NAME, FORWARD_CHAIN,
+      ...ruleArgs, "comment", comment,
+    ]);
+  }
 }
 
 async function ensureMacBlockRuleUnlocked(forceReconcile = false): Promise<void> {
@@ -147,9 +161,8 @@ export async function ensureFirewallState(): Promise<void> {
   await withMutationLock(async () => {
     await ensureSetUnlocked(MAC_SET_NAME, "ether_addr");
     await ensureSetUnlocked(IP_SET_NAME, "ipv4_addr");
-    // Management access is established before any project-owned restrictive rules.
     await ensureManagementAllowRulesUnlocked();
-    // Force reconciliation here so legacy rules with oifname constraints are replaced.
+    // Replace legacy project-owned rules that were constrained to the uplink interface.
     await ensureIpBlockRuleUnlocked(true);
     await ensureMacBlockRuleUnlocked(true);
   });
