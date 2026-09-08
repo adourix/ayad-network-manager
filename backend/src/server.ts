@@ -76,7 +76,7 @@ const dhcpLeaseReader = new LinuxDhcpLeaseReader(config.setup.dhcpLeasesPath);
 const neighborTableReader = new LinuxNeighborTableReader(systemCommandExecutor);
 const identityValidator = new DhcpNeighborIdentityValidator(config.network.clientSubnet, false);
 const broadcastCaptureReader = new BroadcastCaptureReader(config.network.clientInterface); broadcastCaptureReader.start();
-app.post<{ Params: { mac: string } }>("/api/devices/:mac/recheck-identity", { schema: { params: { type: "object", required: ["mac"], additionalProperties: false, properties: { mac: { type: "string", pattern: "^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$" } } } } }, async (request) => { const result = await broadcastCaptureReader.recheck(request.params.mac); await operationsRepository.audit({ action: "recheck-identity", mac: request.params.mac, details: { observed: result.observed, passiveOnly: true } }); return { mac: request.params.mac.toLowerCase(), observed: result.observed, passiveOnly: true, windowMs: 10_000 }; });
+app.post<{ Params: { mac: string } }>("/api/devices/:mac/recheck-identity", { schema: { params: { type: "object", required: ["mac"], additionalProperties: false, properties: { mac: { type: "string", pattern: "^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$" } } } } }, async (request) => { const result = await broadcastCaptureReader.recheck(request.params.mac); await operationsRepository.audit({ action: "recheck-identity", mac: request.params.mac, actor: process.env.ADMIN_USERNAME ?? "admin", details: { observed: result.observed, passiveOnly: true } }); return { mac: request.params.mac.toLowerCase(), observed: result.observed, passiveOnly: true, windowMs: 10_000 }; });
 
 const discoveryService = new DeviceDiscoveryService(dhcpLeaseReader, neighborTableReader, identityValidator, config.network.lanInterface, broadcastCaptureReader, new PrismaNeighborObservationRepository());
 const deviceRepository = new PrismaDeviceRepository(); const policyRepository = new PrismaDevicePolicyRepository(); const policyCatalogRepository = new PrismaPolicyCatalogRepository();
@@ -110,10 +110,10 @@ await ensureFirewallState(); await ensureSingleInterfaceNat(config.network.clien
 for (const device of await deviceRepository.findAll()) { if (!device.ip) continue; for (const rule of await policyCatalogRepository.portRules(device.id)) if (rule.enabled) await portRuleEnforcer.apply({ mac: device.mac.toString(), ip: device.ip.toString() }, rule); }
 await trafficReconciliationService.reconcile(); await blockedIpReconciliationService.reconcile(); await ipBindingLifecycleService.reconcile(); await profileEnforcementService.reconcile(); await vpnService.reconcile();
 vpnService.startMonitor();
-await scheduleEnforcementService.start(); await trafficAccountingService.start(); await trafficRetentionService.start(); await deviceDiscoverySyncService.start(); await liveMonitoringService.start(); await blockedIpReconciliationService.start(); await ipBindingLifecycleService.start();
+await scheduleEnforcementService.start(); await trafficAccountingService.start(); await trafficRetentionService.start(); await deviceDiscoverySyncService.start(); await liveMonitoringService.start(); await blockedIpReconciliationService.start(); await ipBindingLifecycleService.start(); await trafficReconciliationService.start();
 
 await app.listen({ host: config.server.host, port: config.server.port });
 app.log.info(`Server listening at ${config.server.tlsCertPath ? "https" : "http"}://${config.server.host}:${config.server.port}`);
 process.on("SIGTERM", async () => {
-  vpnService.stopMonitor(); trafficAccountingService.stop(); trafficRetentionService.stop(); deviceDiscoverySyncService.stop(); liveMonitoringService.stop(); blockedIpReconciliationService.stop(); ipBindingLifecycleService.stop(); scheduleEnforcementService.stop(); broadcastCaptureReader.stop(); await app.close();
+  vpnService.stopMonitor(); trafficAccountingService.stop(); trafficRetentionService.stop(); deviceDiscoverySyncService.stop(); liveMonitoringService.stop(); blockedIpReconciliationService.stop(); ipBindingLifecycleService.stop(); trafficReconciliationService.stop(); scheduleEnforcementService.stop(); broadcastCaptureReader.stop(); await app.close();
 });
