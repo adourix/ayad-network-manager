@@ -60,12 +60,19 @@ function valid(command: string, args: string[]): boolean {
     const readArgs = args.filter((arg) => arg !== "-j" && arg !== "-a");
     if (readPrefix.length <= 2 && readArgs[0] === "list") return args.every((arg) => !/[;{}]/.test(arg));
     if (!["add", "insert", "delete", "replace"].includes(args[0] ?? "")) return false;
-    const target = args[1]; if (!["set", "element", "rule"].includes(target ?? "")) return false;
+
+    const target = args[1];
+    if (target === "counter") {
+      return args[0] === "add" && args.length === 5 && args[2] === "inet" && args[3] === "ayad_nm" && /^dev_(download|upload)_[0-9a-f]{12}$/.test(args[4]!);
+    }
+
+    if (!["set", "element", "rule"].includes(target ?? "")) return false;
     if (target === "set" && args[0] !== "add") return false;
     if (target === "element" && !["add", "delete"].includes(args[0]!)) return false;
     if (args[2] !== "ip") return false;
     if (target === "set" || target === "element") return args[3] === "filter" && (args[4] === "blocked_macs" || args[4] === "blocked_ips");
-    return args[3] === "filter" || args[3] === "nat";
+    if (args[3] === "filter" || args[3] === "nat") return true;
+    return args[3] === "ayad_nm" && args[4] === "accounting";
   }
   return false;
 }
