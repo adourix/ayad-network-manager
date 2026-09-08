@@ -28,7 +28,6 @@ const TABLE_NAME = "filter";
 const MAC_SET_NAME = "blocked_macs";
 const IP_SET_NAME = "blocked_ips";
 const FORWARD_CHAIN = "FORWARD";
-const UPLINK_INTERFACE = config.network.uplinkInterface;
 const MAC_REGEX = /^([0-9a-f]{2}:){5}[0-9a-f]{2}$/i;
 const IPV4_REGEX = /^(?:\d{1,3}\.){3}\d{1,3}$/;
 const MAC_BLOCK_COMMENT = "ayad_nm_blocked_macs";
@@ -135,12 +134,13 @@ async function ensureRuleAtPosition(comment: string, ruleArgs: string[], positio
 }
 
 async function ensureMacBlockRuleUnlocked(): Promise<void> {
-  await ensureRuleAtPosition(MAC_BLOCK_COMMENT, ["ether", "saddr", `@${MAC_SET_NAME}`, "oifname", UPLINK_INTERFACE, "drop"], 1);
+  // MAC blocking applies to every forwarded path, including tunnels/VPN interfaces.
+  await ensureRuleAtPosition(MAC_BLOCK_COMMENT, ["ether", "saddr", `@${MAC_SET_NAME}`, "drop"], 1);
 }
 
 async function ensureIpBlockRuleUnlocked(): Promise<void> {
-  // IP-only enforcement must be the first FORWARD rule so it cannot be bypassed by ACCEPT rules.
-  await ensureRuleAtPosition(IP_BLOCK_COMMENT, ["ip", "saddr", `@${IP_SET_NAME}`, "oifname", UPLINK_INTERFACE, "drop"], 0);
+  // IP-only enforcement must be the first FORWARD rule so it cannot be bypassed by ACCEPT rules or tunnel paths.
+  await ensureRuleAtPosition(IP_BLOCK_COMMENT, ["ip", "saddr", `@${IP_SET_NAME}`, "drop"], 0);
 }
 
 export async function ensureFirewallState(): Promise<void> {
@@ -159,7 +159,7 @@ export async function ensureSingleInterfaceNat(clientSubnet: string): Promise<vo
   await withMutationLock(async () => {
     const rules = await getRulesInChain("nat", "POSTROUTING");
     const existing = rules.find((rule) => rule.comment === NAT_COMMENT);
-    const args = ["add", "rule", TABLE_FAMILY, "nat", "POSTROUTING", "ip", "saddr", clientSubnet, "oifname", UPLINK_INTERFACE, "masquerade", "comment", NAT_COMMENT];
+    const args = ["add", "rule", TABLE_FAMILY, "nat", "POSTROUTING", "ip", "saddr", clientSubnet, "oifname", config.network.uplinkInterface, "masquerade", "comment", NAT_COMMENT];
     if (existing) {
       await execNft(["delete", "rule", TABLE_FAMILY, "nat", "POSTROUTING", "handle", String(existing.handle)]);
     }
