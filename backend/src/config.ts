@@ -41,6 +41,12 @@ if (
   );
 }
 
+const dnsServers = (process.env.DNS_SERVERS ?? "1.1.1.1,8.8.8.8")
+  .split(",")
+  .map((value) => value.trim())
+  .filter(Boolean);
+if (dnsServers.length === 0) throw new Error("DNS_SERVERS must contain at least one server");
+
 export const config = {
   nodeEnv: process.env.NODE_ENV ?? "development",
   server: {
@@ -66,10 +72,7 @@ export const config = {
     vpnConfigPath: required("SING_BOX_CONFIG_PATH"),
     vpnTunAddress: required("VPN_TUN_ADDRESS"),
     sshPort: numberFromEnv("SSH_PORT", 22),
-    dnsServers: (process.env.DNS_SERVERS ?? "1.1.1.1,8.8.8.8")
-      .split(",")
-      .map((value) => value.trim())
-      .filter(Boolean),
+    dnsServers,
   },
   setup: {
     dhcpReservationsPath: required("DHCP_RESERVATIONS_PATH"),
