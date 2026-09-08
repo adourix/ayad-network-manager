@@ -1,6 +1,6 @@
 import type { DeviceRepository } from "../../domain/repositories/DeviceRepository.js";
 import type { DevicePolicyRepository } from "../../domain/repositories/DevicePolicyRepository.js";
-import type { DhcpLeaseReader } from "../devices/DhcpLeaseReader.js";
+import type { DhcpLeaseReader } from "../../domain/value-objects/NetworkObservation.js";
 import type { BlockedDeviceRepository } from "../../domain/repositories/BlockedDeviceRepository.js";
 import type { DeviceBlocker } from "./DeviceBlocker.js";
 
