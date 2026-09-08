@@ -20,6 +20,35 @@ type Job = () => Promise<void>;
 function ifaceAllowed(value: string): boolean { return value === "ifb0" || value === clientInterface || value === uplinkInterface; }
 function validInterface(value: string): boolean { return /^[a-zA-Z0-9_.:-]{1,32}$/.test(value) && ifaceAllowed(value); }
 function validSnapshotPath(value: string): boolean { const path = resolve(value); return path.startsWith(`${setupSnapshotDir}/`) && path.endsWith("/nftables.bak"); }
+function validIpv4(value: string): boolean {
+  const parts = value.split(".");
+  return parts.length === 4 && parts.every((part) => /^(0|[1-9][0-9]{0,2})$/.test(part) && Number(part) <= 255);
+}
+function validAccountingCounterName(value: string): boolean { return /^dev_(download|upload)_[0-9a-f]{12}$/.test(value); }
+function validAccountingRule(args: string[]): boolean {
+  if (args[2] !== "inet" || args[3] !== "ayad_nm" || args[4] !== "accounting") return false;
+
+  if (args[0] === "delete") {
+    return args.length === 7 && args[1] === "rule" && args[5] === "handle" && /^[1-9][0-9]*$/.test(args[6]!);
+  }
+
+  const offset = args[0] === "replace" ? 7 : 5;
+  if (args[1] !== "rule" || (args[0] === "replace" && (args.length < 8 || args[5] !== "handle" || !/^[1-9][0-9]*$/.test(args[6]!)))) return false;
+  if (!["add", "replace"].includes(args[0]!)) return false;
+
+  const expression = args.slice(offset);
+  if (expression.length !== 9) return false;
+
+  const direction = expression[0] === "oifname" && expression[2] === "ip" && expression[3] === "daddr"
+    ? "download"
+    : expression[0] === "iifname" && expression[2] === "ip" && expression[3] === "saddr"
+      ? "upload"
+      : null;
+  if (!direction || !validInterface(expression[1]!) || !validIpv4(expression[4]!)) return false;
+  if (expression[5] !== "counter" || expression[6] !== "name" || !validAccountingCounterName(expression[7]!) || expression[8] !== `ayad_nm_${direction}_${expression[7]!.slice(direction === "download" ? 13 : 11)}`) return false;
+
+  return expression[7]!.startsWith(`dev_${direction}_`);
+}
 function isNftMutation(args: string[]): boolean { return args[0] !== "-c" && args[0] !== "-j" && args[0] !== "-a" && ["add", "insert", "delete", "replace", "flush", "reset", "-f"].includes(args[0] ?? ""); }
 function valid(command: string, args: string[]): boolean {
   if (!allowed.has(command) || args.length > 64 || args.some((arg) => typeof arg !== "string" || arg.length > 512 || /\0/.test(arg))) return false;
@@ -63,16 +92,25 @@ function valid(command: string, args: string[]): boolean {
 
     const target = args[1];
     if (target === "counter") {
-      return args[0] === "add" && args.length === 5 && args[2] === "inet" && args[3] === "ayad_nm" && /^dev_(download|upload)_[0-9a-f]{12}$/.test(args[4]!);
+      return args[0] === "add" && args.length === 5 && args[2] === "inet" && args[3] === "ayad_nm" && validAccountingCounterName(args[4]!);
+    }
+
+    if (target === "table") {
+      return args[0] === "add" && args.length === 4 && args[2] === "inet" && args[3] === "ayad_nm";
+    }
+
+    if (target === "chain") {
+      return args[0] === "add" && args.length === 15 && args[2] === "inet" && args[3] === "ayad_nm" && args[4] === "accounting" && args[5] === "{" && args[6] === "type" && args[7] === "filter" && args[8] === "hook" && args[9] === "forward" && args[10] === "priority" && args[11] === "filter" && args[12] === ";" && args[13] === "policy" && args[14] === "accept";
     }
 
     if (!["set", "element", "rule"].includes(target ?? "")) return false;
+    if (target === "rule" && args[3] === "ayad_nm" && args[4] === "accounting") return validAccountingRule(args);
     if (target === "set" && args[0] !== "add") return false;
     if (target === "element" && !["add", "delete"].includes(args[0]!)) return false;
     if (args[2] !== "ip") return false;
     if (target === "set" || target === "element") return args[3] === "filter" && (args[4] === "blocked_macs" || args[4] === "blocked_ips");
     if (args[3] === "filter" || args[3] === "nat") return true;
-    return args[3] === "ayad_nm" && args[4] === "accounting";
+    return false;
   }
   return false;
 }
