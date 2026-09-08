@@ -1,6 +1,4 @@
-import type { DhcpLease } from "../../application/devices/DhcpLeaseReader.js";
-import type { NeighborEntry } from "../../application/devices/NeighborTableReader.js";
-import type { CapturedIdentity } from "../../application/devices/BroadcastCaptureReader.js";
+import type { DhcpLease, NeighborEntry, CapturedIdentity } from "../value-objects/NetworkObservation.js";
 
 export interface ValidatedDeviceIdentity {
   mac: string;
