@@ -54,6 +54,7 @@ import { DhcpReservationService } from "./application/setup/DhcpReservationServi
 import { AuditedSystemCommandExecutor } from "./infrastructure/enforcement/AuditedSystemCommandExecutor.js";
 import { PrismaBlockedDeviceRepository } from "./infrastructure/database/PrismaBlockedDeviceRepository.js";
 import { PrismaNeighborObservationRepository } from "./infrastructure/database/PrismaNeighborObservationRepository.js";
+import { PrismaQuotaPeriodRepository } from "./infrastructure/database/PrismaQuotaPeriodRepository.js";
 
 if (config.network.networkMode !== "single-interface-ifb") throw new Error("Dual-interface mode is reserved for the next implementation phase; use NETWORK_MODE=single-interface-ifb");
 if (config.nodeEnv === "production" && (!config.server.tlsCertPath || !config.server.tlsKeyPath)) throw new Error("TLS_CERT_PATH and TLS_KEY_PATH are required in production");
@@ -92,7 +93,9 @@ const trafficPolicyValidator = new DefaultTrafficPolicyValidator(config.network.
 const trafficEnforcer = new SingleInterfaceIfbTrafficEnforcer(config.network.uplinkBandwidthMbps, config.network.lanInterface, systemCommandExecutor, ifbManager, tcStateReader);
 const trafficEnforcementService = new TrafficEnforcementService(trafficEnforcer, trafficPolicyValidator, deviceRepository, policyRepository, config.network.quotaThrottleMbps, operationsRepository);
 const devicePolicyService = new DevicePolicyService(deviceRepository, policyRepository, policyCatalogRepository);
-const notificationRepository = new PrismaNotificationRepository(); const quotaService = new QuotaService(deviceRepository, policyRepository, trafficEnforcementService, firewallService, notificationRepository);
+const notificationRepository = new PrismaNotificationRepository();
+const quotaPeriodRepository = new PrismaQuotaPeriodRepository();
+const quotaService = new QuotaService(deviceRepository, policyRepository, trafficEnforcementService, firewallService, notificationRepository, quotaPeriodRepository);
 const trafficUsageReader = new NftTrafficUsageReader({ mode: config.network.networkMode, clientInterface: config.network.clientInterface, uplinkInterface: null, clientSubnet: config.network.clientSubnet }, systemCommandExecutor);
 const trafficSampleRepository = new PrismaTrafficSampleRepository(); const trafficAccountingService = new TrafficAccountingService(deviceRepository, discoveryService, trafficUsageReader, trafficSampleRepository, quotaService);
 const trafficReconciliationService = new TrafficReconciliationService(deviceRepository, policyRepository, trafficEnforcer);
