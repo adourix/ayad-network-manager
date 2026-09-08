@@ -71,11 +71,19 @@ export class QuotaService {
     const device = await resolveDeviceIdentifier(this.deviceRepository, mac);
     if (!device) return null;
     const policy = await this.policyRepository.findByDeviceId(device.id);
-    if (!policy || policy.quota === null || policy.quotaPeriod === null) {
+    if (!policy) return null;
+
+    // A quota can be removed by policy PATCH. If an older exhausted quota had
+    // already enforced a block/throttle, reconcile that stale enforcement when
+    // the quota state is observed again. Manual blocks are preserved.
+    if (policy.quota === null || policy.quotaPeriod === null) {
+      if (policy.quotaEnforcedAction) {
+        await this.clearQuotaEnforcement(device.id, mac, policy.quotaEnforcedAction);
+      }
       return {
         quota: null,
-        quotaPeriod: policy?.quotaPeriod ?? null,
-        quotaAction: policy?.quotaAction ?? null,
+        quotaPeriod: policy.quotaPeriod,
+        quotaAction: policy.quotaAction,
         periodStart: null,
         periodEnd: null,
         usedDownloadBytes: 0n,
@@ -94,7 +102,11 @@ export class QuotaService {
     const device = await resolveDeviceIdentifier(this.deviceRepository, mac);
     if (!device) return null;
     const policy = await this.policyRepository.findByDeviceId(device.id);
-    if (!policy || policy.quota === null || policy.quotaPeriod === null) return null;
+    if (!policy) return null;
+    if (policy.quota === null || policy.quotaPeriod === null) {
+      if (policy.quotaEnforcedAction) await this.clearQuotaEnforcement(device.id, mac, policy.quotaEnforcedAction);
+      return null;
+    }
     const period = await this.getOrCreateCurrentPeriod(device.id, policy.quotaPeriod, timestamp);
     const updated = await this.quotaPeriodRepository.updateUsage(period.id, period.usedDownloadBytes + downloadBytes, period.usedUploadBytes + uploadBytes);
     await this.notifyThresholds(device.id, mac, policy.quota, period.usedDownloadBytes + downloadBytes + period.usedUploadBytes + uploadBytes, period.periodStart);
@@ -120,32 +132,18 @@ export class QuotaService {
     return this.buildView(policy.quota, policy.quotaPeriod, policy.quotaAction, period);
   }
 
-  /**
-   * Remove the quota configuration completely. If quota exhaustion previously
-   * enforced a block/throttle, that quota-only enforcement is removed too.
-   * Manual blocks remain untouched.
-   */
   async clearQuota(mac: string): Promise<QuotaView | null> {
     const device = await resolveDeviceIdentifier(this.deviceRepository, mac);
     if (!device) return null;
     const policy = await this.policyRepository.findByDeviceId(device.id);
     if (!policy) return null;
-
     await this.clearQuotaEnforcement(device.id, mac, policy.quotaEnforcedAction);
-
     if (policy.quotaPeriod !== null) {
       const { start, end } = calculatePeriod(policy.quotaPeriod, new Date());
       const period = await this.quotaPeriodRepository.findCurrent(device.id, policy.quotaPeriod, new Date());
       if (period) await this.quotaPeriodRepository.reset(period.id, start, end);
     }
-
-    await this.policyRepository.upsert(device.id, {
-      quota: null,
-      quotaPeriod: null,
-      quotaAction: null,
-      quotaEnforcedAction: null,
-    });
-
+    await this.policyRepository.upsert(device.id, { quota: null, quotaPeriod: null, quotaAction: null, quotaEnforcedAction: null });
     return this.getQuota(mac);
   }
 
@@ -167,7 +165,6 @@ export class QuotaService {
         await this.trafficEnforcementService.applyQuotaThrottle(mac);
         break;
       case "block":
-        // Quota enforcement must not mutate the manual `blocked` desired state.
         await this.firewallService.blockForQuota(mac);
         await this.policyRepository.upsert(deviceId, { quotaEnforcedAction: "block" });
         return;
