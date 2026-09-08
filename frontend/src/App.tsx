@@ -1,18 +1,15 @@
 import { useEffect, useState } from "react";
 import type { Device } from "./types/device";
 import { deviceWebSocket } from "./services/websocket";
+import VpnSettings from "./components/VpnSettings";
 
 function App() {
-  const [devices, setDevices] =
-    useState<Device[]>([]);
+  const [devices, setDevices] = useState<Device[]>([]);
 
   useEffect(() => {
-    const unsubscribe =
-      deviceWebSocket.subscribe(
-        (nextDevices) => {
-          setDevices(nextDevices);
-        },
-      );
+    const unsubscribe = deviceWebSocket.subscribe((nextDevices) => {
+      setDevices(nextDevices);
+    });
 
     deviceWebSocket.connect();
 
@@ -22,152 +19,78 @@ function App() {
     };
   }, []);
 
-  /*
-   * Only show devices that are currently
-   * confirmed online.
-   *
-   * Offline devices are completely hidden
-   * from the dashboard.
-   */
-  const visibleDevices =
-    devices.filter(
-      (device) =>
-        device.online === true,
-    );
-
-  const onlineCount =
-    visibleDevices.length;
-
-  const blockedCount =
-    visibleDevices.filter(
-      (device) =>
-        device.blocked,
-    ).length;
+  const visibleDevices = devices.filter((device) => device.online === true);
+  const onlineCount = visibleDevices.length;
+  const blockedCount = visibleDevices.filter((device) => device.blocked).length;
 
   return (
-    <main
-      style={{
-        padding: "2rem",
-        fontFamily:
-          "system-ui, sans-serif",
-      }}
-    >
-      <h1>
-        Network Dashboard
-      </h1>
-
-      {/* Summary */}
-      <div
-        style={{
-          display: "flex",
-          gap: "3rem",
-          marginBottom: "2rem",
-        }}
-      >
+    <main className="dashboard">
+      <header className="dashboard-header">
         <div>
-          <strong>
-            Devices
-          </strong>
-
-          <div>
-            {onlineCount}
-          </div>
+          <p className="eyebrow">Ayad Network Manager</p>
+          <h1>Network Dashboard</h1>
+          <p className="dashboard-subtitle">Monitor connected devices and control global network egress.</p>
         </div>
+      </header>
 
-        <div>
-          <strong>
-            Online
-          </strong>
-
-          <div>
-            {onlineCount}
-          </div>
+      <div className="summary-grid">
+        <div className="summary-card">
+          <span>Devices</span>
+          <strong>{onlineCount}</strong>
         </div>
-
-        <div>
-          <strong>
-            Blocked
-          </strong>
-
-          <div>
-            {blockedCount}
-          </div>
+        <div className="summary-card">
+          <span>Online</span>
+          <strong>{onlineCount}</strong>
+        </div>
+        <div className="summary-card">
+          <span>Blocked</span>
+          <strong>{blockedCount}</strong>
         </div>
       </div>
 
-      {/* Devices table */}
-      <table
-        style={{
-          width: "100%",
-          borderCollapse:
-            "collapse",
-        }}
-      >
-        <thead>
-          <tr>
-            <th align="left">
-              Status
-            </th>
+      <VpnSettings />
 
-            <th align="left">
-              IP
-            </th>
+      <section className="devices-card">
+        <div className="section-header">
+          <div>
+            <p className="eyebrow">Clients</p>
+            <h2>Online devices</h2>
+          </div>
+          <span className="device-count">{onlineCount} online</span>
+        </div>
 
-            <th align="left">
-              MAC
-            </th>
-
-            <th align="left">
-              Hostname
-            </th>
-
-            <th align="left">
-              State
-            </th>
-
-            <th align="left">
-              Blocked
-            </th>
-          </tr>
-        </thead>
-
-        <tbody>
-          {visibleDevices.map(
-            (device) => (
-              <tr
-                key={device.mac}
-              >
-                <td>
-                  Online
-                </td>
-
-                <td>
-                  {device.ip}
-                </td>
-
-                <td>
-                  {device.mac}
-                </td>
-
-                <td>
-                  {device.hostname ??
-                    "-"}
-                </td>
-
-                <td>
-                  {device.state}
-                </td>
-
-                <td>
-                  {device.blocked
-                    ? "Yes"
-                    : "No"}
-                </td>
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Status</th>
+                <th>IP</th>
+                <th>MAC</th>
+                <th>Hostname</th>
+                <th>State</th>
+                <th>Blocked</th>
               </tr>
-            ),
-          )}
-        </tbody>
-      </table>
+            </thead>
+            <tbody>
+              {visibleDevices.map((device) => (
+                <tr key={device.mac}>
+                  <td><span className="online-badge">Online</span></td>
+                  <td>{device.ip}</td>
+                  <td>{device.mac}</td>
+                  <td>{device.hostname ?? "-"}</td>
+                  <td>{device.state}</td>
+                  <td>{device.blocked ? "Yes" : "No"}</td>
+                </tr>
+              ))}
+              {visibleDevices.length === 0 && (
+                <tr>
+                  <td colSpan={6} className="empty-state">No online devices.</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
     </main>
   );
 }
