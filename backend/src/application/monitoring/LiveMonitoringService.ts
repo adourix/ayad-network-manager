@@ -6,6 +6,7 @@ import type {
   NeighborEntry,
   NeighborTableReader,
 } from "../../infrastructure/network/NeighborTableReader.js";
+import { MacAddress } from "../../domain/value-objects/MacAddress.js";
 import { reconcileIdentityObservation } from "../devices/IdentityStateReconciler.js";
 import { PresenceResolver } from "./PresenceResolver.js";
 import {
@@ -107,9 +108,7 @@ export class LiveMonitoringService {
       const mac = discovered.mac.toLowerCase();
       if (knownProxyMacs.has(mac)) continue;
 
-      const existing = await this.deviceRepository.findByMac(
-        { toString: () => mac } as never,
-      );
+      const existing = await this.deviceRepository.findByMac(MacAddress.create(mac));
       const reconciled = reconcileIdentityObservation(existing, discovered);
       const neighbor = neighborByIp.get(reconciled.ip);
       const online = this.presenceResolver.resolve(
