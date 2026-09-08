@@ -122,6 +122,12 @@ export class FirewallService {
         if (!device.ip || !this.deviceBlocker.blockIp) throw new Error("Proxy-backed device has no IP-only enforcement path");
         await this.deviceBlocker.blockIp(device.ip.toString());
       } else await this.deviceBlocker.block(device.mac);
+      await this.blockedDeviceRepository?.recordBlock(
+        device.id,
+        device.l2Visible ? device.mac.toString() : null,
+        device.ip?.toString() ?? null,
+        device.l2Visible ? "quota-mac-enforced" : "quota-ip-enforced-proxy",
+      );
       await this.operationsRepository?.audit({ action: "quota-block-device", mac: device.mac.toString(), deviceId: device.id, actor: "system", details: { result: "success" } });
     } catch (error) {
       await this.operationsRepository?.audit({ action: "quota-block-device", mac: device.mac.toString(), deviceId: device.id, actor: "system", details: { result: "pending", error: error instanceof Error ? error.message : String(error) } });
@@ -139,6 +145,7 @@ export class FirewallService {
       if (this.deviceBlocker.unblockIp) for (const ip of activeIps) await this.deviceBlocker.unblockIp(ip);
       if (activeIps.length === 0 && device.ip && this.deviceBlocker.unblockIp) await this.deviceBlocker.unblockIp(device.ip.toString());
     } else await this.deviceBlocker.unblock(device.mac, device.ip?.toString() ?? null);
+    await this.blockedDeviceRepository?.releaseBlock(device.id);
     await this.operationsRepository?.audit({ action: "quota-unblock-device", mac: device.mac.toString(), deviceId: device.id, actor: "system", details: { result: "success" } });
   }
 }
