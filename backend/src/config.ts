@@ -26,13 +26,6 @@ function networkModeFromEnv(): "dual-interface" | "single-interface-ifb" {
   return value;
 }
 
-function dnsServersFromEnv(): string[] {
-  const value = required("DNS_SERVERS");
-  const servers = value.split(",").map((entry) => entry.trim()).filter(Boolean);
-  if (servers.length === 0) throw new Error("DNS_SERVERS must contain at least one server");
-  return servers;
-}
-
 const clientInterface = required("CLIENT_INTERFACE");
 const uplinkInterface = required("UPLINK_INTERFACE");
 
@@ -47,6 +40,12 @@ if (
     "Production requires ADMIN_PASSWORD_HASH and ADMIN_PASSWORD_SALT; default credentials are forbidden",
   );
 }
+
+const dnsServers = (process.env.DNS_SERVERS ?? "1.1.1.1,8.8.8.8")
+  .split(",")
+  .map((value) => value.trim())
+  .filter(Boolean);
+if (dnsServers.length === 0) throw new Error("DNS_SERVERS must contain at least one server");
 
 export const config = {
   nodeEnv: process.env.NODE_ENV ?? "development",
@@ -73,7 +72,7 @@ export const config = {
     vpnConfigPath: required("SING_BOX_CONFIG_PATH"),
     vpnTunAddress: required("VPN_TUN_ADDRESS"),
     sshPort: numberFromEnv("SSH_PORT", 22),
-    dnsServers: dnsServersFromEnv(),
+    dnsServers,
   },
   setup: {
     dhcpReservationsPath: required("DHCP_RESERVATIONS_PATH"),
