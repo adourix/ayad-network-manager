@@ -120,6 +120,35 @@ export class QuotaService {
     return this.buildView(policy.quota, policy.quotaPeriod, policy.quotaAction, period);
   }
 
+  /**
+   * Remove the quota configuration completely. If quota exhaustion previously
+   * enforced a block/throttle, that quota-only enforcement is removed too.
+   * Manual blocks remain untouched.
+   */
+  async clearQuota(mac: string): Promise<QuotaView | null> {
+    const device = await resolveDeviceIdentifier(this.deviceRepository, mac);
+    if (!device) return null;
+    const policy = await this.policyRepository.findByDeviceId(device.id);
+    if (!policy) return null;
+
+    await this.clearQuotaEnforcement(device.id, mac, policy.quotaEnforcedAction);
+
+    if (policy.quotaPeriod !== null) {
+      const { start, end } = calculatePeriod(policy.quotaPeriod, new Date());
+      const period = await this.quotaPeriodRepository.findCurrent(device.id, policy.quotaPeriod, new Date());
+      if (period) await this.quotaPeriodRepository.reset(period.id, start, end);
+    }
+
+    await this.policyRepository.upsert(device.id, {
+      quota: null,
+      quotaPeriod: null,
+      quotaAction: null,
+      quotaEnforcedAction: null,
+    });
+
+    return this.getQuota(mac);
+  }
+
   private async enforceQuotaAction(deviceId: number, mac: string): Promise<void> {
     const policy = await this.policyRepository.findByDeviceId(deviceId);
     if (!policy) return;
