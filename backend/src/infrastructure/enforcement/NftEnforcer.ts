@@ -208,6 +208,12 @@ export async function ensureFirewallState(): Promise<void> {
     await ensureManagementAllowRulesUnlocked();
     await ensureIpBlockRuleUnlocked(true);
     await ensureMacBlockRuleUnlocked(true);
+
+    // Keep the pre-routing VPN guard aligned with the canonical blocked IP set.
+    const blockedIps = await getBlockedIps();
+    for (const ip of blockedIps) {
+      await syncVpnBlockedIpUnlocked(ip);
+    }
   });
 }
 
