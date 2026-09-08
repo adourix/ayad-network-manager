@@ -32,6 +32,14 @@ export class PrismaBlockedDeviceRepository implements BlockedDeviceRepository {
     return bindings.map((binding) => binding.ip);
   }
 
+  async activeBindings(): Promise<Array<{ deviceId: number; ip: string }>> {
+    const bindings = await prisma.ipBinding.findMany({
+      where: { active: true, blockedDevice: { active: true } },
+      select: { ip: true, blockedDevice: { select: { deviceId: true } } },
+    });
+    return bindings.map((binding) => ({ deviceId: binding.blockedDevice.deviceId, ip: binding.ip }));
+  }
+
   async releaseBlock(deviceId: number): Promise<void> {
     const record = await prisma.blockedDevice.findUnique({ where: { deviceId } });
     if (!record) return;
