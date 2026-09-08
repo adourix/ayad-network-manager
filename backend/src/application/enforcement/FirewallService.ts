@@ -64,30 +64,46 @@ export class FirewallService {
     });
   }
 
-  /** Rebuild project-owned firewall state from durable policy state. */
+  /**
+   * Rebuild project-owned firewall state from durable policy state.
+   *
+   * IMPORTANT: blocked IPs are durable IpBindings. Their removal is owned by
+   * positive-evidence IP reconciliation or explicit unblock, never by this
+   * snapshot-based firewall reconciliation. In particular, an IP disappearing
+   * from DHCP/ARP must not make an existing blocked IP disappear.
+   */
   async reconcile(): Promise<void> {
     const devices = await this.deviceRepository.findAll();
     const desiredMacs = new Set<string>();
-    const desiredIps = new Set<string>();
 
     for (const device of devices) {
       const policy = await this.policyRepository.findByDeviceId(device.id);
       if (!policy?.blocked || !device.identityValidated) continue;
-      if (device.l2Visible) desiredMacs.add(device.mac.toString());
-      else if (device.ip) desiredIps.add(device.ip.toString());
+
+      // Only independently confirmed L2 identities are eligible for the
+      // permanent MAC-keyed nftables set.
+      if (device.l2Visible) {
+        desiredMacs.add(device.mac.toString());
+      }
+
+      // Proxy-backed devices are IP-enforced through IpBinding. Ensure the
+      // current IP is present, but deliberately do not remove older bindings;
+      // BlockedIpReconciliationService releases those only with positive
+      // reassignment evidence.
+      if (!device.l2Visible && device.ip && this.deviceBlocker.blockIp) {
+        await this.deviceBlocker.blockIp(device.ip.toString());
+      }
     }
 
-    for (const mac of desiredMacs) await this.deviceBlocker.block(MacAddress.create(mac));
-    for (const ip of desiredIps) await this.deviceBlocker.blockIp?.(ip);
+    for (const mac of desiredMacs) {
+      await this.deviceBlocker.block(MacAddress.create(mac));
+    }
 
     const existingMacs = await this.deviceBlocker.getBlockedMacs?.() ?? new Set<string>();
     for (const mac of existingMacs) {
-      if (!desiredMacs.has(mac)) await this.deviceBlocker.unblock(MacAddress.create(mac));
-    }
-
-    const existingIps = await this.deviceBlocker.getBlockedIps?.() ?? new Set<string>();
-    for (const ip of existingIps) {
-      if (!desiredIps.has(ip)) await this.deviceBlocker.unblockIp?.(ip);
+      if (!desiredMacs.has(mac)) {
+        await this.deviceBlocker.unblock(MacAddress.create(mac));
+      }
     }
   }
 
@@ -167,14 +183,20 @@ export class FirewallService {
       return;
     }
 
-    const ip = device.ip?.toString() ?? null;
     await this.policyRepository.upsert(device.id, { blocked: false });
 
     try {
       if (!device.l2Visible) {
-        if (ip && this.deviceBlocker.unblockIp) await this.deviceBlocker.unblockIp(ip);
+        // Remove every active IP binding belonging to the device, not merely
+        // Device.ip. Device.ip is informational and can lag behind IpBinding.
+        const activeIps = await this.blockedDeviceRepository?.activeIps(device.id) ?? [];
+        if (this.deviceBlocker.unblockIp) {
+          for (const ip of activeIps) {
+            await this.deviceBlocker.unblockIp(ip);
+          }
+        }
       } else {
-        await this.deviceBlocker.unblock(macAddress, ip);
+        await this.deviceBlocker.unblock(macAddress, device.ip?.toString() ?? null);
       }
 
       await this.blockedDeviceRepository?.releaseBlock(device.id);
