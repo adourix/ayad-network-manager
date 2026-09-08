@@ -37,7 +37,7 @@ function validAccountingRule(args: string[]): boolean {
   if (!["add", "replace"].includes(args[0]!)) return false;
 
   const expression = args.slice(offset);
-  if (expression.length !== 9) return false;
+  if (expression.length !== 10) return false;
 
   const direction = expression[0] === "oifname" && expression[2] === "ip" && expression[3] === "daddr"
     ? "download"
@@ -45,7 +45,9 @@ function validAccountingRule(args: string[]): boolean {
       ? "upload"
       : null;
   if (!direction || !validInterface(expression[1]!) || !validIpv4(expression[4]!)) return false;
-  if (expression[5] !== "counter" || expression[6] !== "name" || !validAccountingCounterName(expression[7]!) || expression[8] !== `ayad_nm_${direction}_${expression[7]!.slice(direction === "download" ? 13 : 11)}`) return false;
+  if (expression[5] !== "counter" || expression[6] !== "name" || !validAccountingCounterName(expression[7]!)) return false;
+  if (expression[8] !== "comment") return false;
+  if (expression[9] !== `ayad_nm_${direction}_${expression[7]!.slice(direction === "download" ? 13 : 11)}`) return false;
 
   return expression[7]!.startsWith(`dev_${direction}_`);
 }
@@ -100,7 +102,7 @@ function valid(command: string, args: string[]): boolean {
     }
 
     if (target === "chain") {
-      return args[0] === "add" && args.length === 15 && args[2] === "inet" && args[3] === "ayad_nm" && args[4] === "accounting" && args[5] === "{" && args[6] === "type" && args[7] === "filter" && args[8] === "hook" && args[9] === "forward" && args[10] === "priority" && args[11] === "filter" && args[12] === ";" && args[13] === "policy" && args[14] === "accept";
+      return args[0] === "add" && args.length === 15 && args[2] === "inet" && args[3] === "ayad_nm" && args[4] === "accounting" && args[5] === "{" && args[6] === "type" && args[7] === "filter" && args[8] === "hook" && args[9] === "forward" && args[10] === "priority" && args[11] === "filter" && args[12] === ";" && args[13] === "policy" && args[14] === "accept" && args[15] === ";";
     }
 
     if (!["set", "element", "rule"].includes(target ?? "")) return false;
