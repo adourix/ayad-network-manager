@@ -52,7 +52,6 @@ import { LinuxSetupProbe } from "./infrastructure/setup/LinuxSetupProbe.js";
 import { setupRoutes } from "./interfaces/http/routes/setup.js";
 import { DhcpReservationService } from "./application/setup/DhcpReservationService.js";
 import { AuditedSystemCommandExecutor } from "./infrastructure/enforcement/AuditedSystemCommandExecutor.js";
-import { NotificationDeliveryWorker } from "./infrastructure/notifications/NotificationDeliveryWorker.js";
 import { PrismaBlockedDeviceRepository } from "./infrastructure/database/PrismaBlockedDeviceRepository.js";
 import { PrismaNeighborObservationRepository } from "./infrastructure/database/PrismaNeighborObservationRepository.js";
 
@@ -87,7 +86,7 @@ const firewallService = new FirewallService(deviceBlocker, deviceRepository, pol
 const blockedIpReconciliationService = new BlockedIpReconciliationService(deviceRepository, policyRepository, dhcpLeaseReader, neighborTableReader, config.network.lanInterface, broadcastCaptureReader, 10_000, blockedDeviceRepository);
 const ipBindingLifecycleService = new IpBindingLifecycleService(deviceRepository, policyRepository, dhcpLeaseReader, blockedDeviceRepository, deviceBlocker, 10_000);
 const deviceService = new DeviceService(discoveryService, deviceRepository, blockedDeviceReader);
-const liveMonitoringService = new LiveMonitoringService(discoveryService, neighborTableReader, blockedDeviceReader, config.network.lanInterface);
+const liveMonitoringService = new LiveMonitoringService(discoveryService, neighborTableReader, blockedDeviceReader, config.network.lanInterface, blockedDeviceRepository);
 const ifbManager = new LinuxIfbManager(systemCommandExecutor); const tcStateReader = new LinuxTcStateReader(systemCommandExecutor);
 const trafficPolicyValidator = new DefaultTrafficPolicyValidator(config.network.uplinkBandwidthMbps);
 const trafficEnforcer = new SingleInterfaceIfbTrafficEnforcer(config.network.uplinkBandwidthMbps, config.network.lanInterface, systemCommandExecutor, ifbManager, tcStateReader);
