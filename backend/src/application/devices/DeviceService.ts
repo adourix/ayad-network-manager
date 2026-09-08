@@ -1,20 +1,9 @@
-import type {
-  DeviceRepository,
-} from "../../domain/repositories/DeviceRepository.js";
-
-import {
-  IpAddress,
-} from "../../domain/value-objects/IpAddress.js";
-
-import {
-  MacAddress,
-} from "../../domain/value-objects/MacAddress.js";
-
-import type {
-  DeviceDiscoveryService,
-} from "./DeviceDiscoveryService.js";
-import { reconcileIdentityObservation } from "./IdentityStateReconciler.js";
+import type { DeviceRepository } from "../../domain/repositories/DeviceRepository.js";
 import type { DevicePolicyRepository } from "../../domain/repositories/DevicePolicyRepository.js";
+import { IpAddress } from "../../domain/value-objects/IpAddress.js";
+import { MacAddress } from "../../domain/value-objects/MacAddress.js";
+import type { DeviceDiscoveryService } from "./DeviceDiscoveryService.js";
+import { reconcileIdentityObservation } from "./IdentityStateReconciler.js";
 
 export interface DeviceView {
   id: number;
