@@ -23,6 +23,8 @@ export class DeviceDiscoveryService {
     if (lastDhcp?.clientMac && lastDhcp.messageType?.toLowerCase() === "request" && Date.now() - lastDhcp.capturedAt.getTime() <= 60_000) {
       renewalObservedMacs.add(lastDhcp.clientMac.trim().toLowerCase());
     }
+    for (const mac of this.broadcastCaptureReader?.recentRecheckAttemptMacs() ?? []) renewalObservedMacs.add(mac);
+
     const observations = this.identityValidator.validate(leases, neighbors, captures, renewalObservedMacs);
     if (!this.observationRepository) return observations;
 
