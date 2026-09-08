@@ -1,25 +1,9 @@
 {
-  "name": "frontend",
+  "name": "ayad-network-manager",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0",
   "type": "module",
-  "scripts": {
-    "dev": "vite",
-    "build": "tsc -b && vite build",
-    "lint": "oxlint",
-    "preview": "vite preview"
-  },
-  "dependencies": {
-    "react": "^19.2.8",
-    "react-dom": "^19.2.8"
-  },
-  "devDependencies": {
-    "@types/node": "^24.13.3",
-    "@types/react": "^19.2.17",
-    "@types/react-dom": "^19.2.3",
-    "@vitejs/plugin-react": "^6.0.4",
-    "oxlint": "^1.75.0",
-    "typescript": "~6.0.2",
-    "vite": "^8.2.0"
-  }
+  "scripts": {"dev":"vite","build":"tsc -b && vite build","lint":"oxlint","preview":"vite preview"},
+  "dependencies": {"@tanstack/react-query":"^5.90.0","react":"^19.2.8","react-dom":"^19.2.8","react-router-dom":"^7.9.5","recharts":"^3.2.1"},
+  "devDependencies": {"@types/node":"^24.13.3","@types/react":"^19.2.17","@types/react-dom":"^19.2.3","@vitejs/plugin-react":"^6.0.4","concurrently":"^9.2.1","cross-env":"^10.1.0","electron":"^38.1.0","electron-builder":"^26.0.12","oxlint":"^1.75.0","typescript":"~6.0.2","vite":"^8.2.0","vite-plugin-pwa":"^1.0.3","wait-on":"^9.0.1"}
 }
