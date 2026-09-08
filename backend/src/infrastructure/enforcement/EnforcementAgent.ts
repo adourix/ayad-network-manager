@@ -102,12 +102,12 @@ function valid(command: string, args: string[]): boolean {
     }
 
     if (target === "chain") {
-      return args[0] === "add" && args.length === 15 && args[2] === "inet" && args[3] === "ayad_nm" && args[4] === "accounting" && args[5] === "{" && args[6] === "type" && args[7] === "filter" && args[8] === "hook" && args[9] === "forward" && args[10] === "priority" && args[11] === "filter" && args[12] === ";" && args[13] === "policy" && args[14] === "accept" && args[15] === ";";
+      return args[0] === "add" && args.length === 16 && args[2] === "inet" && args[3] === "ayad_nm" && args[4] === "accounting" && args[5] === "{" && args[6] === "type" && args[7] === "filter" && args[8] === "hook" && args[9] === "forward" && args[10] === "priority" && args[11] === "filter" && args[12] === ";" && args[13] === "policy" && args[14] === "accept" && args[15] === ";" && args[16] === "}";
     }
 
     if (!["set", "element", "rule"].includes(target ?? "")) return false;
     if (target === "rule" && args[3] === "ayad_nm" && args[4] === "accounting") return validAccountingRule(args);
-    if (target === "set" && args[0] !== "add") return false;
+    if (target === "set' && args[0] !== "add") return false;
     if (target === "element" && !["add", "delete"].includes(args[0]!)) return false;
     if (args[2] !== "ip") return false;
     if (target === "set" || target === "element") return args[3] === "filter" && (args[4] === "blocked_macs" || args[4] === "blocked_ips");
@@ -152,7 +152,7 @@ const server = createServer((socket) => {
   };
   const handle = (): void => { if (handled) return; handled = true; let request: Request; try { request = JSON.parse(input.trim()) as Request; if (!Array.isArray(request.args) || typeof request.command !== "string" || !valid(request.command, request.args)) throw new Error("command rejected by enforcement agent"); } catch (error) { send({ ok: false, error: error instanceof Error ? error.message : String(error) }); return; } const background = isBackgroundRead(request.command, request.args); try { scheduler.enqueue(() => executeRequest(request, background), background); } catch (error) { send({ ok: false, error: error instanceof Error ? error.message : String(error) }); } };
   socket.on("data", (chunk) => { input += chunk.toString(); if (input.length > 64 * 1024) { socket.destroy(); return; } if (input.includes("\n")) handle(); });
-  socket.on("end", () => { if (!handled && input.trim()) handle(); });
+  socket.on("error", () => {});
 });
-server.listen(socketPath, () => process.stdout.write(`enforcement agent listening on ${socketPath}\n`));
-process.on("SIGTERM", () => { server.close(() => { try { unlinkSync(socketPath); } catch {} process.exit(0); }); });
+server.on("error", (error) => { console.error("enforcement server error", error); process.exitCode = 1; });
+server.listen(socketPath, () => { console.log(`enforcement agent listening on ${socketPath}`); });
