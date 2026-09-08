@@ -25,6 +25,9 @@ async function execNft(args: string[]): Promise<{ stdout: string; stderr: string
 
 const TABLE_FAMILY = "ip";
 const TABLE_NAME = "filter";
+const VPN_TABLE_NAME = "ayad_nm";
+const VPN_PREROUTING_CHAIN = "blocked_devices_prerouting";
+const VPN_IP_SET_NAME = "blocked_ips";
 const MAC_SET_NAME = "blocked_macs";
 const IP_SET_NAME = "blocked_ips";
 const FORWARD_CHAIN = "FORWARD";
@@ -32,6 +35,7 @@ const MAC_REGEX = /^([0-9a-f]{2}:){5}[0-9a-f]{2}$/i;
 const IPV4_REGEX = /^(?:\d{1,3}\.){3}\d{1,3}$/;
 const MAC_BLOCK_COMMENT = "ayad_nm_blocked_macs";
 const IP_BLOCK_COMMENT = "ayad_nm_blocked_ips";
+const VPN_IP_BLOCK_COMMENT = "ayad_nm_vpn_blocked_ips";
 const NAT_COMMENT = "ayad_nm_single_interface_nat";
 const SSH_ALLOW_COMMENT = "ayad_nm_allow_ssh_management";
 const DASHBOARD_ALLOW_COMMENT = "ayad_nm_allow_dashboard_management";
@@ -121,6 +125,47 @@ async function ensureSetUnlocked(name: string, type: string): Promise<void> {
   }
 }
 
+async function ensureVpnEnforcementStateUnlocked(): Promise<void> {
+  try {
+    await execNft(["add", "table", TABLE_FAMILY, VPN_TABLE_NAME]);
+  } catch (error) {
+    if (!isAlreadyExists(error)) throw error;
+  }
+
+  try {
+    await execNft(["add", "set", TABLE_FAMILY, VPN_TABLE_NAME, VPN_IP_SET_NAME, "{", "type", "ipv4_addr", ";", "}"]);
+  } catch (error) {
+    if (!isAlreadyExists(error)) throw error;
+  }
+
+  try {
+    await execNft([
+      "add", "chain", TABLE_FAMILY, VPN_TABLE_NAME, VPN_PREROUTING_CHAIN,
+      "{", "type", "filter", "hook", "prerouting", "priority", "-301", ";", "policy", "accept", ";", "}",
+    ]);
+  } catch (error) {
+    if (!isAlreadyExists(error)) throw error;
+  }
+
+  const { stdout } = await execNft(["-a", "list", "chain", TABLE_FAMILY, VPN_TABLE_NAME, VPN_PREROUTING_CHAIN]);
+  if (!stdout.includes(VPN_IP_BLOCK_COMMENT)) {
+    await execNft([
+      "add", "rule", TABLE_FAMILY, VPN_TABLE_NAME, VPN_PREROUTING_CHAIN,
+      "ip", "saddr", `@${VPN_IP_SET_NAME}`, "counter", "drop", "comment", VPN_IP_BLOCK_COMMENT,
+    ]);
+  }
+}
+
+async function syncVpnBlockedIpUnlocked(ip: string): Promise<void> {
+  await ensureVpnEnforcementStateUnlocked();
+  await addElementUnlocked(VPN_TABLE_NAME, VPN_IP_SET_NAME, ip);
+}
+
+async function removeVpnBlockedIpUnlocked(ip: string): Promise<void> {
+  await ensureVpnEnforcementStateUnlocked();
+  await deleteElementUnlocked(VPN_TABLE_NAME, VPN_IP_SET_NAME, ip);
+}
+
 /** nft position expects a rule handle, not a zero-based rule index. */
 async function ensureRuleAtPosition(comment: string, ruleArgs: string[], position: number, forceReconcile = false): Promise<void> {
   const rules = await getForwardRules();
@@ -148,12 +193,10 @@ async function ensureRuleAtPosition(comment: string, ruleArgs: string[], positio
 }
 
 async function ensureMacBlockRuleUnlocked(forceReconcile = false): Promise<void> {
-  // MAC blocking applies to every forwarded path, including tunnels/VPN interfaces.
   await ensureRuleAtPosition(MAC_BLOCK_COMMENT, ["ether", "saddr", `@${MAC_SET_NAME}`, "drop"], 1, forceReconcile);
 }
 
 async function ensureIpBlockRuleUnlocked(forceReconcile = false): Promise<void> {
-  // IP-only enforcement must be the first FORWARD rule so it cannot be bypassed by ACCEPT rules or tunnel paths.
   await ensureRuleAtPosition(IP_BLOCK_COMMENT, ["ip", "saddr", `@${IP_SET_NAME}`, "drop"], 0, forceReconcile);
 }
 
@@ -161,8 +204,8 @@ export async function ensureFirewallState(): Promise<void> {
   await withMutationLock(async () => {
     await ensureSetUnlocked(MAC_SET_NAME, "ether_addr");
     await ensureSetUnlocked(IP_SET_NAME, "ipv4_addr");
+    await ensureVpnEnforcementStateUnlocked();
     await ensureManagementAllowRulesUnlocked();
-    // Replace legacy project-owned rules that were constrained to the uplink interface.
     await ensureIpBlockRuleUnlocked(true);
     await ensureMacBlockRuleUnlocked(true);
   });
@@ -213,8 +256,8 @@ export async function getBlockedIps(): Promise<Set<string>> {
   return blocked;
 }
 
-async function addElementUnlocked(setName: string, value: string): Promise<void> {
-  const args = ["add", "element", TABLE_FAMILY, TABLE_NAME, setName, `{ ${value} }`];
+async function addElementUnlocked(table: string, setName: string, value: string): Promise<void> {
+  const args = ["add", "element", TABLE_FAMILY, table, setName, `{ ${value} }`];
   try {
     await execNft(args);
   } catch (error) {
@@ -222,8 +265,8 @@ async function addElementUnlocked(setName: string, value: string): Promise<void>
   }
 }
 
-async function deleteElementUnlocked(setName: string, value: string): Promise<void> {
-  const args = ["delete", "element", TABLE_FAMILY, TABLE_NAME, setName, `{ ${value} }`];
+async function deleteElementUnlocked(table: string, setName: string, value: string): Promise<void> {
+  const args = ["delete", "element", TABLE_FAMILY, table, setName, `{ ${value} }`];
   try {
     await execNft(args);
   } catch (error) {
@@ -232,8 +275,11 @@ async function deleteElementUnlocked(setName: string, value: string): Promise<vo
 }
 
 async function blockIpUnlocked(ip: string): Promise<void> {
+  const validatedIp = validateIp(ip);
   await ensureIpBlockRuleUnlocked();
-  await addElementUnlocked(IP_SET_NAME, validateIp(ip));
+  await ensureVpnEnforcementStateUnlocked();
+  await addElementUnlocked(IP_SET_NAME, IP_SET_NAME, validatedIp);
+  await syncVpnBlockedIpUnlocked(validatedIp);
 }
 
 export async function blockIp(ip: string): Promise<void> {
@@ -241,14 +287,18 @@ export async function blockIp(ip: string): Promise<void> {
 }
 
 export async function unblockIp(ip: string): Promise<void> {
-  await withMutationLock(() => deleteElementUnlocked(IP_SET_NAME, validateIp(ip)));
+  await withMutationLock(async () => {
+    const validatedIp = validateIp(ip);
+    await deleteElementUnlocked(IP_SET_NAME, IP_SET_NAME, validatedIp);
+    await removeVpnBlockedIpUnlocked(validatedIp);
+  });
 }
 
 export async function blockDevice(mac: string, ip?: string | null): Promise<void> {
   await withMutationLock(async () => {
     const validatedMac = validateMac(mac);
     await ensureMacBlockRuleUnlocked();
-    await addElementUnlocked(MAC_SET_NAME, validatedMac);
+    await addElementUnlocked(MAC_SET_NAME, MAC_SET_NAME, validatedMac);
     if (ip) await blockIpUnlocked(ip);
   });
 }
@@ -256,7 +306,11 @@ export async function blockDevice(mac: string, ip?: string | null): Promise<void
 export async function unblockDevice(mac: string, ip?: string | null): Promise<void> {
   await withMutationLock(async () => {
     const validatedMac = validateMac(mac);
-    await deleteElementUnlocked(MAC_SET_NAME, validatedMac);
-    if (ip) await deleteElementUnlocked(IP_SET_NAME, validateIp(ip));
+    await deleteElementUnlocked(MAC_SET_NAME, MAC_SET_NAME, validatedMac);
+    if (ip) {
+      const validatedIp = validateIp(ip);
+      await deleteElementUnlocked(IP_SET_NAME, IP_SET_NAME, validatedIp);
+      await removeVpnBlockedIpUnlocked(validatedIp);
+    }
   });
 }
