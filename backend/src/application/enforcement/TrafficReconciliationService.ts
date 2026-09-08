@@ -1,7 +1,7 @@
 import type { DeviceRepository } from "../../domain/repositories/DeviceRepository.js";
 import type { DevicePolicyRepository } from "../../domain/repositories/DevicePolicyRepository.js";
 import type { TrafficEnforcer } from "./TrafficEnforcer.js";
-import { TcClassId } from "../../infrastructure/enforcement/TcClassId.js";
+import { TcClassId } from "../../domain/value-objects/TcClassId.js";
 
 export class TrafficReconciliationService {
   constructor(
@@ -46,7 +46,6 @@ export class TrafficReconciliationService {
 
     for (const { device, policy } of enforceablePolicies) {
       try {
-        // enforceablePolicies guarantees both policy and IP are present.
         if (!policy || !device.ip) continue;
 
         if (policy.downloadLimit !== null) {
