@@ -20,16 +20,11 @@ type Job = () => Promise<void>;
 function ifaceAllowed(value: string): boolean { return value === "ifb0" || value === clientInterface || value === uplinkInterface; }
 function validInterface(value: string): boolean { return /^[a-zA-Z0-9_.:-]{1,32}$/.test(value) && ifaceAllowed(value); }
 function validSnapshotPath(value: string): boolean { const path = resolve(value); return path.startsWith(`${setupSnapshotDir}/`) && path.endsWith("/nftables.bak"); }
-function validIpv4(value: string): boolean {
-  const parts = value.split(".");
-  return parts.length === 4 && parts.every((part) => /^(0|[1-9][0-9]{0,2})$/.test(part) && Number(part) <= 255);
-}
+function validIpv4(value: string): boolean { const parts = value.split("."); return parts.length === 4 && parts.every((part) => /^(0|[1-9][0-9]{0,2})$/.test(part) && Number(part) <= 255); }
 function validAccountingCounterName(value: string): boolean { return /^dev_(download|upload)_[0-9a-f]{12}$/.test(value); }
 function validAccountingRule(args: string[]): boolean {
   if (args[2] !== "inet" || args[3] !== "ayad_nm" || args[4] !== "accounting") return false;
-  if (args[0] === "delete") {
-    return args.length === 7 && args[1] === "rule" && args[5] === "handle" && /^[1-9][0-9]*$/.test(args[6]!);
-  }
+  if (args[0] === "delete") return args.length === 7 && args[1] === "rule" && args[5] === "handle" && /^[1-9][0-9]*$/.test(args[6]!);
   const offset = args[0] === "replace" ? 7 : 5;
   if (args[1] !== "rule" || (args[0] === "replace" && (args.length < 8 || args[5] !== "handle" || !/^[1-9][0-9]*$/.test(args[6]!)))) return false;
   if (!["add", "replace"].includes(args[0]!)) return false;
@@ -84,14 +79,21 @@ function valid(command: string, args: string[]): boolean {
     if (!["add", "insert", "delete", "replace"].includes(args[0] ?? "")) return false;
     const target = args[1];
     if (target === "counter") return args[0] === "add" && args.length === 5 && args[2] === "inet" && args[3] === "ayad_nm" && validAccountingCounterName(args[4]!);
-    if (target === "table") return args[0] === "add" && args.length === 4 && args[2] === "inet" && args[3] === "ayad_nm";
-    if (target === "chain") return args[0] === "add" && args.length === 17 && args[2] === "inet" && args[3] === "ayad_nm" && args[4] === "accounting" && args[5] === "{" && args[6] === "type" && args[7] === "filter" && args[8] === "hook" && args[9] === "forward" && args[10] === "priority" && args[11] === "filter" && args[12] === ";" && args[13] === "policy" && args[14] === "accept" && args[15] === ";" && args[16] === "}";
+    if (target === "table") return args[0] === "add" && args.length === 4 && args[2] === "ip" && args[3] === "ayad_nm";
+    if (target === "chain") return args[0] === "add" && args.length === 17 && args[2] === "ip" && args[3] === "ayad_nm" && args[4] === "blocked_devices_prerouting" && args[5] === "{" && args[6] === "type" && args[7] === "filter" && args[8] === "hook" && args[9] === "prerouting" && args[10] === "priority" && args[11] === "-301" && args[12] === ";" && args[13] === "policy" && args[14] === "accept" && args[15] === ";" && args[16] === "}";
     if (!["set", "element", "rule"].includes(target ?? "")) return false;
+    if (target === "rule" && args[3] === "ayad_nm" && args[4] === "blocked_devices_prerouting") {
+      if (args[0] !== "add" || args.length !== 14) return false;
+      return args[2] === "ip" && args[5] === "ip" && args[6] === "saddr" && args[7] === "@vpn_blocked_ips" && args[8] === "counter" && args[9] === "drop" && args[10] === "comment" && args[11] === "ayad_nm_vpn_blocked_ips";
+    }
     if (target === "rule" && args[3] === "ayad_nm" && args[4] === "accounting") return validAccountingRule(args);
     if (target === "set" && args[0] !== "add") return false;
     if (target === "element" && !["add", "delete"].includes(args[0]!)) return false;
-    if (args[2] !== "ip") return false;
-    if (target === "set" || target === "element") return args[3] === "filter" && (args[4] === "blocked_macs" || args[4] === "blocked_ips");
+    if (args[2] === "ip" && (target === "set" || target === "element")) {
+      if (args[3] === "filter") return args[4] === "blocked_macs" || args[4] === "blocked_ips";
+      if (args[3] === "ayad_nm") return args[4] === "vpn_blocked_ips";
+      return false;
+    }
     if (args[3] === "filter" || args[3] === "nat") return true;
     return false;
   }
