@@ -86,7 +86,7 @@ const deviceBlocker = new NftDeviceBlocker(); const blockedDeviceReader = new Nf
 const firewallService = new FirewallService(deviceBlocker, deviceRepository, policyRepository, operationsRepository, blockedDeviceRepository);
 const blockedIpReconciliationService = new BlockedIpReconciliationService(deviceRepository, policyRepository, dhcpLeaseReader, neighborTableReader, config.network.lanInterface, broadcastCaptureReader, 10_000, blockedDeviceRepository, deviceBlocker);
 const ipBindingLifecycleService = new IpBindingLifecycleService(deviceRepository, policyRepository, dhcpLeaseReader, blockedDeviceRepository, deviceBlocker, 10_000);
-const deviceService = new DeviceService(discoveryService, deviceRepository, blockedDeviceReader);
+const deviceService = new DeviceService(discoveryService, deviceRepository, policyRepository);
 const liveMonitoringService = new LiveMonitoringService(discoveryService, neighborTableReader, blockedDeviceReader, config.network.lanInterface, blockedDeviceRepository);
 const ifbManager = new LinuxIfbManager(systemCommandExecutor); const tcStateReader = new LinuxTcStateReader(systemCommandExecutor);
 const trafficPolicyValidator = new DefaultTrafficPolicyValidator(config.network.uplinkBandwidthMbps);
