@@ -51,7 +51,9 @@ function valid(command: string, args: string[]): boolean {
   }
   if (command === "nft") {
     if (args[0] === "-c") return valid("nft", args.slice(1));
-    if (args[0] === "list") return args.length >= 2 && args.every((arg) => !/[;{}]/.test(arg));
+    const readPrefix = args.filter((arg) => arg === "-j" || arg === "-a");
+    const readArgs = args.filter((arg) => arg !== "-j" && arg !== "-a");
+    if (readPrefix.length <= 2 && readArgs[0] === "list") return args.every((arg) => !/[;{}]/.test(arg));
     if (!["add", "insert", "delete", "replace"].includes(args[0] ?? "")) return false;
     const target = args[1]; if (!["set", "element", "rule"].includes(target ?? "")) return false;
     if (target === "set" && args[0] !== "add") return false;
