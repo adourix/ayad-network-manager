@@ -1,8 +1,8 @@
-import type { DhcpLeaseReader } from "../../infrastructure/network/DhcpLeaseReader.js";
-import type { NeighborTableReader } from "../../infrastructure/network/NeighborTableReader.js";
-import type { DeviceIdentityValidator, ValidatedDeviceIdentity } from "../../infrastructure/network/DeviceIdentityValidator.js";
-import type { BroadcastCaptureReader } from "../../infrastructure/network/BroadcastCaptureReader.js";
+import type { DhcpLeaseReader } from "./DhcpLeaseReader.js";
+import type { NeighborTableReader } from "./NeighborTableReader.js";
+import type { BroadcastCaptureReader } from "./BroadcastCaptureReader.js";
 import type { NeighborObservationRepository } from "../../domain/repositories/NeighborObservationRepository.js";
+import type { DeviceIdentityValidator, ValidatedDeviceIdentity } from "../../domain/services/DeviceIdentityValidator.js";
 
 export class DeviceDiscoveryService {
   constructor(
@@ -15,28 +15,13 @@ export class DeviceDiscoveryService {
   ) {}
 
   async discover(): Promise<ValidatedDeviceIdentity[]> {
-    const [leases, neighbors] = await Promise.all([
-      this.dhcpLeaseReader.read(),
-      this.neighborTableReader.read(this.lanInterface),
-    ]);
-
+    const [leases, neighbors] = await Promise.all([this.dhcpLeaseReader.read(), this.neighborTableReader.read(this.lanInterface)]);
     const captures = this.broadcastCaptureReader?.recentIdentities() ?? [];
     const renewalObservedMacs = new Set<string>();
     const lastDhcp = this.broadcastCaptureReader?.status().lastDhcp;
-    if (
-      lastDhcp?.clientMac &&
-      lastDhcp.messageType?.toLowerCase() === "request" &&
-      Date.now() - lastDhcp.capturedAt.getTime() <= 60_000
-    ) {
-      renewalObservedMacs.add(lastDhcp.clientMac.trim().toLowerCase());
-    }
+    if (lastDhcp?.clientMac && lastDhcp.messageType?.toLowerCase() === "request" && Date.now() - lastDhcp.capturedAt.getTime() <= 60_000) renewalObservedMacs.add(lastDhcp.clientMac.trim().toLowerCase());
 
-    const observations = this.identityValidator.validate(
-      leases,
-      neighbors,
-      captures,
-      renewalObservedMacs,
-    );
+    const observations = this.identityValidator.validate(leases, neighbors, captures, renewalObservedMacs);
     if (!this.observationRepository) return observations;
 
     const now = new Date();
@@ -55,21 +40,11 @@ export class DeviceDiscoveryService {
     await this.observationRepository.resetMissing(keys, now);
 
     return observations.filter((observation) => {
-      if (observation.identitySource === "STATIC_ARP") {
-        return (counts.get(`${observation.mac}|${observation.ip}`) ?? 0) >= 3;
-      }
-      if (observation.proxyMac && observation.identitySource === "PROXY_UNCONFIRMED") {
-        return (counts.get(`${observation.proxyMac}|${observation.ip}`) ?? 0) >= 3;
-      }
+      if (observation.identitySource === "STATIC_ARP") return (counts.get(`${observation.mac}|${observation.ip}`) ?? 0) >= 3;
+      if (observation.proxyMac && observation.identitySource === "PROXY_UNCONFIRMED") return (counts.get(`${observation.proxyMac}|${observation.ip}`) ?? 0) >= 3;
       return true;
     }).map((observation) => {
-      if (
-        observation.proxyMac &&
-        observation.identitySource === "PROXY_UNCONFIRMED" &&
-        (counts.get(`${observation.proxyMac}|${observation.ip}`) ?? 0) < 3
-      ) {
-        return { ...observation, identitySource: "DHCP", identityValidated: false, deferred: true };
-      }
+      if (observation.proxyMac && observation.identitySource === "PROXY_UNCONFIRMED" && (counts.get(`${observation.proxyMac}|${observation.ip}`) ?? 0) < 3) return { ...observation, identitySource: "DHCP" as const, identityValidated: false, deferred: true };
       return observation;
     });
   }
