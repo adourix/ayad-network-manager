@@ -18,3 +18,35 @@ export interface CapturedIdentity {
   sourceIp?: string;
   capturedAt: Date;
 }
+
+export interface LastDhcpMetadata {
+  messageType: string | null;
+  clientMac: string | null;
+  ethernetSource: string | null;
+  sourceIp: string | null;
+  capturedAt: Date;
+}
+
+export interface BroadcastCaptureStatus {
+  running: boolean;
+  interface: string;
+  packetsSeen: number;
+  dhcpPacketsSeen: number;
+  identitiesRecorded: number;
+  lastPacketAt: Date | null;
+  lastError: string | null;
+  lastDhcp: LastDhcpMetadata | null;
+}
+
+export interface DhcpLeaseReader {
+  read(): Promise<DhcpLease[]>;
+}
+
+export interface NeighborTableReader {
+  read(interfaceName: string): Promise<NeighborEntry[]>;
+}
+
+export interface BroadcastCaptureReader {
+  recentIdentities(maxAgeMs?: number): CapturedIdentity[];
+  status(): BroadcastCaptureStatus;
+}
