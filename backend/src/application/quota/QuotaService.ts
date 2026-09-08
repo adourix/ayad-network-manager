@@ -138,7 +138,8 @@ export class QuotaService {
         await this.trafficEnforcementService.applyQuotaThrottle(mac);
         break;
       case "block":
-        await this.firewallService.blockDevice(mac);
+        // Quota enforcement must not mutate the manual `blocked` desired state.
+        await this.firewallService.blockForQuota(mac);
         await this.policyRepository.upsert(deviceId, { quotaEnforcedAction: "block" });
         return;
     }
@@ -147,7 +148,7 @@ export class QuotaService {
 
   private async clearQuotaEnforcement(deviceId: number, mac: string, enforcedAction: string | null): Promise<void> {
     if (enforcedAction === "throttle") await this.trafficEnforcementService.clearQuotaThrottle(mac);
-    if (enforcedAction === "block") await this.firewallService.unblockDevice(mac);
+    if (enforcedAction === "block") await this.firewallService.unblockForQuota(mac);
     await this.policyRepository.upsert(deviceId, { quotaEnforcedAction: null });
   }
 
