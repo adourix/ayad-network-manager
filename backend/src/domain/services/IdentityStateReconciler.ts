@@ -20,9 +20,27 @@ export function reconcileIdentityObservation(
     observed.identitySource === "DHCP_CONFIRMED_PROXY" ||
     observed.identitySource === "STATIC_ARP";
 
-  // Absence of fresh passive evidence is not evidence that a previously
-  // confirmed/accepted identity became invalid. Preserve the trusted state
-  // while still allowing a genuinely positive observation to update it.
+  // A confirmed proxy identity is persistent trust state. A later discovery
+  // cycle with no fresh independent evidence must not silently downgrade it.
+  // The same applies to an explicit administrator acceptance.
+  if (
+    (confirmedProxy || acceptedProxy) &&
+    sameProxy &&
+    !positiveIdentityObservation
+  ) {
+    const { deferred: _deferred, ...observation } = observed;
+    return {
+      ...observation,
+      mac: existing.mac.toString(),
+      identitySource: existing.identitySource,
+      identityValidated: existing.identityValidated || confirmedProxy || acceptedProxy,
+      l2Visible: observed.l2Visible,
+      proxyMac: existing.proxyMac?.toString() ?? observed.proxyMac ?? null,
+    };
+  }
+
+  // Once a proxy identity has been positively confirmed, absence of new
+  // passive evidence is not evidence that it became invalid.
   if (
     existing.identityValidated &&
     sameProxy &&
@@ -36,23 +54,6 @@ export function reconcileIdentityObservation(
       identityValidated: true,
       l2Visible: observed.l2Visible,
       proxyMac: existing.proxyMac?.toString() ?? observed.proxyMac ?? null,
-    };
-  }
-
-  if (
-    (confirmedProxy || acceptedProxy) &&
-    (!positiveIdentityObservation || weakObservation)
-  ) {
-    const { deferred: _deferred, ...observation } = observed;
-    return {
-      ...observation,
-      mac: existing.mac.toString(),
-      identitySource: existing.identitySource,
-      identityValidated: existing.identityValidated,
-      l2Visible: observed.l2Visible,
-      proxyMac: observed.proxyMac
-        ? observed.proxyMac
-        : existing.proxyMac?.toString() ?? null,
     };
   }
 
