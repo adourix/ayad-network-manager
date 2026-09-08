@@ -1,175 +1,40 @@
-import { useEffect, useState } from "react";
-import type { Device } from "./types/device";
-import { deviceWebSocket } from "./services/websocket";
+import {useEffect,useMemo,useState} from 'react';
+import {BrowserRouter,Link,Navigate,Route,Routes,useNavigate,useParams,useLocation} from 'react-router-dom';
+import {useMutation,useQuery,useQueryClient} from '@tanstack/react-query';
+import {Area,AreaChart,CartesianGrid,ResponsiveContainer,Tooltip,XAxis,YAxis} from 'recharts';
+import {AuthProvider,useAuth} from './auth/AuthContext';
+import {api,liveTrafficUrl} from './services/api';
+import type {Device,HistorySample,LiveTraffic,Policy} from './types/api';
+import './App.css';
 
-function App() {
-  const [devices, setDevices] =
-    useState<Device[]>([]);
-
-  useEffect(() => {
-    const unsubscribe =
-      deviceWebSocket.subscribe(
-        (nextDevices) => {
-          setDevices(nextDevices);
-        },
-      );
-
-    deviceWebSocket.connect();
-
-    return () => {
-      unsubscribe();
-      deviceWebSocket.disconnect();
-    };
-  }, []);
-
-  /*
-   * Only show devices that are currently
-   * confirmed online.
-   *
-   * Offline devices are completely hidden
-   * from the dashboard.
-   */
-  const visibleDevices =
-    devices.filter(
-      (device) =>
-        device.online === true,
-    );
-
-  const onlineCount =
-    visibleDevices.length;
-
-  const blockedCount =
-    visibleDevices.filter(
-      (device) =>
-        device.blocked,
-    ).length;
-
-  return (
-    <main
-      style={{
-        padding: "2rem",
-        fontFamily:
-          "system-ui, sans-serif",
-      }}
-    >
-      <h1>
-        Network Dashboard
-      </h1>
-
-      {/* Summary */}
-      <div
-        style={{
-          display: "flex",
-          gap: "3rem",
-          marginBottom: "2rem",
-        }}
-      >
-        <div>
-          <strong>
-            Devices
-          </strong>
-
-          <div>
-            {onlineCount}
-          </div>
-        </div>
-
-        <div>
-          <strong>
-            Online
-          </strong>
-
-          <div>
-            {onlineCount}
-          </div>
-        </div>
-
-        <div>
-          <strong>
-            Blocked
-          </strong>
-
-          <div>
-            {blockedCount}
-          </div>
-        </div>
-      </div>
-
-      {/* Devices table */}
-      <table
-        style={{
-          width: "100%",
-          borderCollapse:
-            "collapse",
-        }}
-      >
-        <thead>
-          <tr>
-            <th align="left">
-              Status
-            </th>
-
-            <th align="left">
-              IP
-            </th>
-
-            <th align="left">
-              MAC
-            </th>
-
-            <th align="left">
-              Hostname
-            </th>
-
-            <th align="left">
-              State
-            </th>
-
-            <th align="left">
-              Blocked
-            </th>
-          </tr>
-        </thead>
-
-        <tbody>
-          {visibleDevices.map(
-            (device) => (
-              <tr
-                key={device.mac}
-              >
-                <td>
-                  Online
-                </td>
-
-                <td>
-                  {device.ip}
-                </td>
-
-                <td>
-                  {device.mac}
-                </td>
-
-                <td>
-                  {device.hostname ??
-                    "-"}
-                </td>
-
-                <td>
-                  {device.state}
-                </td>
-
-                <td>
-                  {device.blocked
-                    ? "Yes"
-                    : "No"}
-                </td>
-              </tr>
-            ),
-          )}
-        </tbody>
-      </table>
-    </main>
-  );
-}
-
-export default App;
+type IconName='dashboard'|'devices'|'traffic'|'vpn'|'logout'|'search'|'refresh'|'shield'|'speed'|'quota'|'usage';
+function Icon({name}:{name:IconName}){const p={dashboard:'M4 4h6v6H4z M14 4h6v6h-6z M4 14h6v6H4z M14 14h6v6h-6z',devices:'M7 3h10v18H7z M10 7h4 M10 11h4 M10 15h4',traffic:'M3 17l5-6 4 3 7-9',vpn:'M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7z',logout:'M10 17l5-5-5-5 M15 12H3 M21 5v14',search:'M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14z M16 16l5 5',refresh:'M20 11a8 8 0 1 0 1 4 M20 5v6h-6',shield:'M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7z',speed:'M4 15a8 8 0 1 1 16 0 M12 11l3-3',quota:'M5 5h14v14H5z M9 9h6v6H9z',usage:'M4 19V5 M4 19h16 M8 15l3-4 3 2 5-7'};return <svg className="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d={p[name]}/></svg>}
+function Protected({children}:{children:React.ReactNode}){return useAuth().isAuthenticated?<>{children}</>:<Navigate to="/login" replace/>}
+function Shell({children}:{children:React.ReactNode}){const {logout}=useAuth();const nav=useNavigate();const loc=useLocation();const links:[string,string,IconName][]=[['/','Dashboard','dashboard'],['/devices','Devices','devices'],['/traffic','Live Traffic','traffic'],['/vpn','VPN','vpn']];return <div className="app-shell"><aside className="sidebar"><Link to="/" className="brand"><span className="brand-mark">A</span><span><b>Ayad</b><small>Network Manager</small></span></Link><nav>{links.map(([href,label,icon])=><Link key={href} to={href} className={loc.pathname===href||(href!=='/'&&loc.pathname.startsWith(href))?'active':''}><Icon name={icon}/><span>{label}</span></Link>)}</nav><div className="sidebar-bottom"><button onClick={async()=>{await logout();nav('/login')}}><Icon name="logout"/><span>Logout</span></button><small>Gateway control plane</small></div></aside><main className="content">{children}</main></div>}
+function Login(){const {isAuthenticated,login}=useAuth();const nav=useNavigate();const [u,setU]=useState('admin'),[p,setP]=useState(''),[e,setE]=useState('');const m=useMutation({mutationFn:()=>login(u,p),onSuccess:()=>nav('/'),onError:x=>setE(x instanceof Error?x.message:'Login failed')});if(isAuthenticated)return <Navigate to="/" replace/>;return <div className="login-page"><div className="login-art"><span className="eyebrow">AYAD NM</span><h1>Control your<br/><em>network.</em></h1><p>Monitor devices, shape bandwidth, enforce quotas and keep your gateway under control.</p></div><form className="login-card" onSubmit={x=>{x.preventDefault();setE('');m.mutate()}}><span className="brand-mark large">A</span><span className="eyebrow">WELCOME BACK</span><h2>Sign in</h2><p className="muted">Use your administrator credentials.</p><label>Username<input value={u} onChange={x=>setU(x.target.value)}/></label><label>Password<input type="password" value={p} onChange={x=>setP(x.target.value)}/></label>{e&&<div className="error-box">{e}</div>}<button className="primary wide" disabled={m.isPending}>{m.isPending?'Signing in…':'Sign in'} →</button></form></div>}
+function useDevices(){return useQuery({queryKey:['devices'],queryFn:api.devices,refetchInterval:2000,retry:1})}
+function useVpn(){return useQuery({queryKey:['vpn'],queryFn:api.vpnStatus,refetchInterval:3000,retry:1})}
+function Header({title,subtitle,action}:{title:string;subtitle?:string;action?:React.ReactNode}){return <header className="page-header"><div><span className="eyebrow">AYAD NM</span><h1>{title}</h1>{subtitle&&<p>{subtitle}</p>}</div>{action}</header>}
+function Metric({label,value,detail,danger=false,icon}:{label:string;value:string|number;detail:string;danger?:boolean;icon?:IconName}){return <div className={`metric ${danger?'danger':''}`}>{icon&&<span className="metric-icon"><Icon name={icon}/></span>}<span>{label}</span><b>{value}</b><small>{detail}</small></div>}
+function Status({online,children}:{online:boolean;children?:React.ReactNode}){return <span className={`status ${online?'online':'offline'}`}><i/>{children??(online?'Online':'Offline')}</span>}
+function VpnToggle({enabled,pending,onToggle}:{enabled:boolean;pending:boolean;onToggle:()=>void}){return <button aria-label={enabled?'Disable VPN':'Enable VPN'} className={`switch ${enabled?'on':''}`} disabled={pending} onClick={onToggle}><i/></button>}
+function useTrafficSocket(cb:(rows:LiveTraffic[])=>void){useEffect(()=>{let ws:WebSocket|undefined,t:number|undefined,stop=false;const connect=()=>{if(stop)return;try{ws=new WebSocket(liveTrafficUrl());ws.onmessage=e=>{try{const v=JSON.parse(e.data);cb(Array.isArray(v)?v:Array.isArray(v?.devices)?v.devices:[])}catch{}};ws.onclose=()=>{if(!stop)t=window.setTimeout(connect,1000)};ws.onerror=()=>ws?.close()}catch{t=window.setTimeout(connect,1000)}};connect();return()=>{stop=true;if(t)clearTimeout(t);ws?.close()}},[cb])}
+function Dashboard(){const {data:devices=[],isLoading}=useDevices(),{data:vpn}=useVpn(),qc=useQueryClient();const [traffic,setTraffic]=useState<LiveTraffic[]>([]);useTrafficSocket(setTraffic);const top=useMemo(()=>[...traffic].sort((a,b)=>(Number(b.downloadRateBps)+Number(b.uploadRateBps))-(Number(a.downloadRateBps)+Number(a.uploadRateBps))).slice(0,5),[traffic]);const toggle=useMutation({mutationFn:()=>vpn?.enabled?api.vpnDisable():api.vpnEnable(),onSuccess:()=>qc.invalidateQueries({queryKey:['vpn']})});const online=devices.filter(d=>d.online).length;return <><Header title="Network overview" subtitle="A live view of your gateway and connected devices." action={<div className="vpn-chip"><span className={vpn?.connected?'dot live':'dot'}/>VPN {vpn?.enabled?(vpn.connected?'Connected':'Disconnected'):'Off'}<VpnToggle enabled={!!vpn?.enabled} pending={toggle.isPending} onToggle={()=>toggle.mutate()}/></div>}/><section className="hero-panel"><div><span className="eyebrow">LIVE NETWORK</span><h2>Your network is running.</h2><p>Traffic is sampled from the gateway in real time.</p></div><div className="hero-stats"><div><b>{devices.length}</b><span>devices</span></div><div><b>{online}</b><span>online</span></div></div></section><div className="metric-grid"><Metric icon="devices" label="Devices" value={isLoading?'—':devices.length} detail={`${online} online · ${Math.max(0,devices.length-online)} offline`}/><Metric icon="shield" label="Online" value={online} detail="currently reachable"/><Metric icon="shield" label="Blocked" value={devices.filter(d=>d.blocked).length} detail="active enforcement" danger={devices.some(d=>d.blocked)}/><Metric icon="vpn" label="VPN" value={vpn?.enabled?(vpn.connected?'ON':'WAIT'):'OFF'} detail={vpn?.connected?'tunnel connected':'global egress'}/></div><div className="two-col"><section className="panel"><div className="panel-title"><div><h3>Traffic activity</h3><span>Live aggregate rates</span></div><Link to="/traffic">Open live traffic →</Link></div><div className="mini-chart"><svg viewBox="0 0 600 130" preserveAspectRatio="none"><path d="M0 94 C45 72 55 100 95 80 S145 46 180 69 S235 108 270 72 S320 39 355 59 S405 91 445 62 S495 45 535 68 S570 78 600 38"/><path className="secondary-line" d="M0 112 C50 108 75 116 110 101 S170 98 215 107 S270 93 310 102 S370 115 420 96 S480 92 520 104 S570 106 600 84"/></svg></div></section><section className="panel"><div className="panel-title"><div><h3>Top bandwidth users</h3><span>Current total rate</span></div></div><div className="rank-list">{top.length?top.map((t,i)=><div className="rank" key={t.mac}><b>{String(i+1).padStart(2,'0')}</b><span>{t.hostname||t.ip||t.mac}</span><strong>{formatRate(Number(t.downloadRateBps)+Number(t.uploadRateBps))}</strong></div>):<Empty text="Waiting for live traffic…"/>}</div></section></div><section className="panel"><div className="panel-title"><div><h3>Devices</h3><span>Latest gateway discovery</span></div><Link to="/devices">View all →</Link></div><DeviceTable devices={devices.slice(0,8)}/></section></>}
+function Devices(){const {data:devices=[],isLoading}=useDevices();const [q,setQ]=useState(''),[f,setF]=useState('all');const shown=devices.filter(d=>`${d.hostname||''} ${d.ip||''} ${d.mac}`.toLowerCase().includes(q.toLowerCase())).filter(d=>f==='all'||(f==='online'?d.online:f==='blocked'?d.blocked:d.identitySource===f));return <><Header title="Devices" subtitle="Discover, inspect and control every client behind the gateway."/><section className="panel"><div className="toolbar"><div className="search-wrap"><Icon name="search"/><input className="search" placeholder="Search hostname, IP or MAC…" value={q} onChange={e=>setQ(e.target.value)}/></div><select value={f} onChange={e=>setF(e.target.value)}><option value="all">All devices</option><option value="online">Online</option><option value="blocked">Blocked</option><option value="PROXY_UNCONFIRMED">Identity unconfirmed</option></select></div>{isLoading?<Empty text="Discovering devices…"/>:<DeviceTable devices={shown}/>}</section></>}
+function DeviceTable({devices}:{devices:Device[]}){return <div className="table-wrap"><table><thead><tr><th>Device</th><th>IP address</th><th>Status</th><th>Identity</th><th>Applied quota</th><th>Policy</th></tr></thead><tbody>{devices.map(d=><tr key={d.mac}><td><Link className="device-name" to={`/devices/${encodeURIComponent(d.mac)}`}><span className="device-icon">{d.hostname?.toLowerCase().includes('phone')?'⌁':'◈'}</span><span><b>{d.hostname||'Unknown device'}</b><small>{d.mac}</small></span></Link></td><td className="mono">{d.ip||'—'}</td><td><Status online={d.online}/></td><td><span className={`identity ${d.identitySource==='PROXY_UNCONFIRMED'?'warning':''}`}>{d.identitySource}</span></td><td>{d.appliedQuota?<span className="tag quota-tag">{bytes(d.appliedQuota)}{d.quotaPeriod?` / ${d.quotaPeriod}`:''}</span>:<span className="muted">None</span>}</td><td>{d.blocked?<span className="tag red">Blocked</span>:<span className="tag">Allowed</span>}</td></tr>)}</tbody></table>{!devices.length&&<Empty text="No devices discovered yet."/>}</div>}
+function Detail(){const {mac=''}=useParams(),decoded=decodeURIComponent(mac);const qc=useQueryClient();const [tab,setTab]=useState('overview');const dq=useQuery({queryKey:['device',decoded],queryFn:()=>api.device(decoded),refetchInterval:2000});const pq=useQuery({queryKey:['policy',decoded],queryFn:()=>api.policy(decoded),enabled:!!dq.data,refetchInterval:2000});if(dq.isLoading)return <Empty text="Loading device…"/>;if(dq.isError||!dq.data)return <Empty text="Device not found."/>;const d=dq.data,disabled=d.identitySource==='PROXY_UNCONFIRMED';const refresh=()=>['device','devices','policy','quota'].forEach(k=>void qc.invalidateQueries({queryKey:[k,decoded]}));return <><Header title={d.hostname||'Unknown device'} subtitle={`${d.ip||'—'} · ${d.mac}`} action={<BlockButton device={d} disabled={disabled} done={refresh}/>}/><div className="detail-tabs">{['overview','limits','quota','usage',...(disabled?['identity']:[])].map(t=><button className={tab===t?'active':''} key={t} onClick={()=>setTab(t)}>{t}</button>)}</div>{tab==='overview'&&<Overview device={d} policy={pq.data}/>} {tab==='limits'&&<Limits mac={decoded} policy={pq.data} disabled={disabled}/>} {tab==='quota'&&<QuotaPanel mac={decoded}/>} {tab==='usage'&&<Usage device={d}/>}</>}
+function BlockButton({device,disabled,done}:{device:Device;disabled:boolean;done:()=>void}){const m=useMutation({mutationFn:()=>device.blocked?api.unblock(device.mac):api.block(device.mac),onSuccess:done});return <button className={device.blocked?'secondary':'danger-btn'} disabled={disabled||m.isPending} onClick={()=>m.mutate()}>{m.isPending?'Applying…':device.blocked?'Unblock device':'Block device'}</button>}
+function Overview({device,policy}:{device:Device;policy?:Policy}){return <div className="detail-grid"><section className="panel"><div className="device-heading"><span className="device-icon xl">◈</span><div><h2>{device.hostname||'Unknown device'}</h2><Status online={device.online}/></div></div><dl className="info-grid"><Info l="IP address" v={device.ip||'—'}/><Info l="MAC address" v={device.mac}/><Info l="Hostname" v={device.hostname||'—'}/><Info l="Identity" v={device.identitySource}/><Info l="L2 visible" v={device.l2Visible?'Yes':'No'}/><Info l="First seen" v={date(device.firstSeen)}/><Info l="Last seen" v={date(device.lastSeen)}/></dl></section><section className="panel"><div className="panel-title"><div><h3>Current policy</h3><span>Desired state</span></div></div><div className="policy-summary"><Metric icon="speed" label="Download" value={policy?.downloadLimit?`${policy.downloadLimit} Mbps`:'Unlimited'} detail="limit"/><Metric icon="speed" label="Upload" value={policy?.uploadLimit?`${policy.uploadLimit} Mbps`:'Unlimited'} detail="limit"/><Metric icon="quota" label="Quota" value={policy?.quota?bytes(policy.quota):'None'} detail={policy?.quotaPeriod||'not configured'}/></div></section></div>}
+function Info({l,v}:{l:string;v:string}){return <div><dt>{l}</dt><dd className="mono">{v}</dd></div>}
+function Limits({mac,policy,disabled}:{mac:string;policy?:Policy;disabled:boolean}){const qc=useQueryClient();const [down,setDown]=useState(policy?.downloadLimit||''),[up,setUp]=useState(policy?.uploadLimit||''),[err,setErr]=useState('');useEffect(()=>{setDown(policy?.downloadLimit||'');setUp(policy?.uploadLimit||'')},[policy?.downloadLimit,policy?.uploadLimit]);const m=useMutation({mutationFn:async()=>{down.trim()?await api.setDownload(mac,down):await api.clearDownload(mac);up.trim()?await api.setUpload(mac,up):await api.clearUpload(mac)},onSuccess:()=>{setErr('');qc.invalidateQueries({queryKey:['policy',mac]});qc.invalidateQueries({queryKey:['devices']})},onError:e=>setErr(e instanceof Error?e.message:'Unable to update limits')});return <section className="panel form-panel"><div className="panel-title"><div><h3>Bandwidth limits</h3><span>Decimal Mbps values are sent exactly as typed.</span></div></div><div className="form-grid"><label>Download limit (Mbps)<input inputMode="decimal" value={down} disabled={disabled} onChange={e=>setDown(e.target.value)}/><small>Leave empty for unlimited.</small></label><label>Upload limit (Mbps)<input inputMode="decimal" value={up} disabled={disabled} onChange={e=>setUp(e.target.value)}/><small>Leave empty for unlimited.</small></label></div>{err&&<div className="error-box">{err}</div>}<button className="primary" disabled={disabled||m.isPending} onClick={()=>m.mutate()}>{m.isPending?'Applying…':'Save limits'}</button></section>}
+function QuotaPanel({mac}:{mac:string}){const qc=useQueryClient();const qx=useQuery({queryKey:['quota',mac],queryFn:()=>api.quota(mac),refetchInterval:2000});const [amount,setAmount]=useState(''),[period,setPeriod]=useState('monthly'),[action,setAction]=useState('throttle'),[err,setErr]=useState('');useEffect(()=>{if(qx.data){setAmount(qx.data.quota||'');setPeriod(qx.data.quotaPeriod||'monthly');setAction(qx.data.quotaAction||'throttle')}},[qx.data?.quota,qx.data?.quotaPeriod,qx.data?.quotaAction]);const save=useMutation({mutationFn:()=>api.updatePolicy(mac,{quota:amount.trim()||null,quotaPeriod:amount.trim()?period:null,quotaAction:amount.trim()?action:null}),onSuccess:()=>{qc.invalidateQueries({queryKey:['quota',mac]});qc.invalidateQueries({queryKey:['policy',mac]});qc.invalidateQueries({queryKey:['devices']})},onError:e=>setErr(e instanceof Error?e.message:'Unable to update quota')});const reset=useMutation({mutationFn:()=>api.resetQuota(mac),onSuccess:()=>{setErr('');qc.invalidateQueries({queryKey:['quota',mac]});qc.invalidateQueries({queryKey:['policy',mac]});qc.invalidateQueries({queryKey:['devices']})},onError:e=>setErr(e instanceof Error?e.message:'Unable to reset quota')});if(qx.isLoading)return <Empty text="Loading quota…"/>;if(qx.isError||!qx.data)return <Empty text="Unable to load quota."/>;const q=qx.data,pct=q.quota?Math.min(100,Number(q.usedBytes)/Math.max(1,Number(q.quota))*100):0;return <div className="detail-grid"><section className="panel form-panel"><div className="panel-title"><div><h3>Quota configuration</h3><span>Exact byte values</span></div></div><label>Quota (bytes)<input inputMode="numeric" value={amount} onChange={e=>setAmount(e.target.value)}/></label><div className="form-grid"><label>Period<select value={period} onChange={e=>setPeriod(e.target.value)}><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option></select></label><label>Action on exhaustion<select value={action} onChange={e=>setAction(e.target.value)}><option value="notify-only">Notify only</option><option value="throttle">Throttle</option><option value="block">Block</option></select></label></div>{err&&<div className="error-box">{err}</div>}<div className="button-row"><button className="primary" disabled={save.isPending} onClick={()=>save.mutate()}>{save.isPending?'Saving…':'Save quota'}</button><button className="secondary" disabled={reset.isPending} onClick={()=>reset.mutate()}><Icon name="refresh"/>{reset.isPending?'Resetting…':'Reset quota'}</button></div></section><section className="panel quota-card"><div className="panel-title"><div><h3>Usage</h3><span>{q.exhausted?'Quota exhausted':'Current period'}</span></div></div><b className="quota-number">{bytes(q.usedBytes)}</b><div className="progress"><i style={{width:`${pct}%`}}/></div><div className="quota-meta"><span>Download <b>{bytes(q.usedDownloadBytes)}</b></span><span>Upload <b>{bytes(q.usedUploadBytes)}</b></span><span>Remaining <b>{q.remainingBytes?bytes(q.remainingBytes):'—'}</b></span></div></section></div>}
+function Usage({device}:{device:Device}){const [range,setRange]=useState<'day'|'week'|'month'>('week');const {data=[],isLoading}=useQuery({queryKey:['history',device.id,range],queryFn:()=>api.history(device.id,range)});const total=data.reduce((s,r)=>s+Number(r.downloadBytes)+Number(r.uploadBytes),0);return <section className="panel"><div className="panel-title"><div><h3>Usage history</h3><span>Aggregated traffic samples</span></div><select value={range} onChange={e=>setRange(e.target.value as typeof range)}><option value="day">Last day</option><option value="week">Last 7 days</option><option value="month">Last month</option></select></div>{isLoading?<Empty text="Loading usage…"/>:<><div className="metric-grid"><Metric label="Total" value={bytes(String(total))} detail="download + upload"/><Metric label="Download" value={bytes(String(data.reduce((s,r)=>s+Number(r.downloadBytes),0)))} detail="total downloaded"/><Metric label="Upload" value={bytes(String(data.reduce((s,r)=>s+Number(r.uploadBytes),0)))} detail="total uploaded"/></div><div className="table-wrap"><table><thead><tr><th>Period</th><th>Download</th><th>Upload</th></tr></thead><tbody>{data.map((r:HistorySample,i)=><tr key={i}><td className="mono">{date(r.bucketStart)}</td><td>{bytes(String(r.downloadBytes))}</td><td>{bytes(String(r.uploadBytes))}</td></tr>)}</tbody></table></div></>}</section>}
+function LiveTrafficPage(){const {data:devices=[]}=useDevices();const [rows,setRows]=useState<LiveTraffic[]>([]),[history,setHistory]=useState<{t:string;down:number;up:number}[]>([]);useTrafficSocket(next=>{setRows(next);setHistory(h=>[...h.slice(-29),{t:new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',second:'2-digit'}),down:next.reduce((s,x)=>s+Number(x.downloadRateBps),0)*8/1e6,up:next.reduce((s,x)=>s+Number(x.uploadRateBps),0)*8/1e6}] )});const merged=rows.map(r=>({...r,hostname:r.hostname||devices.find(d=>d.mac===r.mac)?.hostname}));return <><Header title="Live traffic" subtitle="Near-real-time bandwidth across discovered clients." action={<span className="live-indicator"><i/>WebSocket live</span>}/><section className="panel chart-panel"><div className="panel-title"><div><h3>Gateway throughput</h3><span>Live aggregate download/upload</span></div></div>{history.length?<div className="live-chart"><ResponsiveContainer width="100%" height="100%"><AreaChart data={history}><CartesianGrid strokeDasharray="3 3"/><XAxis dataKey="t"/><YAxis/><Tooltip/><Area type="monotone" dataKey="down" name="Download" fillOpacity={.12}/><Area type="monotone" dataKey="up" name="Upload" fillOpacity={.08}/></AreaChart></ResponsiveContainer></div>:<Empty text="Waiting for traffic stream…"/>}</section><section className="panel"><div className="panel-title"><div><h3>Clients</h3><span>{merged.length} active traffic records</span></div></div><div className="traffic-list">{merged.map(r=><Link className="traffic-row" key={r.mac} to={`/devices/${encodeURIComponent(r.mac)}`}><span className="device-icon">◈</span><div><b>{r.hostname||r.ip||r.mac}</b><small>{r.ip||r.mac}</small></div><strong>↓ {formatRate(Number(r.downloadRateBps))}</strong><strong>↑ {formatRate(Number(r.uploadRateBps))}</strong></Link>)}{!merged.length&&<Empty text="No traffic received yet."/>}</div></section></>}
+function Vpn(){const qc=useQueryClient(),{data}=useVpn();const [link,setLink]=useState(''),[err,setErr]=useState('');const config=useMutation({mutationFn:()=>api.vpnConfig(link.trim()),onSuccess:()=>{setLink('');qc.invalidateQueries({queryKey:['vpn']})},onError:e=>setErr(e instanceof Error?e.message:'Unable to save VPN configuration')});const toggle=useMutation({mutationFn:()=>data?.enabled?api.vpnDisable():api.vpnEnable(),onSuccess:()=>qc.invalidateQueries({queryKey:['vpn']})});return <><Header title="VPN" subtitle="Global VPN egress using the configured sing-box tunnel."/><div className="vpn-layout"><section className="panel"><div className="vpn-switch-row"><div><span className="eyebrow">GLOBAL EGRESS</span><h2>{data?.enabled?'VPN enabled':'VPN disabled'}</h2><p className="muted">Applies to all client traffic.</p></div><VpnToggle enabled={!!data?.enabled} pending={toggle.isPending} onToggle={()=>toggle.mutate()}/></div><div className="connection"><span>Connection status</span><Status online={!!data?.connected}>{data?.connected?'Connected':'Disconnected'}</Status></div><label className="stack-label">VMess link<textarea value={link} onChange={e=>setLink(e.target.value)} placeholder="vmess://…" rows={4}/></label>{err&&<div className="error-box">{err}</div>}<button className="primary" disabled={!link.trim()||config.isPending} onClick={()=>config.mutate()}>{config.isPending?'Saving…':'Save configuration'}</button></section><section className="panel"><span className="eyebrow">BEHAVIOR</span><h3>Traffic safety</h3><p className="muted">VPN is global. Per-device routing is intentionally not exposed.</p></section></div></>}
+function Empty({text}:{text:string}){return <div className="empty">{text}</div>}
+function BlockPlaceholder(){return null}
+function formatRate(bps:number){const mbps=bps*8/1e6;return `${mbps>=10?mbps.toFixed(0):mbps>=1?mbps.toFixed(1):mbps.toFixed(2)} Mbps`}
+function bytes(v:string){const n=Number(v);if(!Number.isFinite(n))return '—';const u=['B','KB','MB','GB','TB'];let i=0,x=n;while(x>=1024&&i<u.length-1){x/=1024;i++}return `${x>=10?Math.round(x):x.toFixed(1)} ${u[i]}`}
+function date(v:string|undefined){if(!v)return '—';const d=new Date(v);return Number.isNaN(d.getTime())?'—':d.toLocaleString()}
+function AppRoutes(){return <Routes><Route path="/login" element={<Login/>}/><Route path="*" element={<Protected><Shell><Routes><Route path="/" element={<Dashboard/>}/><Route path="/devices" element={<Devices/>}/><Route path="/devices/:mac" element={<Detail/>}/><Route path="/traffic" element={<LiveTrafficPage/>}/><Route path="/vpn" element={<Vpn/>}/><Route path="*" element={<Navigate to="/" replace/>}/></Routes></Shell></Protected>}/></Routes>}
+export default function App(){return <BrowserRouter><AuthProvider><AppRoutes/></AuthProvider></BrowserRouter>}
