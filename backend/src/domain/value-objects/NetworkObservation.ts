@@ -38,15 +38,10 @@ export interface BroadcastCaptureStatus {
   lastDhcp: LastDhcpMetadata | null;
 }
 
-export interface DhcpLeaseReader {
-  read(): Promise<DhcpLease[]>;
-}
-
-export interface NeighborTableReader {
-  read(interfaceName: string): Promise<NeighborEntry[]>;
-}
-
+export interface DhcpLeaseReader { read(): Promise<DhcpLease[]>; }
+export interface NeighborTableReader { read(interfaceName: string): Promise<NeighborEntry[]>; }
 export interface BroadcastCaptureReader {
   recentIdentities(maxAgeMs?: number): CapturedIdentity[];
+  recentRecheckAttemptMacs(maxAgeMs?: number): Set<string>;
   status(): BroadcastCaptureStatus;
 }
