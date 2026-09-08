@@ -121,10 +121,10 @@ async function ensureSetUnlocked(name: string, type: string): Promise<void> {
   }
 }
 
-async function ensureRuleAtPosition(comment: string, ruleArgs: string[], position: number): Promise<void> {
+async function ensureRuleAtPosition(comment: string, ruleArgs: string[], position: number, forceReconcile = false): Promise<void> {
   const rules = await getForwardRules();
   const existing = rules.find((rule) => rule.comment === comment);
-  if (existing?.index === position) return;
+  if (existing?.index === position && !forceReconcile) return;
   if (existing) {
     const del = ["delete", "rule", TABLE_FAMILY, TABLE_NAME, FORWARD_CHAIN, "handle", String(existing.handle)];
     await execNft(del);
@@ -133,14 +133,14 @@ async function ensureRuleAtPosition(comment: string, ruleArgs: string[], positio
   await execNft(insert);
 }
 
-async function ensureMacBlockRuleUnlocked(): Promise<void> {
+async function ensureMacBlockRuleUnlocked(forceReconcile = false): Promise<void> {
   // MAC blocking applies to every forwarded path, including tunnels/VPN interfaces.
-  await ensureRuleAtPosition(MAC_BLOCK_COMMENT, ["ether", "saddr", `@${MAC_SET_NAME}`, "drop"], 1);
+  await ensureRuleAtPosition(MAC_BLOCK_COMMENT, ["ether", "saddr", `@${MAC_SET_NAME}`, "drop"], 1, forceReconcile);
 }
 
-async function ensureIpBlockRuleUnlocked(): Promise<void> {
+async function ensureIpBlockRuleUnlocked(forceReconcile = false): Promise<void> {
   // IP-only enforcement must be the first FORWARD rule so it cannot be bypassed by ACCEPT rules or tunnel paths.
-  await ensureRuleAtPosition(IP_BLOCK_COMMENT, ["ip", "saddr", `@${IP_SET_NAME}`, "drop"], 0);
+  await ensureRuleAtPosition(IP_BLOCK_COMMENT, ["ip", "saddr", `@${IP_SET_NAME}`, "drop"], 0, forceReconcile);
 }
 
 export async function ensureFirewallState(): Promise<void> {
@@ -149,8 +149,9 @@ export async function ensureFirewallState(): Promise<void> {
     await ensureSetUnlocked(IP_SET_NAME, "ipv4_addr");
     // Management access is established before any project-owned restrictive rules.
     await ensureManagementAllowRulesUnlocked();
-    await ensureIpBlockRuleUnlocked();
-    await ensureMacBlockRuleUnlocked();
+    // Force reconciliation here so legacy rules with oifname constraints are replaced.
+    await ensureIpBlockRuleUnlocked(true);
+    await ensureMacBlockRuleUnlocked(true);
   });
 }
 
