@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import websocket from "@fastify/websocket";
 import { PrismaNotificationRepository } from "./infrastructure/database/PrismaNotificationRepository.js";
 import { BlockedIpReconciliationService } from "./application/enforcement/BlockedIpReconciliationService.js";
+import { IpBindingLifecycleService } from "./application/enforcement/IpBindingLifecycleService.js";
 import { TrafficReconciliationService } from "./application/enforcement/TrafficReconciliationService.js";
 import { TrafficEnforcementService } from "./application/enforcement/TrafficEnforcementService.js";
 import { DefaultTrafficPolicyValidator } from "./application/enforcement/DefaultTrafficPolicyValidator.js";
@@ -84,6 +85,7 @@ const deviceDiscoverySyncService = new DeviceDiscoverySyncService(discoveryServi
 const deviceBlocker = new NftDeviceBlocker(); const blockedDeviceReader = new NftBlockedDeviceReader(); const blockedDeviceRepository = new PrismaBlockedDeviceRepository();
 const firewallService = new FirewallService(deviceBlocker, deviceRepository, policyRepository, operationsRepository, blockedDeviceRepository);
 const blockedIpReconciliationService = new BlockedIpReconciliationService(deviceRepository, policyRepository, dhcpLeaseReader, neighborTableReader, config.network.lanInterface, broadcastCaptureReader, 10_000, blockedDeviceRepository);
+const ipBindingLifecycleService = new IpBindingLifecycleService(deviceRepository, policyRepository, dhcpLeaseReader, blockedDeviceRepository, deviceBlocker, 10_000);
 const deviceService = new DeviceService(discoveryService, deviceRepository, blockedDeviceReader);
 const liveMonitoringService = new LiveMonitoringService(discoveryService, neighborTableReader, blockedDeviceReader, config.network.lanInterface);
 const ifbManager = new LinuxIfbManager(systemCommandExecutor); const tcStateReader = new LinuxTcStateReader(systemCommandExecutor);
@@ -107,12 +109,12 @@ app.get("/api/health", async () => ({ status: "ok", capture: broadcastCaptureRea
 
 await ensureFirewallState(); await ensureSingleInterfaceNat(config.network.clientSubnet); await firewallService.reconcile(); await dhcpReservationService.reconcile();
 for (const device of await deviceRepository.findAll()) { if (!device.ip) continue; for (const rule of await policyCatalogRepository.portRules(device.id)) if (rule.enabled) await portRuleEnforcer.apply({ mac: device.mac.toString(), ip: device.ip.toString() }, rule); }
-await trafficReconciliationService.reconcile(); await blockedIpReconciliationService.reconcile(); await profileEnforcementService.reconcile(); await vpnService.reconcile();
+await trafficReconciliationService.reconcile(); await blockedIpReconciliationService.reconcile(); await ipBindingLifecycleService.reconcile(); await profileEnforcementService.reconcile(); await vpnService.reconcile();
 vpnService.startMonitor();
-await scheduleEnforcementService.start(); await trafficAccountingService.start(); await trafficRetentionService.start(); await deviceDiscoverySyncService.start(); await liveMonitoringService.start(); await blockedIpReconciliationService.start();
+await scheduleEnforcementService.start(); await trafficAccountingService.start(); await trafficRetentionService.start(); await deviceDiscoverySyncService.start(); await liveMonitoringService.start(); await blockedIpReconciliationService.start(); await ipBindingLifecycleService.start();
 
 await app.listen({ host: config.server.host, port: config.server.port });
 app.log.info(`Server listening at ${config.server.tlsCertPath ? "https" : "http"}://${config.server.host}:${config.server.port}`);
 process.on("SIGTERM", async () => {
-  vpnService.stopMonitor(); trafficAccountingService.stop(); trafficRetentionService.stop(); deviceDiscoverySyncService.stop(); liveMonitoringService.stop(); blockedIpReconciliationService.stop(); scheduleEnforcementService.stop(); broadcastCaptureReader.stop(); await app.close();
+  vpnService.stopMonitor(); trafficAccountingService.stop(); trafficRetentionService.stop(); deviceDiscoverySyncService.stop(); liveMonitoringService.stop(); blockedIpReconciliationService.stop(); ipBindingLifecycleService.stop(); scheduleEnforcementService.stop(); broadcastCaptureReader.stop(); await app.close();
 });
