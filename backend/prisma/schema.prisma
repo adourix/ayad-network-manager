@@ -3,7 +3,9 @@ generator client {
   output   = "../src/infrastructure/database/generated/prisma"
 }
 
-datasource db { provider = "postgresql" }
+datasource db {
+  provider = "postgresql"
+}
 
 model Device {
   id Int @id @default(autoincrement())
