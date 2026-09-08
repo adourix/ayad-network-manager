@@ -1,6 +1,5 @@
 import { readFile } from "node:fs/promises";
-import type { DhcpLease } from "../../domain/value-objects/NetworkObservation.js";
-import type { DhcpLeaseReader } from "../../application/devices/DeviceDiscoveryService.js";
+import type { DhcpLease, DhcpLeaseReader } from "../../domain/value-objects/NetworkObservation.js";
 
 const MAC_REGEX = /^([0-9a-f]{2}:){5}[0-9a-f]{2}$/i;
 
@@ -18,13 +17,7 @@ export class LinuxDhcpLeaseReader implements DhcpLeaseReader {
       if (!expiryRaw || !macRaw || !ip || !MAC_REGEX.test(macRaw)) continue;
       const expiry = Number(expiryRaw);
       if (!Number.isFinite(expiry)) continue;
-      leases.push({
-        expiry,
-        mac: macRaw.toLowerCase(),
-        ip,
-        hostname: hostnameRaw && hostnameRaw !== "*" ? hostnameRaw : null,
-        clientId: clientIdRaw && clientIdRaw !== "*" ? clientIdRaw : null,
-      });
+      leases.push({ expiry, mac: macRaw.toLowerCase(), ip, hostname: hostnameRaw && hostnameRaw !== "*" ? hostnameRaw : null, clientId: clientIdRaw && clientIdRaw !== "*" ? clientIdRaw : null });
     }
     return leases;
   }
