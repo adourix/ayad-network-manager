@@ -46,7 +46,6 @@ export class NftPortRuleEnforcer implements PortRuleEnforcer {
     ];
 
     try {
-      // Every nft mutation is dry-run validated before the real mutation.
       await this.executor.execute("nft", ["-c", ...upload]);
       await this.executor.execute("nft", ["-c", ...download]);
       await this.executor.execute("nft", upload);
@@ -72,15 +71,26 @@ export class NftPortRuleEnforcer implements PortRuleEnforcer {
     const handles = [...result.stdout.matchAll(new RegExp(pattern, "g"))]
       .map((match) => match[1]).filter((handle): handle is string => Boolean(handle));
 
-    for (const handle of handles) {
-      // AuditedSystemCommandExecutor also validates delete operations with nft -c.
-      await this.executor.execute("nft", ["delete", "rule", "ip", "filter", "FORWARD", "handle", handle]);
-    }
+    try {
+      for (const handle of handles) {
+        const remove = ["delete", "rule", "ip", "filter", "FORWARD", "handle", handle];
+        // Explicit dry-run validation is required immediately before every destructive mutation.
+        await this.executor.execute("nft", ["-c", ...remove]);
+        await this.executor.execute("nft", remove);
+      }
 
-    await this.operations?.audit({
-      action: "remove-port-rule", deviceId: rule.deviceId,
-      actor: process.env.ADMIN_USERNAME ?? "admin",
-      details: { ruleId: rule.id, removed: handles.length, result: "success" },
-    });
+      await this.operations?.audit({
+        action: "remove-port-rule", deviceId: rule.deviceId,
+        actor: process.env.ADMIN_USERNAME ?? "admin",
+        details: { ruleId: rule.id, removed: handles.length, result: "success" },
+      });
+    } catch (error) {
+      await this.operations?.audit({
+        action: "remove-port-rule", deviceId: rule.deviceId,
+        actor: process.env.ADMIN_USERNAME ?? "admin",
+        details: { ruleId: rule.id, removed: handles.length, result: "failure", error: error instanceof Error ? error.message : String(error) },
+      });
+      throw error;
+    }
   }
 }
