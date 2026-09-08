@@ -14,11 +14,6 @@ import type {
   DeviceDiscoveryService,
 } from "./DeviceDiscoveryService.js";
 
-import type {
-  BlockedDeviceReader,
-} from "./BlockedDeviceReader.js";
-import { reconcileIdentityObservation } from "./IdentityStateReconciler.js";
-
 export interface DeviceView {
   id: number;
   ip: string;
@@ -41,8 +36,11 @@ export class DeviceService {
     private readonly deviceRepository:
       DeviceRepository,
 
-    private readonly blockedDeviceReader:
-      BlockedDeviceReader,
+    private readonly policyRepository: {
+      findByDeviceId(
+        deviceId: number,
+      ): Promise<{ blocked: boolean } | null>;
+    },
   ) {}
 
   async getDevices(): Promise<
@@ -50,11 +48,9 @@ export class DeviceService {
   > {
     const [
       discoveredDevices,
-      blockedMacs,
       knownDevices,
     ] = await Promise.all([
       this.discoveryService.discover(),
-      this.blockedDeviceReader.getBlockedMacs(),
       this.deviceRepository.findAll(),
     ]);
     const knownProxyMacs = new Set(knownDevices
@@ -75,7 +71,7 @@ export class DeviceService {
       const existing = await this.deviceRepository.findByMac(
         MacAddress.create(discovered.mac),
       );
-      const reconciled = reconcileIdentityObservation(existing, discovered);
+      const reconciled = await this.reconcileIdentityObservation(existing, discovered);
 
       const device =
         await this.deviceRepository.upsert(
@@ -127,9 +123,7 @@ export class DeviceService {
         identitySource: device.identitySource,
 
         blocked:
-          blockedMacs.has(
-            mac,
-          ),
+          (await this.policyRepository.findByDeviceId(device.id))?.blocked ?? false,
 
         firstSeen:
           device.firstSeen,
@@ -151,14 +145,12 @@ export class DeviceService {
 
     const [
       device,
-      blockedMacs,
       knownDevices,
     ] = await Promise.all([
       /^[1-9]\d*$/.test(mac) && Number.isSafeInteger(Number(mac))
         ? this.deviceRepository.findById(Number(mac))
         : this.deviceRepository.findByMac(normalizedMac!),
 
-      this.blockedDeviceReader.getBlockedMacs(),
       this.deviceRepository.findAll(),
     ]);
 
@@ -192,9 +184,7 @@ export class DeviceService {
       identitySource: device.identitySource,
 
       blocked:
-        blockedMacs.has(
-          macString,
-        ),
+        (await this.policyRepository.findByDeviceId(device.id))?.blocked ?? false,
 
       firstSeen:
         device.firstSeen,
@@ -202,5 +192,13 @@ export class DeviceService {
       lastSeen:
         device.lastSeen,
     };
+  }
+
+  private async reconcileIdentityObservation(
+    existing: Parameters<DeviceDiscoveryService["discover"]>[0] extends never ? never : any,
+    discovered: any,
+  ): Promise<any> {
+    const { reconcileIdentityObservation } = await import("./IdentityStateReconciler.js");
+    return reconcileIdentityObservation(existing, discovered);
   }
 }
