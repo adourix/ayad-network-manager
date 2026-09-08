@@ -1,10 +1,12 @@
 import type { BlockedDeviceReader } from "../devices/BlockedDeviceReader.js";
 import type { DeviceDiscoveryService } from "../devices/DeviceDiscoveryService.js";
+import type { DeviceRepository } from "../../domain/repositories/DeviceRepository.js";
 import type { BlockedDeviceRepository } from "../../domain/repositories/BlockedDeviceRepository.js";
 import type {
   NeighborEntry,
   NeighborTableReader,
 } from "../../infrastructure/network/NeighborTableReader.js";
+import { reconcileIdentityObservation } from "../devices/IdentityStateReconciler.js";
 import { PresenceResolver } from "./PresenceResolver.js";
 import {
   getNeighborState,
@@ -37,6 +39,7 @@ export class LiveMonitoringService {
     private readonly discoveryService: DeviceDiscoveryService,
     private readonly neighborTableReader: NeighborTableReader,
     private readonly blockedDeviceReader: BlockedDeviceReader,
+    private readonly deviceRepository: DeviceRepository,
     private readonly lanInterface: string,
     private readonly blockedDeviceRepository?: BlockedDeviceRepository,
   ) {}
@@ -82,21 +85,33 @@ export class LiveMonitoringService {
   }
 
   private async collectLiveDevices(): Promise<Map<string, LiveDevice>> {
-    const [neighbors, discoveredDevices, blockedMacs, activeBindings] = await Promise.all([
+    const [neighbors, discoveredDevices, blockedMacs, activeBindings, knownDevices] = await Promise.all([
       this.neighborTableReader.read(this.lanInterface),
       this.discoveryService.discover(),
       this.blockedDeviceReader.getBlockedMacs(),
       this.blockedDeviceRepository?.activeBindings() ?? Promise.resolve([]),
+      this.deviceRepository.findAll(),
     ]);
 
     const blockedIps = new Set(activeBindings.map((binding) => binding.ip));
+    const knownProxyMacs = new Set(
+      knownDevices
+        .map((device) => device.proxyMac?.toString().toLowerCase())
+        .filter((mac): mac is string => Boolean(mac)),
+    );
     const neighborByIp = new Map<string, NeighborEntry>();
     for (const neighbor of neighbors) neighborByIp.set(neighbor.ip, neighbor);
 
     const nextLiveDevices = new Map<string, LiveDevice>();
     for (const discovered of discoveredDevices) {
       const mac = discovered.mac.toLowerCase();
-      const neighbor = neighborByIp.get(discovered.ip);
+      if (knownProxyMacs.has(mac)) continue;
+
+      const existing = await this.deviceRepository.findByMac(
+        { toString: () => mac } as never,
+      );
+      const reconciled = reconcileIdentityObservation(existing, discovered);
+      const neighbor = neighborByIp.get(reconciled.ip);
       const online = this.presenceResolver.resolve(
         mac,
         neighbor?.state,
@@ -105,16 +120,16 @@ export class LiveMonitoringService {
       );
 
       nextLiveDevices.set(mac, {
-        ip: discovered.ip,
+        ip: reconciled.ip,
         mac,
-        hostname: discovered.hostname,
+        hostname: reconciled.hostname,
         state: neighbor?.state ?? (discovered.deferred ? "DEFERRED" : "UNKNOWN"),
         online,
-        blocked: blockedMacs.has(mac) || blockedIps.has(discovered.ip),
-        identityValidated: discovered.identityValidated,
-        identitySource: discovered.identitySource,
-        l2Visible: discovered.l2Visible,
-        proxyMac: discovered.proxyMac,
+        blocked: blockedMacs.has(mac) || blockedIps.has(reconciled.ip),
+        identityValidated: reconciled.identityValidated,
+        identitySource: reconciled.identitySource,
+        l2Visible: reconciled.l2Visible,
+        proxyMac: reconciled.proxyMac,
       });
     }
 
