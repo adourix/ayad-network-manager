@@ -5,9 +5,9 @@
   "type": "module",
   "main": "index.js",
   "scripts": {
-    "dev": "tsx src/server.ts",
+    "dev": "tsx src/bootstrap.ts",
     "build": "tsc",
-    "start": "node dist/server.js",
+    "start": "node dist/bootstrap.js",
     "test": "tsx --test test/*.test.ts"
   },
   "keywords": [],
