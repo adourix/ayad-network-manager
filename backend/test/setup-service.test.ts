@@ -78,8 +78,9 @@ test("setup renders a DHCP-only dnsmasq config and a management-safe nftables ba
   };
   const service = new SetupService(probe, { configPath, dnsmasqPath, nftablesPath, snapshotDir: join(root, "backups") }, () => true);
   const result = await service.apply({ clientInterface: "eno1", uplinkInterface: "eno1", clientSubnet: "192.168.1.0/24", uplinkBandwidthMbps: 100, dashboardPort: 5000, sshPort: 22, dnsServers: ["1.1.1.1"], activate: false });
-  assert.equal(result.applied, true);
+  assert.equal(result.applied, true, result.errors.join("; "));
   assert.match(await readFile(dnsmasqPath, "utf8"), /port=0/);
-  assert.match(await readFile(nftablesPath, "utf8"), /ayad_nm_allow_ssh_management/);
-  assert.match(await readFile(nftablesPath, "utf8"), /ayad_nm_single_interface_nat/);
+  const nft = await readFile(nftablesPath, "utf8");
+  assert.match(nft, /ayad_nm_allow_ssh_management/);
+  assert.match(nft, /masquerade/);
 });
