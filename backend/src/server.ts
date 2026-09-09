@@ -104,7 +104,7 @@ const portRuleEnforcer = new NftPortRuleEnforcer(systemCommandExecutor, operatio
 await operationsRoutes(app, new OperationsService(operationsRepository));
 const vpnService = new VpnService(new PrismaVpnRepository(), new SingleInterfaceVpnController(systemCommandExecutor, config.network.vpnTunnelInterface), operationsRepository); await vpnRoutes(app, vpnService);
 await setupRoutes(app, new SetupService(new LinuxSetupProbe()));
-const dhcpReservationService = new DhcpReservationService(deviceRepository, policyRepository, config.setup.dhcpReservationsPath, { reload: async () => { await systemCommandExecutor.execute("systemctl", ["reload", "dnsmasq"]); } });
+const dhcpReservationService = new DhcpReservationService(deviceRepository, policyRepository, config.setup.dhcpReservationsPath, { reload: async () => { await systemCommandExecutor.execute("systemctl", ["restart", "dnsmasq"]); } });
 const scheduleEnforcementService = new ScheduleEnforcementService(deviceRepository, policyRepository, policyCatalogRepository, trafficEnforcementService, deviceBlocker, operationsRepository);
 const trafficRetentionService = new TrafficRetentionService();
 const profileEnforcementService = new ProfileEnforcementService(deviceRepository, policyRepository, policyCatalogRepository, trafficEnforcementService);
