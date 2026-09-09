@@ -15,6 +15,7 @@ export interface DeviceView {
   identityValidated: boolean;
   identitySource: string;
   blocked: boolean;
+  online: boolean;
   firstSeen: Date;
   lastSeen: Date;
 }
@@ -31,20 +32,13 @@ export class DeviceService {
       this.discoveryService.discover(),
       this.deviceRepository.findAll(),
     ]);
-    const knownProxyMacs = new Set(knownDevices
-      .map((device) => device.proxyMac?.toString().toLowerCase())
-      .filter((mac): mac is string => Boolean(mac)));
-
-    const result: DeviceView[] = [];
+    const knownProxyMacs = new Set(knownDevices.map((device) => device.proxyMac?.toString().toLowerCase()).filter((mac): mac is string => Boolean(mac)));
+    const onlineIds = new Set<number>();
 
     for (const discovered of discoveredDevices) {
       if (knownProxyMacs.has(discovered.mac.toLowerCase())) continue;
-      const now = new Date();
-      const existing = await this.deviceRepository.findByMac(
-        MacAddress.create(discovered.mac),
-      );
+      const existing = await this.deviceRepository.findByMac(MacAddress.create(discovered.mac));
       const reconciled = reconcileIdentityObservation(existing, discovered);
-
       const device = await this.deviceRepository.upsert({
         mac: MacAddress.create(reconciled.mac),
         ip: IpAddress.create(reconciled.ip),
@@ -53,16 +47,21 @@ export class DeviceService {
         identityValidated: reconciled.identityValidated,
         identitySource: reconciled.identitySource,
         hostname: reconciled.hostname,
-        seenAt: now,
+        seenAt: new Date(),
       });
+      onlineIds.add(device.id);
+    }
 
-      const ip = device.ip?.toString();
-      if (!ip) continue;
-
+    // GET /api/devices is the persistent inventory: discovered devices are refreshed,
+    // while known devices that are currently absent remain visible as offline.
+    const currentDevices = await this.deviceRepository.findAll();
+    const result: DeviceView[] = [];
+    for (const device of currentDevices) {
+      if (knownProxyMacs.has(device.mac.toString().toLowerCase())) continue;
       const policy = await this.policyRepository.findByDeviceId(device.id);
       result.push({
         id: device.id,
-        ip,
+        ip: device.ip?.toString() ?? "",
         mac: device.mac.toString(),
         hostname: device.hostname,
         l2Visible: device.l2Visible,
@@ -70,42 +69,35 @@ export class DeviceService {
         identityValidated: device.identityValidated,
         identitySource: device.identitySource,
         blocked: policy?.blocked ?? false,
+        online: onlineIds.has(device.id),
         firstSeen: device.firstSeen,
         lastSeen: device.lastSeen,
       });
     }
-
     return result;
   }
 
   async getDeviceByMac(mac: string): Promise<DeviceView | null> {
     const normalizedMac = /^[1-9]\d*$/.test(mac) ? null : MacAddress.create(mac);
-
     const [device, knownDevices] = await Promise.all([
-      /^[1-9]\d*$/.test(mac) && Number.isSafeInteger(Number(mac))
-        ? this.deviceRepository.findById(Number(mac))
-        : this.deviceRepository.findByMac(normalizedMac!),
+      /^[1-9]\d*$/.test(mac) && Number.isSafeInteger(Number(mac)) ? this.deviceRepository.findById(Number(mac)) : this.deviceRepository.findByMac(normalizedMac!),
       this.deviceRepository.findAll(),
     ]);
-
-    if (knownDevices.some((candidate) =>
-      normalizedMac && candidate.proxyMac?.toString().toLowerCase() === normalizedMac.toString())) return null;
-
-    if (!device || !device.ip) return null;
-
-    const policy = await this.policyRepository.findByDeviceId(device.id);
-    const macString = device.mac.toString();
-
+    if (knownDevices.some((candidate) => normalizedMac && candidate.proxyMac?.toString().toLowerCase() === normalizedMac.toString())) return null;
+    if (!device) return null;
+    const [policy, discovered] = await Promise.all([this.policyRepository.findByDeviceId(device.id), this.discoveryService.discover()]);
+    const online = discovered.some((candidate) => candidate.mac.toLowerCase() === device.mac.toString().toLowerCase());
     return {
       id: device.id,
-      ip: device.ip.toString(),
-      mac: macString,
+      ip: device.ip?.toString() ?? "",
+      mac: device.mac.toString(),
       hostname: device.hostname,
       l2Visible: device.l2Visible,
       proxyMac: device.proxyMac?.toString() ?? null,
       identityValidated: device.identityValidated,
       identitySource: device.identitySource,
       blocked: policy?.blocked ?? false,
+      online,
       firstSeen: device.firstSeen,
       lastSeen: device.lastSeen,
     };
