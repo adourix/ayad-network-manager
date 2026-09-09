@@ -1,1 +1,17 @@
-html,body,#root{min-height:100%;margin:0}html{background:#ebe7e0}body{min-width:320px;-webkit-font-smoothing:antialiased}a{color:inherit}button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid #8e765e;outline-offset:2px}
+html{background:#f3f0ea}body{min-width:320px}#root{min-height:100vh}::selection{background:#705b48;color:#fff}::-webkit-scrollbar{width:8px;height:8px}::-webkit-scrollbar-track{background:#eeeae3}::-webkit-scrollbar-thumb{background:#c9c1b6;border-radius:8px}::-webkit-scrollbar-thumb:hover{background:#aaa095}
+
+/* Dashboard cards: keep the complete metric row inside the content area. */
+.dashboard-metrics{grid-template-columns:repeat(6,minmax(0,1fr));gap:11px;overflow:visible}
+.dashboard-metrics>.metric{width:100%;min-width:0}
+.policy-summary{grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+.policy-summary>.metric{width:100%;min-width:0}
+
+@media (max-width:1250px){
+  .dashboard-metrics{grid-template-columns:repeat(3,minmax(0,1fr))}
+}
+@media (max-width:760px){
+  .dashboard-metrics,.policy-summary{grid-template-columns:1fr 1fr}
+}
+@media (max-width:480px){
+  .dashboard-metrics,.policy-summary{grid-template-columns:1fr}
+}
