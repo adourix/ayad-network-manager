@@ -26,22 +26,43 @@ export class NftPortRuleEnforcer implements PortRuleEnforcer {
   ) {}
 
   async apply(device: { mac: string; ip: string }, rule: PortRuleRecord): Promise<void> {
-    if (!validIpv4(device.ip) || !["tcp", "udp"].includes(rule.protocol) || !["allow", "block"].includes(rule.action) || !validPort(rule.port)) {
+    if (
+      !validIpv4(device.ip) ||
+      !["tcp", "udp"].includes(rule.protocol) ||
+      !["allow", "block"].includes(rule.action) ||
+      !validPort(rule.port)
+    ) {
       throw new Error("Invalid port rule input");
     }
 
     const verdict = rule.action === "allow" ? "accept" : "drop";
     const comment = `ayad_nm_port_${rule.id}`;
+
+    /*
+     * Single-interface + IFB is an L3 enforcement topology. The client-facing
+     * interface may see an AP/proxy MAC instead of the real client MAC, and
+     * the return packet's destination MAC can therefore be the proxy MAC.
+     * Match the validated client IP instead of Ethernet identity.
+     *
+     * Blocked-device rules occupy positions 0 and 1. Port rules start at the
+     * first project-owned slot after them so an allow rule cannot bypass a
+     * device-wide block.
+     */
     const upload = [
       "insert", "rule", "ip", "filter", "FORWARD", "position", PORT_RULE_POSITION,
-      "iifname", config.network.clientInterface, "ip", "saddr", device.ip,
-      rule.protocol, "dport", String(rule.port), "oifname", config.network.uplinkInterface,
+      "iifname", config.network.clientInterface,
+      "ip", "saddr", device.ip,
+      rule.protocol, "dport", String(rule.port),
+      "oifname", config.network.uplinkInterface,
       verdict, "comment", comment,
     ];
+
     const download = [
       "insert", "rule", "ip", "filter", "FORWARD", "position", PORT_RULE_POSITION,
-      "iifname", config.network.uplinkInterface, "ip", "daddr", device.ip,
-      rule.protocol, "sport", String(rule.port), "oifname", config.network.clientInterface,
+      "iifname", config.network.uplinkInterface,
+      "ip", "daddr", device.ip,
+      rule.protocol, "sport", String(rule.port),
+      "oifname", config.network.clientInterface,
       verdict, "comment", `${comment}_return`,
     ];
 
@@ -51,46 +72,55 @@ export class NftPortRuleEnforcer implements PortRuleEnforcer {
       await this.executor.execute("nft", upload);
       await this.executor.execute("nft", download);
       await this.operations?.audit({
-        action: "apply-port-rule", mac: device.mac, deviceId: rule.deviceId,
-        actor: process.env.ADMIN_USERNAME ?? "admin",
-        details: { ruleId: rule.id, protocol: rule.protocol, port: rule.port, action: rule.action, result: "success" },
+        action: "apply-port-rule",
+        mac: device.mac,
+        deviceId: rule.deviceId,
+        details: {
+          ruleId: rule.id,
+          protocol: rule.protocol,
+          port: rule.port,
+          action: rule.action,
+          result: "success",
+        },
       });
     } catch (error) {
       await this.operations?.audit({
-        action: "apply-port-rule", mac: device.mac, deviceId: rule.deviceId,
-        actor: process.env.ADMIN_USERNAME ?? "admin",
-        details: { ruleId: rule.id, protocol: rule.protocol, port: rule.port, action: rule.action, result: "failure", error: error instanceof Error ? error.message : String(error) },
+        action: "apply-port-rule",
+        mac: device.mac,
+        deviceId: rule.deviceId,
+        details: {
+          ruleId: rule.id,
+          result: "failure",
+          error: error instanceof Error ? error.message : String(error),
+        },
       });
       throw error;
     }
   }
 
   async remove(rule: PortRuleRecord): Promise<void> {
-    const result = await this.executor.execute("nft", ["-j", "-a", "list", "chain", "ip", "filter", "FORWARD"]);
-    const pattern = `\\"comment\\"\\s*:\\s*\\"ayad_nm_port_${rule.id}(?:_return)?\\"[\\s\\S]*?\\"handle\\"\\s*:\\s*(\\d+)`;
+    const result = await this.executor.execute(
+      "nft",
+      ["-j", "-a", "list", "chain", "ip", "filter", "FORWARD"],
+    );
+
+    const pattern =
+      `\\"comment\\"\\s*:\\s*\\"ayad_nm_port_${rule.id}(?:_return)?\\"[\\s\\S]*?\\"handle\\"\\s*:\\s*(\\d+)`;
     const handles = [...result.stdout.matchAll(new RegExp(pattern, "g"))]
-      .map((match) => match[1]).filter((handle): handle is string => Boolean(handle));
+      .map((match) => match[1])
+      .filter((handle): handle is string => Boolean(handle));
 
-    try {
-      for (const handle of handles) {
-        const remove = ["delete", "rule", "ip", "filter", "FORWARD", "handle", handle];
-        // Explicit dry-run validation is required immediately before every destructive mutation.
-        await this.executor.execute("nft", ["-c", ...remove]);
-        await this.executor.execute("nft", remove);
-      }
-
-      await this.operations?.audit({
-        action: "remove-port-rule", deviceId: rule.deviceId,
-        actor: process.env.ADMIN_USERNAME ?? "admin",
-        details: { ruleId: rule.id, removed: handles.length, result: "success" },
-      });
-    } catch (error) {
-      await this.operations?.audit({
-        action: "remove-port-rule", deviceId: rule.deviceId,
-        actor: process.env.ADMIN_USERNAME ?? "admin",
-        details: { ruleId: rule.id, removed: handles.length, result: "failure", error: error instanceof Error ? error.message : String(error) },
-      });
-      throw error;
+    for (const handle of handles) {
+      await this.executor.execute(
+        "nft",
+        ["delete", "rule", "ip", "filter", "FORWARD", "handle", handle],
+      );
     }
+
+    await this.operations?.audit({
+      action: "remove-port-rule",
+      deviceId: rule.deviceId,
+      details: { ruleId: rule.id, removed: handles.length, result: "success" },
+    });
   }
 }

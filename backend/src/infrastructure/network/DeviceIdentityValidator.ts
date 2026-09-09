@@ -27,39 +27,69 @@ export interface DeviceIdentityValidator {
     leases: DhcpLease[],
     neighbors: NeighborEntry[],
     captures?: CapturedIdentity[],
-    renewalObservedMacs?: Set<string>,
   ): ValidatedDeviceIdentity[];
 }
 
-export class DefaultDeviceIdentityValidator implements DeviceIdentityValidator {
+export class DefaultDeviceIdentityValidator
+  implements DeviceIdentityValidator
+{
   validate(
     leases: DhcpLease[],
     neighbors: NeighborEntry[],
     _captures?: CapturedIdentity[],
-    _renewalObservedMacs?: Set<string>,
   ): ValidatedDeviceIdentity[] {
-    const leaseByMac = new Map<string, DhcpLease>();
+    const leaseByMac =
+      new Map<string, DhcpLease>();
+
     for (const lease of leases) {
-      leaseByMac.set(lease.mac.trim().toLowerCase(), lease);
+      leaseByMac.set(
+        lease.mac
+          .trim()
+          .toLowerCase(),
+        lease,
+      );
     }
 
-    const validated = new Map<string, ValidatedDeviceIdentity>();
+    const validated =
+      new Map<
+        string,
+        ValidatedDeviceIdentity
+      >();
+
     for (const neighbor of neighbors) {
-      const mac = neighbor.mac.trim().toLowerCase();
-      const lease = leaseByMac.get(mac);
-      if (validated.has(mac)) continue;
-      validated.set(mac, {
+      const mac =
+        neighbor.mac
+          .trim()
+          .toLowerCase();
+
+      const lease =
+        leaseByMac.get(mac);
+
+      if (validated.has(mac)) {
+        continue;
+      }
+
+      validated.set(
         mac,
-        ip: neighbor.ip,
-        hostname: lease?.hostname ?? null,
-        clientId: lease?.clientId ?? null,
-        neighborState: neighbor.state,
-        l2Visible: true,
-        proxyMac: null,
-        identityValidated: true,
-        identitySource: lease ? "DHCP" : "STATIC_ARP",
-      });
+        {
+          mac,
+          ip: neighbor.ip,
+          hostname:
+            lease?.hostname ?? null,
+          clientId:
+            lease?.clientId ?? null,
+          neighborState:
+            neighbor.state,
+          l2Visible: true,
+          proxyMac: null,
+          identityValidated: true,
+          identitySource: lease ? "DHCP" : "STATIC_ARP",
+        },
+      );
     }
-    return Array.from(validated.values());
+
+    return Array.from(
+      validated.values(),
+    );
   }
 }

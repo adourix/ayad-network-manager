@@ -1,28 +1,45 @@
 import "dotenv/config";
 
-function optional(name: string): string { return process.env[name] ?? ""; }
+function required(name: string): string {
+  const value = process.env[name];
+  if (!value) throw new Error(`Missing required environment variable: ${name}`);
+  return value;
+}
+
 function numberFromEnv(name: string, fallback: number): number {
   const value = process.env[name];
   if (!value) return fallback;
   const parsed = Number(value);
-  if (!Number.isFinite(parsed)) throw new Error(`Invalid numeric environment variable: ${name}`);
+  if (!Number.isFinite(parsed)) {
+    throw new Error(`Invalid numeric environment variable: ${name}`);
+  }
   return parsed;
 }
+
 function networkModeFromEnv(): "dual-interface" | "single-interface-ifb" {
   const value = process.env.NETWORK_MODE ?? "single-interface-ifb";
-  if (value !== "dual-interface" && value !== "single-interface-ifb") throw new Error(`Invalid NETWORK_MODE: ${value}. Expected "dual-interface" or "single-interface-ifb".`);
+  if (value !== "dual-interface" && value !== "single-interface-ifb") {
+    throw new Error(
+      `Invalid NETWORK_MODE: ${value}. Expected "dual-interface" or "single-interface-ifb".`,
+    );
+  }
   return value;
 }
 
-const dnsServers = (process.env.DNS_SERVERS ?? "1.1.1.1,8.8.8.8").split(",").map((value) => value.trim()).filter(Boolean);
-if (dnsServers.length === 0) throw new Error("DNS_SERVERS must contain at least one server");
+const clientInterface = required("CLIENT_INTERFACE");
+const uplinkInterface = required("UPLINK_INTERFACE");
 
-export const setupComplete = [
-  "CLIENT_INTERFACE", "UPLINK_INTERFACE", "CLIENT_GATEWAY_IP", "CLIENT_SUBNET",
-  "UPLINK_BANDWIDTH_MBPS", "VPN_TUN_INTERFACE", "SING_BOX_CONFIG_PATH", "VPN_TUN_ADDRESS",
-  "DHCP_RESERVATIONS_PATH", "DHCP_LEASES_PATH", "DATABASE_URL", "DATABASE_USER", "DATABASE_PASSWORD",
-  "DATABASE_NAME", "DATABASE_HOST",
-].every((name) => Boolean(process.env[name]));
+if (
+  process.env.NODE_ENV === "production" &&
+  (!process.env.ADMIN_PASSWORD_HASH ||
+    !process.env.ADMIN_PASSWORD_SALT ||
+    process.env.ADMIN_PASSWORD === "change-me" ||
+    process.env.ADMIN_PASSWORD === "change-me-before-production")
+) {
+  throw new Error(
+    "Production requires ADMIN_PASSWORD_HASH and ADMIN_PASSWORD_SALT; default credentials are forbidden",
+  );
+}
 
 export const config = {
   nodeEnv: process.env.NODE_ENV ?? "development",
@@ -33,39 +50,38 @@ export const config = {
     tlsKeyPath: process.env.TLS_KEY_PATH ?? null,
   },
   network: {
-    clientInterface: optional("CLIENT_INTERFACE"),
-    uplinkInterface: optional("UPLINK_INTERFACE"),
+    clientInterface,
+    uplinkInterface,
     networkMode: networkModeFromEnv(),
-    lanInterface: optional("CLIENT_INTERFACE"),
-    wanInterface: optional("UPLINK_INTERFACE"),
-    clientGatewayIp: optional("CLIENT_GATEWAY_IP"),
-    clientSubnet: optional("CLIENT_SUBNET"),
-    lanIp: optional("CLIENT_GATEWAY_IP"),
-    lanSubnet: optional("CLIENT_SUBNET"),
+    lanInterface: clientInterface,
+    wanInterface: uplinkInterface,
+    clientGatewayIp: required("CLIENT_GATEWAY_IP"),
+    clientSubnet: required("CLIENT_SUBNET"),
+    lanIp: required("CLIENT_GATEWAY_IP"),
+    lanSubnet: required("CLIENT_SUBNET"),
     wanIp: process.env.WAN_IP ?? "",
-    uplinkBandwidthMbps: BigInt(process.env.UPLINK_BANDWIDTH_MBPS ?? "0"),
+    uplinkBandwidthMbps: BigInt(required("UPLINK_BANDWIDTH_MBPS")),
     quotaThrottleMbps: numberFromEnv("QUOTA_THROTTLE_MBPS", 0.5),
-    vpnTunnelInterface: optional("VPN_TUN_INTERFACE"),
-    vpnConfigPath: optional("SING_BOX_CONFIG_PATH"),
-    vpnTunAddress: optional("VPN_TUN_ADDRESS"),
+    vpnTunnelInterface: required("VPN_TUN_INTERFACE"),
+    vpnConfigPath: required("SING_BOX_CONFIG_PATH"),
+    vpnTunAddress: required("VPN_TUN_ADDRESS"),
     sshPort: numberFromEnv("SSH_PORT", 22),
-    dnsServers,
+    dnsServers: (process.env.DNS_SERVERS ?? "1.1.1.1,8.8.8.8")
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean),
   },
   setup: {
-    dhcpReservationsPath: process.env.DHCP_RESERVATIONS_PATH ?? "/var/lib/misc/network-control-reservations.conf",
-    dhcpLeasesPath: process.env.DHCP_LEASES_PATH ?? "/var/lib/misc/dnsmasq.leases",
+    dhcpReservationsPath: required("DHCP_RESERVATIONS_PATH"),
+    dhcpLeasesPath: required("DHCP_LEASES_PATH"),
     notificationWebhookUrl: process.env.NOTIFICATION_WEBHOOK_URL ?? null,
   },
   database: {
-    url: optional("DATABASE_URL"),
-    user: optional("DATABASE_USER"),
-    password: optional("DATABASE_PASSWORD"),
-    name: optional("DATABASE_NAME"),
-    host: optional("DATABASE_HOST"),
+    url: required("DATABASE_URL"),
+    user: required("DATABASE_USER"),
+    password: required("DATABASE_PASSWORD"),
+    name: required("DATABASE_NAME"),
+    host: required("DATABASE_HOST"),
     port: numberFromEnv("DATABASE_PORT", 5432),
   },
 } as const;
-
-if (setupComplete && config.nodeEnv === "production" && (!process.env.ADMIN_PASSWORD_HASH || !process.env.ADMIN_PASSWORD_SALT || process.env.ADMIN_PASSWORD === "change-me" || process.env.ADMIN_PASSWORD === "change-me-before-production")) {
-  throw new Error("Production requires ADMIN_PASSWORD_HASH and ADMIN_PASSWORD_SALT; default credentials are forbidden");
-}

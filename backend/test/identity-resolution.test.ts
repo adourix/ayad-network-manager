@@ -20,7 +20,9 @@ test("matching DHCP and neighbor identity is visible and enforceable", () => {
 });
 
 test("mismatched DHCP and neighbor identity is deferred without capture evidence", () => {
-  const result = new DhcpNeighborIdentityValidator("192.168.1.0/24").validate([lease], [neighbor(proxyMac), { ip: "192.168.1.251", mac: proxyMac, state: "REACHABLE" }]);
+  const result = new DhcpNeighborIdentityValidator("192.168.1.0/24").validate([
+    lease,
+  ], [neighbor(proxyMac), { ip: "192.168.1.251", mac: proxyMac, state: "REACHABLE" }]);
   assert.equal(result[0]?.mac, realMac);
   assert.equal(result.length, 1);
   assert.equal(result[0]?.ip, ip);
@@ -47,14 +49,22 @@ test("broadcast evidence confirms AP proxy and preserves DHCP MAC", () => {
 test("one proxy MAC can represent multiple DHCP client IPs", () => {
   const secondIp = "192.168.1.99";
   const secondLease = { ...lease, ip: secondIp, mac: "aa:bb:cc:dd:ee:ff" };
-  const result = new DhcpNeighborIdentityValidator("192.168.1.0/24").validate([lease, secondLease], [neighbor(proxyMac), { ip: secondIp, mac: proxyMac, state: "REACHABLE" }], [capture(realMac, ip), capture(secondLease.mac, secondIp)]);
+  const result = new DhcpNeighborIdentityValidator("192.168.1.0/24").validate(
+    [lease, secondLease],
+    [neighbor(proxyMac), { ip: secondIp, mac: proxyMac, state: "REACHABLE" }],
+    [capture(realMac, ip), capture(secondLease.mac, secondIp)],
+  );
   assert.deepEqual(result.map((item) => item.mac), [realMac, secondLease.mac]);
   assert.ok(result.every((item) => item.proxyMac === proxyMac));
 });
 
 test("a shared proxy MAC is never returned as the DHCP client identity", () => {
   const secondIp = "192.168.1.99";
-  const result = new DhcpNeighborIdentityValidator("192.168.1.0/24").validate([lease, { ...lease, ip: secondIp, mac: "aa:bb:cc:dd:ee:ff" }], [neighbor(proxyMac), { ip: secondIp, mac: proxyMac, state: "STALE" }], [capture(realMac), capture("aa:bb:cc:dd:ee:ff")]);
+  const result = new DhcpNeighborIdentityValidator("192.168.1.0/24").validate(
+    [lease, { ...lease, ip: secondIp, mac: "aa:bb:cc:dd:ee:ff" }],
+    [neighbor(proxyMac), { ip: secondIp, mac: proxyMac, state: "STALE" }],
+    [capture(realMac), capture("aa:bb:cc:dd:ee:ff")],
+  );
   assert.ok(result.every((item) => item.mac !== proxyMac));
 });
 
@@ -70,14 +80,22 @@ test("capture parser uses Ethernet source MAC and does not invent an IP", () => 
 
 test("capture parser uses DHCP chaddr when an AP proxies the Ethernet source", () => {
   const reader = new BroadcastCaptureReader("eno1");
-  const dhcp = reader.parseLine(`${proxyMac} > ff:ff:ff:ff:ff:ff, ethertype IPv4 (0x0800), length 300: IP 0.0.0.0.68 > 255.255.255.255.67: BOOTP/DHCP, Discover, Client-Ethernet-Address ${dhcpChaddr}`);
+  const dhcp = reader.parseLine(
+    `${proxyMac} > ff:ff:ff:ff:ff:ff, ethertype IPv4 (0x0800), length 300: IP 0.0.0.0.68 > 255.255.255.255.67: BOOTP/DHCP, Discover, Client-Ethernet-Address ${dhcpChaddr}`,
+  );
   assert.equal(dhcp?.mac, dhcpChaddr);
   assert.equal(dhcp?.mac === proxyMac, false);
 });
 
 test("live tcpdump DHCP packet associates continuation chaddr with proxy Ethernet source", () => {
   const reader = new BroadcastCaptureReader("eno1");
-  const packet = [`${proxyMac} > ff:ff:ff:ff:ff:ff, ethertype IPv4 (0x0800), length 349: (tos 0x0, ttl 128, id 14103, offset 0, flags [none], proto UDP (17), length 335)`, `    0.0.0.0.68 > 255.255.255.255.67: BOOTP/DHCP, Request from ${realMac}, length 307, xid 0x9f59b830, Flags [Broadcast]`, `      Client-Ethernet-Address ${realMac}`, `      DHCP-Message (53), length 1: Discover`];
+  const packet = [
+    `${proxyMac} > ff:ff:ff:ff:ff:ff, ethertype IPv4 (0x0800), length 349: (tos 0x0, ttl 128, id 14103, offset 0, flags [none], proto UDP (17), length 335)`,
+    `    0.0.0.0.68 > 255.255.255.255.67: BOOTP/DHCP, Request from ${realMac}, length 307, xid 0x9f59b830, Flags [Broadcast]`,
+    `      Client-Ethernet-Address ${realMac}`,
+    `      DHCP-Message (53), length 1: Discover`,
+  ];
+
   const captured = reader.parsePacket(packet);
   assert.equal(captured?.mac, realMac);
   assert.equal(captured?.ethernetSource, proxyMac);
@@ -89,7 +107,11 @@ test("live tcpdump DHCP packet associates continuation chaddr with proxy Etherne
 });
 
 test("proxy-source DHCP chaddr confirms only its matching DHCP lease", () => {
-  const result = new DhcpNeighborIdentityValidator("192.168.1.0/24").validate([{ ...lease, mac: dhcpChaddr }], [neighbor(proxyMac)], [{ mac: dhcpChaddr, capturedAt: new Date() }]);
+  const result = new DhcpNeighborIdentityValidator("192.168.1.0/24").validate(
+    [{ ...lease, mac: dhcpChaddr }],
+    [neighbor(proxyMac)],
+    [{ mac: dhcpChaddr, capturedAt: new Date() }],
+  );
   assert.equal(result[0]?.mac, dhcpChaddr);
   assert.equal(result[0]?.proxyMac, proxyMac);
   assert.equal(result[0]?.identityValidated, true);
@@ -100,10 +122,17 @@ test("live-shaped proxy DHCP continuation confirms the matching lease", () => {
   const reader = new BroadcastCaptureReader("eno1");
   const firstLine = `${proxyMac} > ff:ff:ff:ff:ff:ff, ethertype IPv4 (0x0800), length 300: IP 0.0.0.0.68 > 255.255.255.255.67: BOOTP/DHCP, Discover`;
   const continuation = "    Client-Ethernet-Address (02:a4:b7:7a:4e:ac)";
+
   assert.equal(reader.parseLine(firstLine)?.mac, proxyMac);
   const captured = reader.parseLine(continuation);
   assert.equal(captured?.mac, dhcpChaddr);
-  const result = new DhcpNeighborIdentityValidator("192.168.1.0/24").validate([{ ...lease, mac: dhcpChaddr, ip: "192.168.1.64" }], [{ ip: "192.168.1.64", mac: proxyMac, state: "REACHABLE" }], captured ? [captured] : []);
+
+  const result = new DhcpNeighborIdentityValidator("192.168.1.0/24").validate(
+    [{ ...lease, mac: dhcpChaddr, ip: "192.168.1.64" }],
+    [{ ip: "192.168.1.64", mac: proxyMac, state: "REACHABLE" }],
+    captured ? [captured] : [],
+  );
+
   assert.equal(result[0]?.mac, dhcpChaddr);
   assert.equal(result[0]?.ip, "192.168.1.64");
   assert.equal(result[0]?.l2Visible, false);
@@ -114,7 +143,11 @@ test("live-shaped proxy DHCP continuation confirms the matching lease", () => {
 });
 
 test("mismatched DHCP chaddr does not validate a different DHCP lease", () => {
-  const result = new DhcpNeighborIdentityValidator("192.168.1.0/24").validate([lease], [neighbor(proxyMac)], [{ mac: dhcpChaddr, capturedAt: new Date() }]);
+  const result = new DhcpNeighborIdentityValidator("192.168.1.0/24").validate(
+    [lease],
+    [neighbor(proxyMac)],
+    [{ mac: dhcpChaddr, capturedAt: new Date() }],
+  );
   assert.equal(result[0]?.mac, realMac);
   assert.equal(result[0]?.identityValidated, false);
   assert.equal(result[0]?.deferred, true);
@@ -126,6 +159,7 @@ test("capture parser records ARP sender and IPv4 source without using targets", 
   const arp = reader.parseLine(`${realMac} > ff:ff:ff:ff:ff:ff, ethertype ARP (0x0806), length 42: Request who-has 192.168.1.1 tell ${ip}`);
   assert.equal(arp?.mac, realMac);
   assert.equal(arp?.sourceIp, ip);
+
   const ipv4 = reader.parseLine(`${realMac} > ff:ff:ff:ff:ff:ff, ethertype IPv4 (0x0800), length 100: IP ${ip}.68 > 255.255.255.255.67: BOOTP/DHCP, Request`);
   assert.equal(ipv4?.mac, realMac);
   assert.equal(ipv4?.sourceIp, ip);
@@ -133,10 +167,31 @@ test("capture parser records ARP sender and IPv4 source without using targets", 
 
 test("confirmed proxy identity survives a later capture-free discovery cycle", () => {
   const validator = new DhcpNeighborIdentityValidator("192.168.1.0/24");
-  const confirmed = validator.validate([{ ...lease, mac: dhcpChaddr, ip: "192.168.1.64" }], [{ ip: "192.168.1.64", mac: proxyMac, state: "REACHABLE" }], [capture(dhcpChaddr, "192.168.1.64")])[0]!;
-  const laterWithoutCapture = validator.validate([{ ...lease, mac: dhcpChaddr, ip: "192.168.1.64" }], [{ ip: "192.168.1.64", mac: proxyMac, state: "REACHABLE" }], [])[0]!;
-  const persisted = { id: 1, mac: MacAddress.create(confirmed.mac), ip: IpAddress.create(confirmed.ip), hostname: confirmed.hostname, l2Visible: confirmed.l2Visible, proxyMac: confirmed.proxyMac ? MacAddress.create(confirmed.proxyMac) : null, identityValidated: confirmed.identityValidated, identitySource: confirmed.identitySource, firstSeen: new Date(0), lastSeen: new Date(0) };
+  const confirmed = validator.validate(
+    [{ ...lease, mac: dhcpChaddr, ip: "192.168.1.64" }],
+    [{ ip: "192.168.1.64", mac: proxyMac, state: "REACHABLE" }],
+    [capture(dhcpChaddr, "192.168.1.64")],
+  )[0]!;
+  const laterWithoutCapture = validator.validate(
+    [{ ...lease, mac: dhcpChaddr, ip: "192.168.1.64" }],
+    [{ ip: "192.168.1.64", mac: proxyMac, state: "REACHABLE" }],
+    [],
+  )[0]!;
+
+  const persisted = {
+    id: 1,
+    mac: MacAddress.create(confirmed.mac),
+    ip: IpAddress.create(confirmed.ip),
+    hostname: confirmed.hostname,
+    l2Visible: confirmed.l2Visible,
+    proxyMac: confirmed.proxyMac ? MacAddress.create(confirmed.proxyMac) : null,
+    identityValidated: confirmed.identityValidated,
+    identitySource: confirmed.identitySource,
+    firstSeen: new Date(0),
+    lastSeen: new Date(0),
+  };
   const retained = reconcileIdentityObservation(persisted, laterWithoutCapture);
+
   assert.equal(retained.mac, dhcpChaddr);
   assert.equal(retained.identitySource, "DHCP_CONFIRMED_PROXY");
   assert.equal(retained.identityValidated, true);
@@ -146,9 +201,25 @@ test("confirmed proxy identity survives a later capture-free discovery cycle", (
 });
 
 test("confirmed proxy identity changes only on positive direct-L2 evidence", () => {
-  const existing = { id: 1, mac: MacAddress.create(dhcpChaddr), ip: IpAddress.create("192.168.1.64"), hostname: "iphone", l2Visible: false, proxyMac: MacAddress.create(proxyMac), identityValidated: true, identitySource: "DHCP_CONFIRMED_PROXY" as const, firstSeen: new Date(0), lastSeen: new Date(0) };
-  const directObservation = new DhcpNeighborIdentityValidator("192.168.1.0/24").validate([{ ...lease, mac: dhcpChaddr, ip: "192.168.1.64" }], [{ ip: "192.168.1.64", mac: dhcpChaddr, state: "REACHABLE" }], [])[0]!;
+  const existing = {
+    id: 1,
+    mac: MacAddress.create(dhcpChaddr),
+    ip: IpAddress.create("192.168.1.64"),
+    hostname: "iphone",
+    l2Visible: false,
+    proxyMac: MacAddress.create(proxyMac),
+    identityValidated: true,
+    identitySource: "DHCP_CONFIRMED_PROXY" as const,
+    firstSeen: new Date(0),
+    lastSeen: new Date(0),
+  };
+  const directObservation = new DhcpNeighborIdentityValidator("192.168.1.0/24").validate(
+    [{ ...lease, mac: dhcpChaddr, ip: "192.168.1.64" }],
+    [{ ip: "192.168.1.64", mac: dhcpChaddr, state: "REACHABLE" }],
+    [],
+  )[0]!;
   const reconciled = reconcileIdentityObservation(existing, directObservation);
+
   assert.equal(reconciled.identitySource, "DHCP");
   assert.equal(reconciled.identityValidated, true);
   assert.equal(reconciled.l2Visible, true);
@@ -157,7 +228,11 @@ test("confirmed proxy identity changes only on positive direct-L2 evidence", () 
 });
 
 test("invalid capture source metadata cannot confirm a DHCP identity", () => {
-  const result = new DhcpNeighborIdentityValidator("192.168.1.0/24").validate([lease], [neighbor(proxyMac)], [capture(realMac, "999.1.1.1")]);
+  const result = new DhcpNeighborIdentityValidator("192.168.1.0/24").validate(
+    [lease],
+    [neighbor(proxyMac)],
+    [capture(realMac, "999.1.1.1")],
+  );
   assert.equal(result[0]?.identityValidated, false);
   assert.equal(result[0]?.deferred, true);
 });
@@ -177,24 +252,11 @@ test("usable neighbor without DHCP lease is discovered as static IP", () => {
   assert.equal(result[0]?.identityValidated, true);
 });
 
-test("proxy mismatch is not classified after three cycles when no DHCP renewal is observed", () => {
+test("proxy mismatch is not classified until three consecutive trusted cycles", () => {
   const validator = new DhcpNeighborIdentityValidator("192.168.1.0/24");
   const leases = [{ ...lease, mac: dhcpChaddr, ip: "192.168.1.64" }];
   const neighbors = [{ ip: "192.168.1.64", mac: proxyMac, state: "REACHABLE" }];
   assert.equal(validator.validate(leases, neighbors)[0]?.identitySource, "DHCP");
   assert.equal(validator.validate(leases, neighbors)[0]?.identitySource, "DHCP");
-  assert.equal(validator.validate(leases, neighbors)[0]?.identitySource, "DHCP");
-});
-
-test("proxy mismatch becomes PROXY_UNCONFIRMED only after three cycles and DHCP renewal evidence", () => {
-  const validator = new DhcpNeighborIdentityValidator("192.168.1.0/24");
-  const leases = [{ ...lease, mac: dhcpChaddr, ip: "192.168.1.64" }];
-  const neighbors = [{ ip: "192.168.1.64", mac: proxyMac, state: "REACHABLE" }];
-  const renewal = new Set([dhcpChaddr]);
-  assert.equal(validator.validate(leases, neighbors, [], renewal)[0]?.identitySource, "DHCP");
-  assert.equal(validator.validate(leases, neighbors, [], renewal)[0]?.identitySource, "DHCP");
-  const result = validator.validate(leases, neighbors, [], renewal)[0]!;
-  assert.equal(result.identitySource, "PROXY_UNCONFIRMED");
-  assert.equal(result.identityValidated, false);
-  assert.equal(result.deferred, true);
+  assert.equal(validator.validate(leases, neighbors)[0]?.identitySource, "PROXY_UNCONFIRMED");
 });

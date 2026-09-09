@@ -2,26 +2,19 @@ import type { DeviceRepository } from "../../domain/repositories/DeviceRepositor
 import type { DevicePolicyRepository } from "../../domain/repositories/DevicePolicyRepository.js";
 import type { PolicyCatalogRepository, ScheduleRuleRecord } from "../../domain/repositories/PolicyCatalogRepository.js";
 import type { TrafficEnforcementService } from "../enforcement/TrafficEnforcementService.js";
-import type { DeviceBlocker } from "../enforcement/DeviceBlocker.js";
-import type { OperationsRepository } from "../../domain/repositories/OperationsRepository.js";
-import { MacAddress } from "../../domain/value-objects/MacAddress.js";
+import type { FirewallService } from "../enforcement/FirewallService.js";
 
-type ScheduledTarget = { kind: "mac" | "ip"; value: string };
-type ScheduledState = { blocked: boolean; target: ScheduledTarget };
-
-/** Applies temporary schedule state without mutating the persisted desired policy. */
+/** Applies the active rule and restores the persisted policy outside its window. */
 export class ScheduleEnforcementService {
   private timer: NodeJS.Timeout | undefined;
   private running = false;
-  private readonly scheduledStates = new Map<number, ScheduledState>();
 
   constructor(
     private readonly devices: DeviceRepository,
     private readonly policies: DevicePolicyRepository,
     private readonly catalog: PolicyCatalogRepository,
     private readonly traffic: TrafficEnforcementService,
-    private readonly blocker: DeviceBlocker,
-    private readonly operations?: OperationsRepository,
+    private readonly firewall: FirewallService,
     private readonly intervalMs = 30_000,
     private readonly now = () => new Date(),
   ) {}
@@ -54,29 +47,14 @@ export class ScheduleEnforcementService {
 
         const schedule = schedules.find((value) => value.id === policy.scheduleId);
         const active = schedule?.rules.find(
-          (rule: ScheduleRuleRecord) => rule.dayOfWeek === day && this.inWindow(rule, minutes),
+          (rule: ScheduleRuleRecord) =>
+            rule.dayOfWeek === day && this.inWindow(rule, minutes),
         );
 
-        const previous = this.scheduledStates.get(device.id);
-        if (active) {
-          const blocked = active.blocked ?? policy.blocked;
-          const target = this.targetFor(device);
-          if (target) {
-            if (!previous || previous.blocked !== blocked || !sameTarget(previous.target, target)) {
-              if (previous && !sameTarget(previous.target, target)) await this.enforceTarget(previous.target, false);
-              await this.enforceTarget(target, blocked);
-            }
-            this.scheduledStates.set(device.id, { blocked, target });
-          }
-        } else if (previous) {
-          // The window just ended. Restore the durable base policy without
-          // changing that policy in PostgreSQL.
-          if (previous.blocked !== policy.blocked) {
-            const target = this.targetFor(device) ?? previous.target;
-            if (!sameTarget(previous.target, target)) await this.enforceTarget(previous.target, false);
-            await this.enforceTarget(target, policy.blocked);
-          }
-          this.scheduledStates.delete(device.id);
+        const blocked = active?.blocked ?? policy.blocked;
+        if (blocked !== policy.blocked) {
+          if (blocked) await this.firewall.blockDevice(device.mac.toString());
+          else await this.firewall.unblockDevice(device.mac.toString());
         }
 
         if (!device.ip) continue;
@@ -101,32 +79,6 @@ export class ScheduleEnforcementService {
     }
   }
 
-  private targetFor(device: Awaited<ReturnType<DeviceRepository["findAll"]>>[number]): ScheduledTarget | null {
-    if (device.l2Visible) return { kind: "mac", value: device.mac.toString() };
-    if (device.ip) return { kind: "ip", value: device.ip.toString() };
-    return null;
-  }
-
-  private async enforceTarget(target: ScheduledTarget, blocked: boolean): Promise<void> {
-    if (target.kind === "mac") {
-      if (blocked) await this.blocker.block(MacAddress.create(target.value));
-      else await this.blocker.unblock(MacAddress.create(target.value));
-    } else {
-      if (blocked) {
-        if (!this.blocker.blockIp) throw new Error("Proxy-backed scheduled block requires IP enforcement");
-        await this.blocker.blockIp(target.value);
-      } else if (this.blocker.unblockIp) {
-        await this.blocker.unblockIp(target.value);
-      }
-    }
-
-    await this.operations?.audit({
-      action: blocked ? "schedule-block-device" : "schedule-unblock-device",
-      actor: "system",
-      details: { result: "success", target },
-    });
-  }
-
   private inWindow(rule: ScheduleRuleRecord, minutes: number): boolean {
     const parse = (value: string) => {
       const [hours, mins] = value.split(":").map(Number);
@@ -139,8 +91,4 @@ export class ScheduleEnforcementService {
       ? minutes >= start && minutes < end
       : minutes >= start || minutes < end;
   }
-}
-
-function sameTarget(left: ScheduledTarget, right: ScheduledTarget): boolean {
-  return left.kind === right.kind && left.value === right.value;
 }
