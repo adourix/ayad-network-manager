@@ -82,5 +82,6 @@ fi
 
 systemctl daemon-reload
 systemctl enable network-control-enforcement.service network-control-backend.service
+systemctl start network-control-backend.service
 
-echo "Built backend and installed network-control services and sing-box config helper"
+echo "Built backend, installed network-control services, provisioned setup storage, and started backend"
