@@ -91,7 +91,7 @@ if [[ ! -f "$TLS_DIR/server.key" || ! -f "$TLS_DIR/server.crt" ]]; then
     -keyout "$TLS_DIR/server.key" \
     -out "$TLS_DIR/server.crt" \
     -subj "/CN=Ayad Network Manager" \
-    -addext "subjectAltName=IP:${DEFAULT_IP},DNS=ayad-nm.local,DNS=localhost,IP=127.0.0.1"
+    -addext "subjectAltName=IP:${DEFAULT_IP},DNS:ayad-nm.local,DNS:localhost,IP:127.0.0.1"
   chmod 0600 "$TLS_DIR/server.key"
   chmod 0644 "$TLS_DIR/server.crt"
 fi
@@ -121,6 +121,10 @@ EOF
 modprobe ifb
 sysctl --system >/dev/null
 systemctl daemon-reload
+
+# dnsmasq is DHCP-only because systemd-resolved owns the local DNS stub listener.
+install -m 0644 "$APP_ROOT/deploy/bare-metal/dnsmasq-dhcp-only.conf" \
+  /etc/dnsmasq.d/network-control-dns.conf
 
 # VPN is opt-in. Install the runtime and service, but do not create a TUN
 # interface or start sing-box until the operator supplies a VMess/VLESS link.
@@ -184,14 +188,16 @@ cd "$APP_ROOT"
 npm run build
 APP_ROOT="$APP_ROOT" CONFIG_FILE="$ENV_FILE" bash "$APP_ROOT/deploy/systemd/install.sh"
 
+log "Starting Ayad Network Manager"
 systemctl enable network-control-enforcement.service network-control-backend.service
 systemctl restart network-control-backend.service || systemctl start network-control-backend.service
 
 log "Installation complete"
 printf '%s\n' \
   "Backend root: $APP_ROOT" \
-  "Setup URL: http://${DEFAULT_IP}:5000/setup" \
+  "Setup URL: https://${DEFAULT_IP}:5000/setup" \
   "VPN runtime: $(sing-box version | head -n 1)" \
   "VPN is installed but disabled until a VMess/VLESS link is configured" \
-  "After setup apply succeeds, restart: systemctl restart network-control-backend.service" \
-  "Then open: https://<gateway-ip>:5000/"
+  "The backend is started automatically by this installer" \
+  "After setup apply succeeds, the backend may be restarted from the service manager if its environment changed" \
+  "Dashboard: https://<gateway-ip>:5000/"
