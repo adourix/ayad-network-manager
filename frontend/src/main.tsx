@@ -50,7 +50,7 @@ function Root() {
   }
 
   if (!setupComplete) {
-    return <SetupPage />;
+    return window.location.pathname === "/setup" ? <SetupPage /> : null;
   }
 
   if (window.location.pathname === "/setup") {
