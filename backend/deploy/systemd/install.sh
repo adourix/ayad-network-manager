@@ -41,6 +41,11 @@ npm run build
 
 install -d -m 0755 "${SYSTEMD_HELPER_DIR}"
 install -d -m 0755 "${BACKUP_DIR}"
+# The backend runs as root but intentionally has a restricted capability set.
+# Keep setup storage root-writable so CAP_NET_RAW does not need to be expanded
+# with CAP_DAC_OVERRIDE just to create setup snapshots.
+chown root:root "${BACKUP_DIR}"
+chmod 0755 "${BACKUP_DIR}"
 install -m 0750 -o root -g root \
   "${TEMPLATE_DIR}/install-sing-box-config.sh" \
   "${SYSTEMD_HELPER_DIR}/install-sing-box-config.sh"
