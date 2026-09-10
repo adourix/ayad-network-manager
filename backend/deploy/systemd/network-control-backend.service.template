@@ -5,6 +5,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+User=root
+Group=root
 WorkingDirectory=@APP_ROOT@
 EnvironmentFile=-@APP_ROOT@/.env
 EnvironmentFile=-@CONFIG_FILE@
