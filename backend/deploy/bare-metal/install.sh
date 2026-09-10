@@ -180,7 +180,7 @@ npx prisma migrate deploy
 
 log "Building React frontend"
 cd "$REPO_ROOT/frontend"
-if [[ -f package-lock.json ]]; then npm ci; else npm install; fi
+if [[ -f package-lock.json ]]; then npm ci || npm install; else npm install; fi
 npm run build
 
 log "Building backend and installing systemd units"
