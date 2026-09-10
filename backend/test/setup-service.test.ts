@@ -31,8 +31,10 @@ test("setup apply refuses an unhealthy configuration without destroying the exis
   const configPath = join(root, "config.env");
   const dnsmasqPath = join(root, "clients.conf");
   const nftablesPath = join(root, "network-control-system.nft");
+  const envPath = join(root, ".env");
   await writeFile(configPath, "OLD=1\n");
   await writeFile(dnsmasqPath, "old\n");
+  await writeFile(envPath, "CLIENT_INTERFACE=old\n");
 
   const probe = {
     run: async (command: string, args: string[]) => {
@@ -50,10 +52,11 @@ test("setup apply refuses an unhealthy configuration without destroying the exis
     },
   };
 
-  const service = new SetupService(probe, { configPath, dnsmasqPath, nftablesPath, snapshotDir: join(root, "backups") }, () => true);
+  const service = new SetupService(probe, { configPath, dnsmasqPath, nftablesPath, envPath, snapshotDir: join(root, "backups") }, () => true);
   const result = await service.apply({ clientInterface: "eno1", uplinkInterface: "eno1", clientSubnet: "192.168.1.0/24", uplinkBandwidthMbps: 100, dashboardPort: 5000, sshPort: 22, dnsServers: ["1.1.1.1"], activate: false });
   assert.equal(result.applied, false);
   assert.equal(await readFile(configPath, "utf8"), "OLD=1\n");
+  assert.equal(await readFile(envPath, "utf8"), "CLIENT_INTERFACE=old\n");
 });
 
 test("setup renders a DHCP-only dnsmasq config and a management-safe nftables base", async () => {
@@ -61,6 +64,7 @@ test("setup renders a DHCP-only dnsmasq config and a management-safe nftables ba
   const configPath = join(root, "config.env");
   const dnsmasqPath = join(root, "clients.conf");
   const nftablesPath = join(root, "network-control-system.nft");
+  const envPath = join(root, ".env");
   const probe = {
     run: async (command: string, args: string[]) => {
       if (command === "ip" && args[1] === "link") return { stdout: JSON.stringify([{ ifname: "eno1", address: "aa:bb:cc:dd:ee:ff", operstate: "UP", link_type: "ether" }]), stderr: "" };
@@ -76,10 +80,12 @@ test("setup renders a DHCP-only dnsmasq config and a management-safe nftables ba
       return { stdout: "", stderr: "" };
     },
   };
-  const service = new SetupService(probe, { configPath, dnsmasqPath, nftablesPath, snapshotDir: join(root, "backups") }, () => true);
+  const service = new SetupService(probe, { configPath, dnsmasqPath, nftablesPath, envPath, snapshotDir: join(root, "backups") }, () => true);
   const result = await service.apply({ clientInterface: "eno1", uplinkInterface: "eno1", clientSubnet: "192.168.1.0/24", uplinkBandwidthMbps: 100, dashboardPort: 5000, sshPort: 22, dnsServers: ["1.1.1.1"], activate: false });
   assert.equal(result.applied, true);
-  assert.match(await readFile(dnsmasqPath, "utf8"), /port=0/);
+  assert.doesNotMatch(await readFile(dnsmasqPath, "utf8"), /port=0/);
   assert.match(await readFile(nftablesPath, "utf8"), /ayad_nm_allow_ssh_management/);
   assert.match(await readFile(nftablesPath, "utf8"), /ayad_nm_single_interface_nat/);
+  assert.match(await readFile(envPath, "utf8"), /CLIENT_INTERFACE=eno1/);
+  assert.match(await readFile(envPath, "utf8"), /SETUP_COMPLETED=true/);
 });
