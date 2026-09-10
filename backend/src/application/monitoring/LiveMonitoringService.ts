@@ -2,17 +2,10 @@ import type { BlockedDeviceReader } from "../devices/BlockedDeviceReader.js";
 import type { DeviceDiscoveryService } from "../devices/DeviceDiscoveryService.js";
 import type { DeviceRepository } from "../../domain/repositories/DeviceRepository.js";
 import type { BlockedDeviceRepository } from "../../domain/repositories/BlockedDeviceRepository.js";
-import type {
-  NeighborEntry,
-  NeighborTableReader,
-} from "../../infrastructure/network/NeighborTableReader.js";
-import { MacAddress } from "../../domain/value-objects/MacAddress.js";
+import type { NeighborEntry, NeighborTableReader } from "../../infrastructure/network/NeighborTableReader.js";
 import { reconcileIdentityObservation } from "../devices/IdentityStateReconciler.js";
 import { PresenceResolver } from "./PresenceResolver.js";
-import {
-  getNeighborState,
-  type Reachability,
-} from "./Reachability.js";
+import { getNeighborState, type Reachability } from "./Reachability.js";
 
 export interface LiveDevice {
   ip: string;
@@ -95,6 +88,9 @@ export class LiveMonitoringService {
     ]);
 
     const blockedIps = new Set(activeBindings.map((binding) => binding.ip));
+    const knownByMac = new Map(
+      knownDevices.map((device) => [device.mac.toString().toLowerCase(), device]),
+    );
     const knownProxyMacs = new Set(
       knownDevices
         .map((device) => device.proxyMac?.toString().toLowerCase())
@@ -108,7 +104,7 @@ export class LiveMonitoringService {
       const mac = discovered.mac.toLowerCase();
       if (knownProxyMacs.has(mac)) continue;
 
-      const existing = await this.deviceRepository.findByMac(MacAddress.create(mac));
+      const existing = knownByMac.get(mac);
       const reconciled = reconcileIdentityObservation(existing, discovered);
       const neighbor = neighborByIp.get(reconciled.ip);
       const online = this.presenceResolver.resolve(
