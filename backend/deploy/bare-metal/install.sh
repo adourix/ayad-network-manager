@@ -8,6 +8,7 @@ CONFIG_DIR="/etc/network-control-system"
 TLS_DIR="${CONFIG_DIR}/tls"
 SYSCTL_FILE="/etc/sysctl.d/99-ayad-network-manager.conf"
 MODULES_FILE="/etc/modules-load.d/ayad-network-manager.conf"
+DNSMASQ_OVERRIDE_DIR="/etc/systemd/system/dnsmasq.service.d"
 DB_NAME="ayad_nm"
 DB_USER="ayad_nm"
 
@@ -78,8 +79,24 @@ if [[ ! -f "$TLS_DIR/server.key" || ! -f "$TLS_DIR/server.crt" ]]; then
   chmod 0644 "$TLS_DIR/server.crt"
 fi
 
+log "Preparing persistent host networking"
+mkdir -p "$CONFIG_DIR" /var/lib/network-control/backups /etc/dnsmasq.d /etc/nftables.d "$DNSMASQ_OVERRIDE_DIR"
+printf 'net.ipv4.ip_forward=1\n' > "$SYSCTL_FILE"
+printf 'ifb\n' > "$MODULES_FILE"
+cat > "$DNSMASQ_OVERRIDE_DIR/network-control.conf" <<'EOF'
+[Unit]
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Restart=on-failure
+RestartSec=5
+EOF
+modprobe ifb
+sysctl --system >/dev/null
+systemctl daemon-reload
+
 log "Creating persistent first-boot configuration"
-mkdir -p "$CONFIG_DIR" /var/lib/network-control/backups /etc/dnsmasq.d /etc/nftables.d
 cat > "$ENV_FILE" <<EOF
 NODE_ENV=production
 HOST=0.0.0.0
@@ -118,12 +135,6 @@ NFTABLES_CONFIG_PATH=/etc/nftables.d/network-control-system.nft
 SETUP_SNAPSHOT_DIR=/var/lib/network-control/backups
 EOF
 chmod 0600 "$ENV_FILE"
-
-log "Enabling IPv4 forwarding and IFB across reboots"
-printf 'net.ipv4.ip_forward=1\n' > "$SYSCTL_FILE"
-printf 'ifb\n' > "$MODULES_FILE"
-modprobe ifb
-sysctl --system >/dev/null
 
 log "Installing database schema"
 cd "$APP_ROOT"
