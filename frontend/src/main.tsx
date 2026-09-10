@@ -30,12 +30,33 @@ function Root() {
     return () => { cancelled = true; };
   }, []);
 
+  useEffect(() => {
+    if (setupComplete === null) return;
+
+    const path = window.location.pathname;
+
+    if (!setupComplete && path !== "/setup") {
+      window.location.replace("/setup");
+      return;
+    }
+
+    if (setupComplete && path === "/setup") {
+      window.location.replace("/login");
+    }
+  }, [setupComplete]);
+
   if (setupComplete === null) {
     return <div style={{ minHeight: "100vh", display: "grid", placeItems: "center" }}>Checking gateway setup…</div>;
   }
 
-  if (!setupComplete) return <SetupPage />;
-  if (window.location.pathname === "/setup") return <SetupPage />;
+  if (!setupComplete) {
+    return <SetupPage />;
+  }
+
+  if (window.location.pathname === "/setup") {
+    return null;
+  }
+
   return <App />;
 }
 
