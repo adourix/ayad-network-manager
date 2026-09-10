@@ -14,20 +14,23 @@ export class SingleInterfaceVpnController implements VpnEnforcement {
   async getStatus(): Promise<{ enabled: boolean; connected: boolean }> { const serviceActive = await this.safe("systemctl", ["is-active", "--quiet", "sing-box"]); const tunnelPresent = serviceActive && await this.hasTunnelInterface(); return { enabled: serviceActive, connected: serviceActive && tunnelPresent }; }
   async apply(enabled: boolean): Promise<boolean> {
     if (!enabled) {
+      await setVpnBlockedIpGuardEnabled(false);
       await this.safe("systemctl", ["stop", "sing-box"]);
       await this.setNat(false, false);
-      await setVpnBlockedIpGuardEnabled(false);
       return false;
     }
     await this.safe("systemctl", ["restart", "sing-box"]);
     const connected = await this.waitForReadiness();
-    await this.setNat(connected, true);
+    // Populate the VPN blocked-IP mirror before exposing the VPN as the NAT
+    // egress. If the tunnel is not ready, setNat() installs the fail-closed
+    // direct-egress guard instead of silently falling back to the uplink.
     await setVpnBlockedIpGuardEnabled(true);
+    await this.setNat(connected, true);
     return connected;
   }
   async syncConnectionState(enabled: boolean, connected: boolean): Promise<void> {
-    await this.setNat(connected, enabled);
     await setVpnBlockedIpGuardEnabled(enabled);
+    await this.setNat(connected, enabled);
   }
   private async waitForReadiness(): Promise<boolean> { const deadline = Date.now() + VPN_READINESS_TIMEOUT_MS; while (Date.now() < deadline) { const serviceActive = await this.safe("systemctl", ["is-active", "--quiet", "sing-box"]); if (serviceActive && await this.hasTunnelInterface()) return true; await new Promise((resolve) => setTimeout(resolve, VPN_READINESS_POLL_MS)); } return false; }
   private async hasTunnelInterface(): Promise<boolean> { try { const result = await this.executor.execute("ip", ["-j", "link", "show"]); const links = JSON.parse(result.stdout) as Array<{ ifname?: unknown }>; return Array.isArray(links) && links.some((link) => link?.ifname === this.tunnelInterface); } catch { return false; } }
