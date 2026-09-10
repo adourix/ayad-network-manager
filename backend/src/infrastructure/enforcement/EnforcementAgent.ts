@@ -79,8 +79,13 @@ function valid(command: string, args: string[]): boolean {
     if (!["add", "insert", "delete", "replace"].includes(args[0] ?? "")) return false;
     const target = args[1];
     if (target === "counter") return args[0] === "add" && args.length === 5 && args[2] === "inet" && args[3] === "ayad_nm" && validAccountingCounterName(args[4]!);
-    if (target === "table") return args[0] === "add" && args.length === 4 && args[2] === "ip" && args[3] === "ayad_nm";
-    if (target === "chain") return args[0] === "add" && args.length === 17 && args[2] === "ip" && args[3] === "ayad_nm" && args[4] === "blocked_devices_prerouting" && args[5] === "{" && args[6] === "type" && args[7] === "filter" && args[8] === "hook" && args[9] === "prerouting" && args[10] === "priority" && args[11] === "-301" && args[12] === ";" && args[13] === "policy" && args[14] === "accept" && args[15] === ";" && args[16] === "}";
+    if (target === "table") return args[0] === "add" && args.length === 4 && ((args[2] === "ip" && args[3] === "ayad_nm") || (args[2] === "inet" && args[3] === "ayad_nm"));
+    if (target === "chain") {
+      if (args[0] !== "add" || args.length !== 17) return false;
+      if (args[2] === "ip" && args[3] === "ayad_nm" && args[4] === "blocked_devices_prerouting") return args[5] === "{" && args[6] === "type" && args[7] === "filter" && args[8] === "hook" && args[9] === "prerouting" && args[10] === "priority" && args[11] === "-301" && args[12] === ";" && args[13] === "policy" && args[14] === "accept" && args[15] === ";" && args[16] === "}";
+      if (args[2] === "inet" && args[3] === "ayad_nm" && args[4] === "accounting") return args[5] === "{" && args[6] === "type" && args[7] === "filter" && args[8] === "hook" && args[9] === "forward" && args[10] === "priority" && args[11] === "filter" && args[12] === ";" && args[13] === "policy" && args[14] === "accept" && args[15] === ";" && args[16] === "}";
+      return false;
+    }
     if (!["set", "element", "rule"].includes(target ?? "")) return false;
     if (target === "rule" && args[3] === "ayad_nm" && args[4] === "blocked_devices_prerouting") {
       if (args[0] !== "add" || args.length !== 12) return false;
