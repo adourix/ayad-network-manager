@@ -9,6 +9,7 @@ TLS_DIR="${CONFIG_DIR}/tls"
 SYSCTL_FILE="/etc/sysctl.d/99-ayad-network-manager.conf"
 MODULES_FILE="/etc/modules-load.d/ayad-network-manager.conf"
 DNSMASQ_OVERRIDE_DIR="/etc/systemd/system/dnsmasq.service.d"
+SING_BOX_OVERRIDE_DIR="/etc/systemd/system/sing-box.service.d"
 DB_NAME="ayad_nm"
 DB_USER="ayad_nm"
 
@@ -36,6 +37,22 @@ fi
 
 NODE_MAJOR="$(node -p 'process.versions.node.split(".")[0]')"
 [[ "$NODE_MAJOR" -ge 20 ]] || die "Node.js >= 20 is required; found $(node --version)"
+
+log "Installing sing-box from the official APT repository"
+mkdir -p /etc/apt/keyrings
+curl -fsSL https://sing-box.app/gpg.key -o /etc/apt/keyrings/sagernet.asc
+chmod a+r /etc/apt/keyrings/sagernet.asc
+cat > /etc/apt/sources.list.d/sagernet.sources <<'EOF'
+Types: deb
+URIs: https://deb.sagernet.org/
+Suites: *
+Components: *
+Enabled: yes
+Signed-By: /etc/apt/keyrings/sagernet.asc
+EOF
+apt-get update
+apt-get install -y --no-install-recommends sing-box
+command -v sing-box >/dev/null || die "sing-box installation failed"
 
 log "Preparing PostgreSQL"
 systemctl enable --now postgresql
@@ -74,13 +91,13 @@ if [[ ! -f "$TLS_DIR/server.key" || ! -f "$TLS_DIR/server.crt" ]]; then
     -keyout "$TLS_DIR/server.key" \
     -out "$TLS_DIR/server.crt" \
     -subj "/CN=Ayad Network Manager" \
-    -addext "subjectAltName=IP:${DEFAULT_IP},DNS:ayad-nm.local,DNS:localhost,IP:127.0.0.1"
+    -addext "subjectAltName=IP:${DEFAULT_IP},DNS=ayad-nm.local,DNS=localhost,IP=127.0.0.1"
   chmod 0600 "$TLS_DIR/server.key"
   chmod 0644 "$TLS_DIR/server.crt"
 fi
 
 log "Preparing persistent host networking"
-mkdir -p "$CONFIG_DIR" /var/lib/network-control/backups /etc/dnsmasq.d /etc/nftables.d "$DNSMASQ_OVERRIDE_DIR"
+mkdir -p "$CONFIG_DIR" /var/lib/network-control/backups /etc/dnsmasq.d /etc/nftables.d "$DNSMASQ_OVERRIDE_DIR" "$SING_BOX_OVERRIDE_DIR" /etc/sing-box
 printf 'net.ipv4.ip_forward=1\n' > "$SYSCTL_FILE"
 printf 'ifb\n' > "$MODULES_FILE"
 cat > "$DNSMASQ_OVERRIDE_DIR/network-control.conf" <<'EOF'
@@ -92,9 +109,22 @@ Wants=network-online.target
 Restart=on-failure
 RestartSec=5
 EOF
+cat > "$SING_BOX_OVERRIDE_DIR/network-control.conf" <<'EOF'
+[Unit]
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Restart=on-failure
+RestartSec=5
+EOF
 modprobe ifb
 sysctl --system >/dev/null
 systemctl daemon-reload
+
+# VPN is opt-in. Install the runtime and service, but do not create a TUN
+# interface or start sing-box until the operator supplies a VMess/VLESS link.
+systemctl disable --now sing-box 2>/dev/null || true
 
 log "Creating persistent first-boot configuration"
 cat > "$ENV_FILE" <<EOF
@@ -126,6 +156,8 @@ NETWORK_MODE=single-interface-ifb
 VPN_TUN_INTERFACE=tun0
 VPN_TUN_ADDRESS=172.19.0.1/30
 SING_BOX_CONFIG_PATH=/etc/sing-box/config.json
+SING_BOX_STAGE_PATH=/run/network-control/sing-box-config.json
+SING_BOX_CONFIG_INSTALL_UNIT=network-control-sing-box-config.service
 DHCP_RESERVATIONS_PATH=/var/lib/misc/network-control-reservations.conf
 DHCP_LEASES_PATH=/var/lib/misc/dnsmasq.leases
 QUOTA_THROTTLE_MBPS=0.5
@@ -159,5 +191,7 @@ log "Installation complete"
 printf '%s\n' \
   "Backend root: $APP_ROOT" \
   "Setup URL: http://${DEFAULT_IP}:5000/setup" \
+  "VPN runtime: $(sing-box version | head -n 1)" \
+  "VPN is installed but disabled until a VMess/VLESS link is configured" \
   "After setup apply succeeds, restart: systemctl restart network-control-backend.service" \
   "Then open: https://<gateway-ip>:5000/"
