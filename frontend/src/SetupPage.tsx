@@ -35,7 +35,9 @@ function SetupPage() {
   const detectedSubnet = selected?.addresses.find((address) => address.includes("/")) ?? "";
   const suggestedSubnets = network.data?.proposedClientSubnets ?? [];
 
-  const preflightOk = Boolean(preflight.data && preflight.data.errors.length === 0 && preflight.data.port53Free);
+  // port53Free is informational: the backend deliberately renders dnsmasq as DHCP-only (port=0),
+  // so an existing DNS listener must not block setup.
+  const preflightOk = Boolean(preflight.data && preflight.data.errors.length === 0);
   const networkOk = Boolean(network.data && network.data.errors.length === 0 && interfaces.length > 0);
   const formReady = Boolean(clientInterface && uplinkInterface && clientSubnet && bandwidth && dashboardPort && sshPort && dnsServers.trim());
 
@@ -102,7 +104,7 @@ function SetupPage() {
                 ["IFB kernel module", Boolean(preflight.data?.ifbAvailable)],
                 ["Firewall manager", !preflight.data?.firewallManager],
                 ["System time synchronized", Boolean(preflight.data?.timeSynchronized)],
-              ].map(([label, ok]) => <div className="setup-check-row" key={String(label)}><Check ok={Boolean(ok)}/><span>{label}</span><small>{ok ? "Ready" : "Needs attention"}</small></div>)}
+              ].map(([label, ok]) => <div className="setup-check-row" key={String(label)}><Check ok={Boolean(ok)}/><span>{label}</span><small>{ok ? "Ready" : label === "Port 53 available" ? "DNS listener detected; DHCP-only mode is supported" : "Needs attention"}</small></div>)}
             </div>
             {preflight.data?.errors.map((item) => <div className="setup-warning" key={item}>{item}</div>)}
             <div className="setup-actions"><button className="setup-primary" disabled={!preflightOk} onClick={() => setStep(1)}>Continue to network</button></div>
