@@ -53,8 +53,11 @@ function SetupPage() {
     }),
     onMutate: () => setError(""),
     onSuccess: (result) => {
-      if (result.applied && !result.rolledBack && result.health.errors.length === 0) setStep(3);
-      else setError(result.errors.join("; ") || result.health.errors.join("; ") || "Setup did not complete successfully");
+      if (result.applied && !result.rolledBack && result.health.errors.length === 0) {
+        window.location.assign("/login");
+      } else {
+        setError(result.errors.join("; ") || result.health.errors.join("; ") || "Setup did not complete successfully");
+      }
     },
     onError: (err) => setError(err instanceof Error ? err.message : "Setup failed"),
   });
@@ -146,14 +149,7 @@ function SetupPage() {
           </section>
         )}
 
-        {step === 3 && (
-          <section className="setup-card setup-success-card">
-            <div className="setup-success-icon">✓</div><span className="setup-eyebrow">SETUP COMPLETE</span><h2>Gateway configuration applied</h2><p>The generated configuration passed the available post-apply checks. Restart the backend once to switch from setup mode to the production control plane.</p>
-            <div className="setup-health-grid">{Object.entries(apply.data?.health ?? {}).filter(([key]) => key !== "errors").map(([key, value]) => <div key={key}><Check ok={Boolean(value)}/><span>{key.replace(/([A-Z])/g, " $1")}</span></div>)}</div>
-            <div className="setup-note"><b>Next command</b><span><code>systemctl restart network-control-backend.service</code></span></div>
-            <div className="setup-actions"><a className="setup-primary setup-link" href="/login">Open dashboard after restart</a><a className="setup-secondary setup-link" href="/setup">Run setup again</a></div>
-          </section>
-        )}
+        {step === 3 && null}
 
         <p className="setup-footnote">Setup creates environment-specific dnsmasq, nftables and service configuration on the gateway. It does not execute networking commands from the browser.</p>
       </main>
