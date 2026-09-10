@@ -10,6 +10,7 @@ Group=root
 WorkingDirectory=@APP_ROOT@
 EnvironmentFile=-@APP_ROOT@/.env
 EnvironmentFile=-@CONFIG_FILE@
+Environment=ENV_FILE_PATH=@APP_ROOT@/.env
 Environment=ENFORCEMENT_SOCKET_PATH=/run/network-control/enforcement.sock
 ExecStart=/usr/bin/node @APP_ROOT@/dist/bootstrap.js
 Restart=on-failure
