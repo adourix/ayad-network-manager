@@ -158,7 +158,7 @@ function SetupPage() {
               <div>
                 <span className="setup-eyebrow">STEP 04</span>
                 <h2>{apply.isSuccess ? "Setup applied" : "Apply configuration"}</h2>
-                <p>{apply.isSuccess ? "The gateway configuration has been applied and persisted. Use the button below to continue to login." : "The backend will render the OS configuration, persist the selected values to .env, activate services, and run the setup health checks."}</p>
+                <p>{apply.isSuccess ? "The gateway configuration has been applied and persisted. Use the button below to continue to login." : "The backend will render the OS configuration, persist runtime values to /etc/network-control-system/config.env, activate services, and run the setup health checks."}</p>
               </div>
               {apply.isPending && <span className="setup-loading">Applying…</span>}
             </div>
@@ -193,7 +193,7 @@ function SetupPage() {
           </section>
         )}
 
-        <p className="setup-footnote">Setup creates environment-specific dnsmasq, nftables and service configuration on the gateway, persists the selected runtime values to the backend .env, and does not execute networking commands from the browser.</p>
+        <p className="setup-footnote">Setup creates environment-specific dnsmasq, nftables and service configuration on the gateway, persists runtime values to /etc/network-control-system/config.env, and does not execute networking commands from the browser.</p>
       </main>
     </div>
   );
