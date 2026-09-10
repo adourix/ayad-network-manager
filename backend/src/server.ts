@@ -55,6 +55,7 @@ import { AuditedSystemCommandExecutor } from "./infrastructure/enforcement/Audit
 import { PrismaBlockedDeviceRepository } from "./infrastructure/database/PrismaBlockedDeviceRepository.js";
 import { PrismaNeighborObservationRepository } from "./infrastructure/database/PrismaNeighborObservationRepository.js";
 import { PrismaQuotaPeriodRepository } from "./infrastructure/database/PrismaQuotaPeriodRepository.js";
+import { registerFrontend } from "./interfaces/http/staticFrontend.js";
 
 if (config.network.networkMode !== "single-interface-ifb") throw new Error("Dual-interface mode is reserved for the next implementation phase; use NETWORK_MODE=single-interface-ifb");
 if (config.nodeEnv === "production" && (!config.server.tlsCertPath || !config.server.tlsKeyPath)) throw new Error("TLS_CERT_PATH and TLS_KEY_PATH are required in production");
@@ -109,6 +110,7 @@ const scheduleEnforcementService = new ScheduleEnforcementService(deviceReposito
 const trafficRetentionService = new TrafficRetentionService();
 const profileEnforcementService = new ProfileEnforcementService(deviceRepository, policyRepository, policyCatalogRepository, trafficEnforcementService);
 app.get("/api/health", async () => ({ status: "ok", capture: broadcastCaptureReader.status() }));
+registerFrontend(app);
 
 await ensureFirewallState(); await ensureSingleInterfaceNat(config.network.clientSubnet); await firewallService.reconcile(); await dhcpReservationService.reconcile();
 for (const device of await deviceRepository.findAll()) { if (!device.ip) continue; for (const rule of await policyCatalogRepository.portRules(device.id)) if (rule.enabled) await portRuleEnforcer.apply({ mac: device.mac.toString(), ip: device.ip.toString() }, rule); }
