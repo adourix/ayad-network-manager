@@ -133,9 +133,14 @@ const server = createServer((socket) => {
       send({ ok: true, ...result });
     } catch (error) { send({ ok: false, error: error instanceof Error ? error.message : String(error) }); }
   };
-  const handle = (): void => { if (handled) return; handled = true; let request: Request; try { request = JSON.parse(input.trim()) as Request; if (!Array.isArray(request.args) || typeof request.command !== "string" || !valid(request.command, request.args)) throw new Error("command rejected by enforcement agent"); } catch (error) { send({ ok: false, error: error instanceof Error ? error.message : String(error) }); return; } const background = isBackgroundRead(request.command, request.args); try { scheduler.enqueue(() => executeRequest(request, background), background); } catch (error) { send({ ok: false, error: error instanceof Error ? error.message : String(error) }); } };
-  socket.on("data", (chunk) => { input += chunk.toString(); if (input.length > 64 * 1024) { socket.destroy(); return; } if (input.includes("\n")) handle(); });
-  socket.on("error", () => {});
+  const handle = (): void => { if (handled) return; handled = true; let request: Request; try { request = JSON.parse(input.trim()) as Request; } catch { send({ ok: false, error: "invalid enforcement request" }); return; }
+    if (!request || typeof request.command !== "string" || !Array.isArray(request.args) || !request.args.every((arg) => typeof arg === "string")) { send({ ok: false, error: "invalid enforcement request" }); return; }
+    if (!valid(request.command, request.args)) { send({ ok: false, error: "command rejected by enforcement agent" }); return; }
+    const background = isBackgroundRead(request.command, request.args);
+    try { scheduler.enqueue(() => executeRequest(request, background), background); } catch (error) { send({ ok: false, error: error instanceof Error ? error.message : String(error) }); }
+  };
+  socket.on("data", (chunk) => { input += chunk.toString(); if (input.includes("\n")) handle(); });
 });
-server.on("error", (error) => { console.error("enforcement server error", error); process.exitCode = 1; });
-server.listen(socketPath, () => { console.log(`enforcement agent listening on ${socketPath}`); });
+server.listen(socketPath, () => console.log(`enforcement agent listening on ${socketPath}`));
+process.on("SIGTERM", () => server.close(() => process.exit(0)));
+process.on("SIGINT", () => server.close(() => process.exit(0)));
