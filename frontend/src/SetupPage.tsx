@@ -15,7 +15,7 @@ function SetupPage() {
   const [uplinkInterface, setUplinkInterface] = useState("");
   const [clientSubnet, setClientSubnet] = useState("");
   const [bandwidth, setBandwidth] = useState("100");
-  const [dashboardPort, setDashboardPort] = useState("3000");
+  const [dashboardPort, setDashboardPort] = useState("5000");
   const [sshPort, setSshPort] = useState("22");
   const [dnsServers, setDnsServers] = useState("1.1.1.1,8.8.8.8");
   const [gateway, setGateway] = useState("");
@@ -35,8 +35,6 @@ function SetupPage() {
   const detectedSubnet = selected?.addresses.find((address) => address.includes("/")) ?? "";
   const suggestedSubnets = network.data?.proposedClientSubnets ?? [];
 
-  // port53Free is informational: the backend deliberately renders dnsmasq as DHCP-only (port=0),
-  // so an existing DNS listener must not block setup.
   const preflightOk = Boolean(preflight.data && preflight.data.errors.length === 0);
   const networkOk = Boolean(network.data && network.data.errors.length === 0 && interfaces.length > 0);
   const formReady = Boolean(clientInterface && uplinkInterface && clientSubnet && bandwidth && dashboardPort && sshPort && dnsServers.trim());
@@ -150,9 +148,10 @@ function SetupPage() {
 
         {step === 3 && (
           <section className="setup-card setup-success-card">
-            <div className="setup-success-icon">✓</div><span className="setup-eyebrow">SETUP COMPLETE</span><h2>Gateway is configured</h2><p>The generated configuration passed the post-apply health checks. You can now continue to the Network Manager dashboard.</p>
+            <div className="setup-success-icon">✓</div><span className="setup-eyebrow">SETUP COMPLETE</span><h2>Gateway configuration applied</h2><p>The generated configuration passed the available post-apply checks. Restart the backend once to switch from setup mode to the production control plane.</p>
             <div className="setup-health-grid">{Object.entries(apply.data?.health ?? {}).filter(([key]) => key !== "errors").map(([key, value]) => <div key={key}><Check ok={Boolean(value)}/><span>{key.replace(/([A-Z])/g, " $1")}</span></div>)}</div>
-            <div className="setup-actions"><a className="setup-primary setup-link" href="/login">Open dashboard</a><a className="setup-secondary setup-link" href="/setup">Run setup again</a></div>
+            <div className="setup-note"><b>Next command</b><span><code>systemctl restart network-control-backend.service</code></span></div>
+            <div className="setup-actions"><a className="setup-primary setup-link" href="/login">Open dashboard after restart</a><a className="setup-secondary setup-link" href="/setup">Run setup again</a></div>
           </section>
         )}
 
