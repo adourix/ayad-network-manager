@@ -27,7 +27,9 @@ async function readSetupComplete(): Promise<boolean> {
     const values = new Map<string, string>();
     for (const line of content.split(/\r?\n/)) {
       const match = line.match(/^([A-Z0-9_]+)=(.*)$/);
-      if (match) values.set(match[1], match[2].trim());
+      if (match?.[1] !== undefined && match?.[2] !== undefined) {
+        values.set(match[1], match[2].trim());
+      }
     }
     return requiredSetupKeys.every((key) => Boolean(values.get(key)));
   } catch {
