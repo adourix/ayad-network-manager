@@ -132,6 +132,16 @@ export class TrafficAccountingService {
         uploadBytes: current.uploadBytes,
         timestamp,
       });
+
+      this.live.set(mac, {
+        mac,
+        downloadRateBps: 0n,
+        uploadRateBps: 0n,
+        downloadBytes: current.downloadBytes,
+        uploadBytes: current.uploadBytes,
+        sampledAt: timestamp,
+      });
+
       return;
     }
 
