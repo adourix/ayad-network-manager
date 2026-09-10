@@ -24,18 +24,41 @@ function validIpv4(value: string): boolean { const parts = value.split("."); ret
 function validAccountingCounterName(value: string): boolean { return /^dev_(download|upload)_[0-9a-f]{12}$/.test(value); }
 function validAccountingRule(args: string[]): boolean {
   if (args[2] !== "inet" || args[3] !== "ayad_nm" || args[4] !== "accounting") return false;
-  if (args[0] === "delete") return args.length === 7 && args[1] === "rule" && args[5] === "handle" && /^[1-9][0-9]*$/.test(args[6]!);
+
+  if (args[0] === "delete") {
+    return args.length === 7 && args[1] === "rule" && args[5] === "handle" && /^[1-9][0-9]*$/.test(args[6]!);
+  }
+
+  if (args[0] !== "add" && args[0] !== "replace") return false;
   const offset = args[0] === "replace" ? 7 : 5;
-  if (args[1] !== "rule" || (args[0] === "replace" && (args.length < 8 || args[5] !== "handle" || !/^[1-9][0-9]*$/.test(args[6]!)))) return false;
-  if (!["add", "replace"].includes(args[0]!)) return false;
+  if (args[1] !== "rule") return false;
+  if (args[0] === "replace" && (args.length < 8 || args[5] !== "handle" || !/^[1-9][0-9]*$/.test(args[6]!))) return false;
+
   const expression = args.slice(offset);
-  if (expression.length !== 10) return false;
-  const direction = expression[0] === "oifname" && expression[2] === "ip" && expression[3] === "daddr" ? "download" : expression[0] === "iifname" && expression[2] === "ip" && expression[3] === "saddr" ? "upload" : null;
-  if (!direction || !validInterface(expression[1]!) || !validIpv4(expression[4]!)) return false;
-  if (expression[5] !== "counter" || expression[6] !== "name" || !validAccountingCounterName(expression[7]!)) return false;
-  if (expression[8] !== "comment") return false;
-  if (expression[9] !== `ayad_nm_${direction}_${expression[7]!.slice(direction === "download" ? 13 : 11)}`) return false;
-  return expression[7]!.startsWith(`dev_${direction}_`);
+  const counterIndex = expression.indexOf("counter");
+  if (counterIndex < 0 || expression.length !== counterIndex + 5) return false;
+  if (expression[counterIndex + 1] !== "name") return false;
+  if (expression[counterIndex + 3] !== "comment") return false;
+
+  const counterName = expression[counterIndex + 2];
+  const comment = expression[counterIndex + 4];
+  if (!counterName || !comment || !validAccountingCounterName(counterName)) return false;
+
+  const direction = counterName.startsWith("dev_download_") ? "download" : counterName.startsWith("dev_upload_") ? "upload" : null;
+  if (!direction) return false;
+
+  const macHex = counterName.slice(`dev_${direction}_`.length);
+  if (comment !== `ayad_nm_${direction}_${macHex}`) return false;
+
+  const match = direction === "download"
+    ? expression.length === counterIndex + 5 && expression[0] === "oifname" && expression[2] === "ip" && expression[3] === "daddr"
+    : expression.length === counterIndex + 5 && expression[0] === "iifname" && expression[2] === "ip" && expression[3] === "saddr";
+  if (!match) return false;
+
+  if (!validInterface(expression[1]!)) return false;
+  if (!validIpv4(expression[4]!)) return false;
+
+  return true;
 }
 function isNftMutation(args: string[]): boolean { return args[0] !== "-c" && args[0] !== "-j" && args[0] !== "-a" && ["add", "insert", "delete", "replace", "flush", "reset", "-f"].includes(args[0] ?? ""); }
 function valid(command: string, args: string[]): boolean {
