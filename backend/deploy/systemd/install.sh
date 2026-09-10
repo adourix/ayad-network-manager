@@ -64,12 +64,12 @@ render_and_install \
 
 # ProtectSystem=strict makes the filesystem read-only to the service except
 # for explicit ReadWritePaths. Keep every path used by setup's atomic writes
-# writable, including the nftables configuration directory.
+# writable, including nftables config, DHCP reservations and lease state.
 BACKEND_UNIT="${SYSTEMD_DIR}/network-control-backend.service"
 if grep -q '^ReadWritePaths=' "${BACKEND_UNIT}"; then
-  sed -i "s|^ReadWritePaths=.*$|ReadWritePaths=${APP_ROOT} /run/network-control /etc/dnsmasq.d /etc/nftables.d /etc/network-control-system /var/lib/network-control|" "${BACKEND_UNIT}"
+  sed -i "s|^ReadWritePaths=.*$|ReadWritePaths=${APP_ROOT} /run/network-control /etc/dnsmasq.d /etc/nftables.d /etc/network-control-system /var/lib/network-control /var/lib/misc|" "${BACKEND_UNIT}"
 else
-  printf '\nReadWritePaths=%s /run/network-control /etc/dnsmasq.d /etc/nftables.d /etc/network-control-system /var/lib/network-control\n' "${APP_ROOT}" >> "${BACKEND_UNIT}"
+  printf '\nReadWritePaths=%s /run/network-control /etc/dnsmasq.d /etc/nftables.d /etc/network-control-system /var/lib/network-control /var/lib/misc\n' "${APP_ROOT}" >> "${BACKEND_UNIT}"
 fi
 
 if ! grep -qE '^ReadWritePaths=.*(^|[[:space:]])/var/lib/network-control([[:space:]]|$)' "${BACKEND_UNIT}"; then
@@ -79,6 +79,11 @@ fi
 
 if ! grep -qE '^ReadWritePaths=.*(^|[[:space:]])/etc/nftables\.d([[:space:]]|$)' "${BACKEND_UNIT}"; then
   echo "backend systemd unit is missing writable nftables config path" >&2
+  exit 1
+fi
+
+if ! grep -qE '^ReadWritePaths=.*(^|[[:space:]])/var/lib/misc([[:space:]]|$)' "${BACKEND_UNIT}"; then
+  echo "backend systemd unit is missing writable DHCP state path" >&2
   exit 1
 fi
 
