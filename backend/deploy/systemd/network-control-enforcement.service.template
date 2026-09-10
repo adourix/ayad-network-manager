@@ -6,7 +6,8 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=@APP_ROOT@
-EnvironmentFile=@CONFIG_FILE@
+EnvironmentFile=-@APP_ROOT@/.env
+EnvironmentFile=-@CONFIG_FILE@
 RuntimeDirectory=network-control
 ExecStart=/usr/bin/node @APP_ROOT@/dist/infrastructure/enforcement/EnforcementAgent.js
 Restart=on-failure
