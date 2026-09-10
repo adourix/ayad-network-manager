@@ -9,6 +9,7 @@ const vpnConfigPath = process.env.SING_BOX_CONFIG_PATH ?? "/etc/sing-box/config.
 const vpnConfigStagePath = process.env.SING_BOX_STAGE_PATH ?? "/run/network-control/sing-box-config.json";
 const vpnConfigInstallUnit = process.env.SING_BOX_CONFIG_INSTALL_UNIT ?? "network-control-sing-box-config.service";
 const setupSnapshotDir = resolve(process.env.SETUP_SNAPSHOT_DIR ?? "/var/lib/network-control/backups");
+const nftablesConfigPath = resolve(process.env.NFTABLES_CONFIG_PATH ?? "/etc/nftables.d/network-control-system.nft");
 const clientInterface = process.env.CLIENT_INTERFACE ?? "";
 const uplinkInterface = process.env.UPLINK_INTERFACE ?? "";
 const allowedSystemctlUnits = new Set(["sing-box", "dnsmasq", "network-control-enforcement.service", "network-control-backend.service", vpnConfigInstallUnit]);
@@ -20,6 +21,7 @@ type Job = () => Promise<void>;
 function ifaceAllowed(value: string): boolean { return value === "ifb0" || value === clientInterface || value === uplinkInterface; }
 function validInterface(value: string): boolean { return /^[a-zA-Z0-9_.:-]{1,32}$/.test(value) && ifaceAllowed(value); }
 function validSnapshotPath(value: string): boolean { const path = resolve(value); return path.startsWith(`${setupSnapshotDir}/`) && path.endsWith("/nftables.bak"); }
+function validNftablesConfigPath(value: string): boolean { return resolve(value) === nftablesConfigPath; }
 function validIpv4(value: string): boolean { const parts = value.split("."); return parts.length === 4 && parts.every((part) => /^(0|[1-9][0-9]{0,2})$/.test(part) && Number(part) <= 255); }
 function validAccountingCounterName(value: string): boolean { return /^dev_(download|upload)_[0-9a-f]{12}$/.test(value); }
 function validAccountingRule(args: string[]): boolean {
@@ -95,7 +97,7 @@ function valid(command: string, args: string[]): boolean {
   }
   if (command === "nft") {
     if (args[0] === "-c") return valid("nft", args.slice(1));
-    if (args[0] === "-f") return args.length === 2 && validSnapshotPath(args[1]!);
+    if (args[0] === "-f") return args.length === 2 && (validSnapshotPath(args[1]!) || validNftablesConfigPath(args[1]!));
     const readPrefix = args.filter((arg) => arg === "-j" || arg === "-a");
     const readArgs = args.filter((arg) => arg !== "-j" && arg !== "-a");
     if (readPrefix.length <= 2 && readArgs[0] === "list") return args.every((arg) => !/[;{}]/.test(arg));
