@@ -55,7 +55,6 @@ function SetupPage() {
     onSuccess: (result) => {
       if (result.applied && !result.rolledBack && result.health.errors.length === 0) {
         setStep(3);
-        window.setTimeout(() => window.location.assign("/login"), 1200);
       } else {
         setError(result.errors.join("; ") || result.health.errors.join("; ") || "Setup did not complete successfully");
       }
@@ -159,7 +158,7 @@ function SetupPage() {
               <div>
                 <span className="setup-eyebrow">STEP 04</span>
                 <h2>{apply.isSuccess ? "Setup applied" : "Apply configuration"}</h2>
-                <p>{apply.isSuccess ? "The gateway configuration has been applied and persisted. Redirecting to login…" : "The backend will render the OS configuration, persist the selected values to .env, activate services, and run the setup health checks."}</p>
+                <p>{apply.isSuccess ? "The gateway configuration has been applied and persisted. Use the button below to continue to login." : "The backend will render the OS configuration, persist the selected values to .env, activate services, and run the setup health checks."}</p>
               </div>
               {apply.isPending && <span className="setup-loading">Applying…</span>}
             </div>
@@ -189,6 +188,7 @@ function SetupPage() {
             <div className="setup-actions">
               {!apply.isSuccess && <button className="setup-secondary" disabled={apply.isPending} onClick={() => setStep(2)}>Back</button>}
               {!apply.isSuccess && <button className="setup-primary" disabled={apply.isPending} onClick={() => apply.mutate()}>{apply.isPending ? "Applying…" : "Apply configuration"}</button>}
+              {apply.isSuccess && <button className="setup-primary" onClick={() => window.location.assign("/login")}>Continue to login</button>}
             </div>
           </section>
         )}
