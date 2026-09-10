@@ -42,8 +42,6 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(`${baseUrl}${path}`, { ...init, headers, credentials: "include" });
   if (response.status === 401) {
     const message = await responseErrorMessage(response, "Authentication required");
-    // A failed login is not an expired session. Only clear an existing session
-    // when an authenticated request is rejected by the backend.
     if (accessToken) unauthorizedHandler?.();
     throw new ApiError(401, message);
   }
@@ -72,6 +70,73 @@ async function mergeLiveStatus(devices: Device[]): Promise<Device[]> {
   } catch {
     return devices;
   }
+}
+
+export interface SetupInterface {
+  name: string;
+  mac: string | null;
+  state: string;
+  addresses: string[];
+  kind: string | null;
+}
+
+export interface SetupNetworkReport {
+  interfaces: SetupInterface[];
+  defaultUplink: string | null;
+  uplinkSubnets: Record<string, string[]>;
+  proposedClientSubnets: string[];
+  errors: string[];
+}
+
+export interface SetupReport {
+  root: boolean;
+  port53Free: boolean;
+  ifbAvailable: boolean;
+  firewallManager: string | null;
+  timeSynchronized: boolean;
+  errors: string[];
+}
+
+export interface SetupHealth {
+  clientInterface: boolean;
+  gatewayReachable: boolean;
+  dhcpLeaseFile: boolean;
+  outboundConnectivity: boolean;
+  errors: string[];
+}
+
+export interface SetupApplyResult {
+  applied: boolean;
+  configPath: string;
+  renderedFiles: string[];
+  health: SetupHealth;
+  rolledBack: boolean;
+  errors: string[];
+}
+
+export interface SetupApplyInput {
+  clientInterface: string;
+  uplinkInterface: string;
+  clientSubnet: string;
+  uplinkBandwidthMbps: number;
+  dashboardPort: number;
+  sshPort: number;
+  dnsServers: string[];
+  clientGatewayIp?: string;
+  vpnTunnelInterface?: string;
+  vpnTunAddress?: string;
+  singBoxConfigPath?: string;
+  dhcpReservationsPath?: string;
+  activate?: boolean;
+}
+
+export interface SetupDiagnostics {
+  interface: string | null;
+  linkSpeedMbps: number | null;
+  duplex: string | null;
+  usbSpeed: string | null;
+  warnings: string[];
+  errors: string[];
 }
 
 export const api = {
@@ -115,6 +180,16 @@ export const api = {
   vpnConfig: (vmessLink: string) => request<unknown>("/api/vpn/config", { method: "POST", body: JSON.stringify({ vmessLink }) }),
   vpnEnable: () => request<unknown>("/api/vpn/enable", { method: "POST" }),
   vpnDisable: () => request<unknown>("/api/vpn/disable", { method: "POST" }),
+};
+
+export const setupApi = {
+  preflight: () => request<SetupReport>("/api/setup/preflight"),
+  network: () => request<SetupNetworkReport>("/api/setup/network"),
+  diagnostics: (interfaceName?: string) => request<SetupDiagnostics>(`/api/setup/diagnostics${interfaceName ? `?interface=${encodeURIComponent(interfaceName)}` : ""}`),
+  apply: (input: SetupApplyInput) => request<SetupApplyResult>("/api/setup/apply", {
+    method: "POST", body: JSON.stringify(input),
+  }),
+  rollback: () => request<{ rolledBack: boolean }>("/api/setup/rollback", { method: "POST" }),
 };
 
 export function liveTrafficUrl() {
