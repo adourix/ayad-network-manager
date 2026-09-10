@@ -26,40 +26,29 @@ function validIpv4(value: string): boolean { const parts = value.split("."); ret
 function validAccountingCounterName(value: string): boolean { return /^dev_(download|upload)_[0-9a-f]{12}$/.test(value); }
 function validAccountingRule(args: string[]): boolean {
   if (args[2] !== "inet" || args[3] !== "ayad_nm" || args[4] !== "accounting") return false;
-
-  if (args[0] === "delete") {
-    return args.length === 7 && args[1] === "rule" && args[5] === "handle" && /^[1-9][0-9]*$/.test(args[6]!);
-  }
-
+  if (args[0] === "delete") return args.length === 7 && args[1] === "rule" && args[5] === "handle" && /^[1-9][0-9]*$/.test(args[6]!);
   if (args[0] !== "add" && args[0] !== "replace") return false;
   const offset = args[0] === "replace" ? 7 : 5;
   if (args[1] !== "rule") return false;
   if (args[0] === "replace" && (args.length < 8 || args[5] !== "handle" || !/^[1-9][0-9]*$/.test(args[6]!))) return false;
-
   const expression = args.slice(offset);
   const counterIndex = expression.indexOf("counter");
   if (counterIndex < 0 || expression.length !== counterIndex + 5) return false;
   if (expression[counterIndex + 1] !== "name") return false;
   if (expression[counterIndex + 3] !== "comment") return false;
-
   const counterName = expression[counterIndex + 2];
   const comment = expression[counterIndex + 4];
   if (!counterName || !comment || !validAccountingCounterName(counterName)) return false;
-
   const direction = counterName.startsWith("dev_download_") ? "download" : counterName.startsWith("dev_upload_") ? "upload" : null;
   if (!direction) return false;
-
   const macHex = counterName.slice(`dev_${direction}_`.length);
   if (comment !== `ayad_nm_${direction}_${macHex}`) return false;
-
   const match = direction === "download"
     ? expression.length === counterIndex + 5 && expression[0] === "oifname" && expression[2] === "ip" && expression[3] === "daddr"
     : expression.length === counterIndex + 5 && expression[0] === "iifname" && expression[2] === "ip" && expression[3] === "saddr";
   if (!match) return false;
-
   if (!validInterface(expression[1]!)) return false;
   if (!validIpv4(expression[4]!)) return false;
-
   return true;
 }
 function isNftMutation(args: string[]): boolean { return args[0] !== "-c" && args[0] !== "-j" && args[0] !== "-a" && ["add", "insert", "delete", "replace", "flush", "reset", "-f"].includes(args[0] ?? ""); }
@@ -150,6 +139,9 @@ async function writeSingBoxConfig(args: string[]): Promise<void> {
   catch (error) { try { await fs.rm(vpnConfigStagePath, { force: true }); } catch {} throw error; }
   await fs.rm(vpnConfigStagePath, { force: true });
 }
+function isDeferredRestart(command: string, args: string[]): boolean {
+  return command === "systemctl" && args[0] === "restart" && (args.includes("network-control-enforcement.service") || args.includes("network-control-backend.service"));
+}
 try { unlinkSync(socketPath); } catch {}
 const server = createServer((socket) => {
   let input = ""; let handled = false;
@@ -157,13 +149,22 @@ const server = createServer((socket) => {
   const executeRequest = async (request: Request, background: boolean): Promise<void> => {
     try {
       if (request.command === "write-sing-box-config") { await writeSingBoxConfig(request.args); send({ ok: true, stdout: "", stderr: "" }); return; }
+      if (isDeferredRestart(request.command, request.args)) {
+        send({ ok: true, stdout: "restart scheduled", stderr: "" });
+        setTimeout(() => { void local.execute(request.command, request.args).catch((error) => console.error("deferred systemctl restart failed", error instanceof Error ? error.message : String(error))); }, 250);
+        return;
+      }
       const executor = background ? backgroundRead : local;
       if (request.command === "nft" && isNftMutation(request.args)) await local.execute("nft", ["-c", ...request.args]);
       const result = await executor.execute(request.command, request.args);
       send({ ok: true, ...result });
     } catch (error) { send({ ok: false, error: error instanceof Error ? error.message : String(error) }); }
   };
-  const handle = (): void => { if (handled) return; handled = true; let request: Request; try { request = JSON.parse(input.trim()) as Request; } catch { send({ ok: false, error: "invalid enforcement request" }); return; }
+  const handle = (): void => {
+    if (handled) return;
+    handled = true;
+    let request: Request;
+    try { request = JSON.parse(input.trim()) as Request; } catch { send({ ok: false, error: "invalid enforcement request" }); return; }
     if (!request || typeof request.command !== "string" || !Array.isArray(request.args) || !request.args.every((arg) => typeof arg === "string")) { send({ ok: false, error: "invalid enforcement request" }); return; }
     if (!valid(request.command, request.args)) { send({ ok: false, error: "command rejected by enforcement agent" }); return; }
     const background = isBackgroundRead(request.command, request.args);
