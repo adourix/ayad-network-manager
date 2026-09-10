@@ -28,7 +28,8 @@ function frontendRoot(): string {
 function safePath(root: string, pathname: string): string | null {
   const candidate = resolve(root, `.${pathname.startsWith("/") ? pathname : `/${pathname}`}`);
   const rel = relative(root, candidate);
-  if (rel.startsWith("..") || rel.includes("..${process.platform === "win32" ? "\\" : "/"}")) return null;
+  const separator = process.platform === "win32" ? "\\" : "/";
+  if (rel === ".." || rel.startsWith(`..${separator}`)) return null;
   return candidate;
 }
 
