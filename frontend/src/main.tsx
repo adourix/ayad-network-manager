@@ -37,11 +37,6 @@ function Root() {
 
     if (!setupComplete && path !== "/setup") {
       window.location.replace("/setup");
-      return;
-    }
-
-    if (setupComplete && path === "/setup") {
-      window.location.replace("/login");
     }
   }, [setupComplete]);
 
@@ -49,11 +44,13 @@ function Root() {
     return <div style={{ minHeight: "100vh", display: "grid", placeItems: "center" }}>Checking gateway setup…</div>;
   }
 
-  if (!setupComplete) {
-    return window.location.pathname === "/setup" ? <SetupPage /> : null;
+  // /setup is intentionally kept accessible after completion so the final
+  // Apply/health-check result remains visible and navigation to login is explicit.
+  if (window.location.pathname === "/setup") {
+    return <SetupPage />;
   }
 
-  if (window.location.pathname === "/setup") {
+  if (!setupComplete) {
     return null;
   }
 
