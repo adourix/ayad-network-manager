@@ -54,7 +54,8 @@ function SetupPage() {
     onMutate: () => setError(""),
     onSuccess: (result) => {
       if (result.applied && !result.rolledBack && result.health.errors.length === 0) {
-        window.location.assign("/login");
+        setStep(3);
+        window.setTimeout(() => window.location.assign("/login"), 1200);
       } else {
         setError(result.errors.join("; ") || result.health.errors.join("; ") || "Setup did not complete successfully");
       }
@@ -71,7 +72,10 @@ function SetupPage() {
     setGateway(address.split("/")[0] ?? "");
   };
 
-  const stepStatus = useMemo(() => [preflightOk, networkOk, formReady, apply.isSuccess], [preflightOk, networkOk, formReady, apply.isSuccess]);
+  const stepStatus = useMemo(
+    () => [preflightOk, networkOk, formReady, apply.isSuccess],
+    [preflightOk, networkOk, formReady, apply.isSuccess],
+  );
 
   return (
     <div className="setup-page">
@@ -84,7 +88,7 @@ function SetupPage() {
         <div className="setup-heading">
           <span className="setup-eyebrow">AYAD NM / SETUP</span>
           <h1>Configure your gateway</h1>
-          <p>Detect the gateway network, validate prerequisites, then apply the Single-Interface + IFB configuration.</p>
+          <p>Detect the gateway network, validate prerequisites, review the configuration, then apply the Single-Interface + IFB setup.</p>
         </div>
 
         <div className="setup-steps">
@@ -132,7 +136,7 @@ function SetupPage() {
 
         {step === 2 && (
           <section className="setup-card">
-            <div className="setup-card-head"><div><span className="setup-eyebrow">STEP 03</span><h2>Gateway configuration</h2><p>Review the detected values before the system writes OS configuration.</p></div></div>
+            <div className="setup-card-head"><div><span className="setup-eyebrow">STEP 03</span><h2>Gateway configuration</h2><p>Review the values before moving to the final apply step.</p></div></div>
             <div className="setup-form-grid">
               <label>Client interface<input value={clientInterface} readOnly/></label>
               <label>Uplink interface<input value={uplinkInterface} readOnly/></label>
@@ -145,13 +149,51 @@ function SetupPage() {
             </div>
             <div className="setup-note"><b>Single-Interface + IFB</b><span>Download shaping uses the client destination IP; upload shaping uses IFB with the client source IP.</span></div>
             {error && <div className="setup-error">{error}</div>}
-            <div className="setup-actions"><button className="setup-secondary" onClick={() => setStep(1)}>Back</button><button className="setup-primary" disabled={!formReady || apply.isPending} onClick={() => apply.mutate()}>{apply.isPending ? "Applying…" : "Apply configuration"}</button></div>
+            <div className="setup-actions"><button className="setup-secondary" onClick={() => setStep(1)}>Back</button><button className="setup-primary" disabled={!formReady} onClick={() => { setError(""); setStep(3); }}>Review and apply</button></div>
           </section>
         )}
 
-        {step === 3 && null}
+        {step === 3 && (
+          <section className="setup-card">
+            <div className="setup-card-head">
+              <div>
+                <span className="setup-eyebrow">STEP 04</span>
+                <h2>{apply.isSuccess ? "Setup applied" : "Apply configuration"}</h2>
+                <p>{apply.isSuccess ? "The gateway configuration has been applied and persisted. Redirecting to login…" : "The backend will render the OS configuration, persist the selected values to .env, activate services, and run the setup health checks."}</p>
+              </div>
+              {apply.isPending && <span className="setup-loading">Applying…</span>}
+            </div>
 
-        <p className="setup-footnote">Setup creates environment-specific dnsmasq, nftables and service configuration on the gateway. It does not execute networking commands from the browser.</p>
+            <div className="setup-form-grid">
+              <label>Client interface<input value={clientInterface} readOnly/></label>
+              <label>Uplink interface<input value={uplinkInterface} readOnly/></label>
+              <label>Client subnet<input value={clientSubnet} readOnly/></label>
+              <label>Gateway IP<input value={gateway} readOnly/></label>
+              <label>Bandwidth<input value={`${bandwidth} Mbps`} readOnly/></label>
+              <label>Dashboard port<input value={dashboardPort} readOnly/></label>
+              <label>SSH port<input value={sshPort} readOnly/></label>
+              <label>DNS servers<input value={dnsServers} readOnly/></label>
+            </div>
+
+            {apply.isSuccess && apply.data && (
+              <div className="setup-check-grid">
+                <div className="setup-check-row"><Check ok={apply.data.health.clientInterface}/><span>Client interface</span><small>{apply.data.health.clientInterface ? "Ready" : "Failed"}</small></div>
+                <div className="setup-check-row"><Check ok={apply.data.health.gatewayReachable}/><span>Gateway reachability</span><small>{apply.data.health.gatewayReachable ? "Ready" : "Failed"}</small></div>
+                <div className="setup-check-row"><Check ok={apply.data.health.dhcpLeaseFile}/><span>DHCP lease</span><small>{apply.data.health.dhcpLeaseFile ? "Issued" : "Failed"}</small></div>
+                <div className="setup-check-row"><Check ok={apply.data.health.outboundConnectivity}/><span>Outbound connectivity</span><small>{apply.data.health.outboundConnectivity ? "Ready" : "Failed"}</small></div>
+              </div>
+            )}
+
+            {error && <div className="setup-error">{error}</div>}
+
+            <div className="setup-actions">
+              {!apply.isSuccess && <button className="setup-secondary" disabled={apply.isPending} onClick={() => setStep(2)}>Back</button>}
+              {!apply.isSuccess && <button className="setup-primary" disabled={apply.isPending} onClick={() => apply.mutate()}>{apply.isPending ? "Applying…" : "Apply configuration"}</button>}
+            </div>
+          </section>
+        )}
+
+        <p className="setup-footnote">Setup creates environment-specific dnsmasq, nftables and service configuration on the gateway, persists the selected runtime values to the backend .env, and does not execute networking commands from the browser.</p>
       </main>
     </div>
   );
