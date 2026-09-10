@@ -1,139 +1,83 @@
-import type {
-  Device,
-  DevicesUpdateMessage,
-} from "../types/device";
+import type { LiveTraffic } from "../types/api";
+import { liveTrafficUrl } from "./api";
 
-const WS_URL =
-  `ws://${window.location.hostname}:5000/api/devices/ws`;
+type TrafficListener = (traffic: LiveTraffic[]) => void;
 
-type DevicesListener = (
-  devices: Device[],
-) => void;
-
-class DeviceWebSocket {
+/**
+ * Live traffic WebSocket.
+ *
+ * Authentication is carried by the same-origin HttpOnly nm_session cookie
+ * created by /api/auth/login. Browser WebSocket clients cannot set an
+ * Authorization header, so this connection intentionally relies on the
+ * authenticated same-origin cookie session.
+ */
+class TrafficWebSocket {
   private socket: WebSocket | null = null;
-
-  private listeners =
-    new Set<DevicesListener>();
-
-  private reconnectTimer:
-    | number
-    | undefined;
-
-  private stopped = false;
+  private listeners = new Set<TrafficListener>();
+  private reconnectTimer: number | undefined;
+  private reconnectAttempt = 0;
+  private stopped = true;
 
   connect(): void {
     if (
       this.socket &&
-      (this.socket.readyState ===
-        WebSocket.OPEN ||
-        this.socket.readyState ===
-          WebSocket.CONNECTING)
+      (this.socket.readyState === WebSocket.OPEN ||
+        this.socket.readyState === WebSocket.CONNECTING)
     ) {
       return;
     }
 
     this.stopped = false;
-
-    this.socket =
-      new WebSocket(WS_URL);
+    this.socket = new WebSocket(liveTrafficUrl());
 
     this.socket.onopen = () => {
-      console.log(
-        "Device WebSocket connected",
-      );
+      this.reconnectAttempt = 0;
     };
 
     this.socket.onmessage = (event) => {
       try {
-        const message =
-          JSON.parse(
-            event.data,
-          ) as DevicesUpdateMessage;
+        const message = JSON.parse(event.data) as unknown;
+        if (!Array.isArray(message)) return;
 
-        if (
-          message.type !==
-          "devices:update"
-        ) {
-          return;
-        }
-
-        for (
-          const listener of
-          this.listeners
-        ) {
-          listener(
-            message.devices,
-          );
-        }
+        const traffic = message as LiveTraffic[];
+        for (const listener of this.listeners) listener(traffic);
       } catch (error) {
-        console.error(
-          "Invalid WebSocket message:",
-          error,
-        );
+        console.error("Invalid live traffic WebSocket message:", error);
       }
     };
 
     this.socket.onerror = () => {
-      console.error(
-        "Device WebSocket error",
-      );
+      // onclose performs the reconnect. Avoid duplicate timers here.
+      this.socket?.close();
     };
 
     this.socket.onclose = () => {
       this.socket = null;
+      if (this.stopped) return;
 
-      if (this.stopped) {
-        return;
-      }
-
-      console.log(
-        "Device WebSocket disconnected",
-      );
-
-      this.reconnectTimer =
-        window.setTimeout(
-          () => {
-            this.connect();
-          },
-          3000,
-        );
+      const delay = Math.min(1000 * 2 ** this.reconnectAttempt, 10_000);
+      this.reconnectAttempt += 1;
+      this.reconnectTimer = window.setTimeout(() => {
+        this.reconnectTimer = undefined;
+        this.connect();
+      }, delay);
     };
   }
 
-  subscribe(
-    listener: DevicesListener,
-  ): () => void {
+  subscribe(listener: TrafficListener): () => void {
     this.listeners.add(listener);
-
-    return () => {
-      this.listeners.delete(
-        listener,
-      );
-    };
+    return () => this.listeners.delete(listener);
   }
 
   disconnect(): void {
     this.stopped = true;
-
-    if (
-      this.reconnectTimer !==
-      undefined
-    ) {
-      window.clearTimeout(
-        this.reconnectTimer,
-      );
-
-      this.reconnectTimer =
-        undefined;
+    if (this.reconnectTimer !== undefined) {
+      window.clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = undefined;
     }
-
     this.socket?.close();
-
     this.socket = null;
   }
 }
 
-export const deviceWebSocket =
-  new DeviceWebSocket();
-
+export const trafficWebSocket = new TrafficWebSocket();
