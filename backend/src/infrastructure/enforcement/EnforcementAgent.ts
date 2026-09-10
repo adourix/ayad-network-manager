@@ -66,7 +66,7 @@ function valid(command: string, args: string[]): boolean {
   if (command === "ip") {
     if (args[0] === "neigh" || (args[0] === "-j" && args[1] === "neigh")) { const o = args[0] === "-j" ? 1 : 0; return args[o] === "neigh" && args[o + 1] === "show" && args[o + 2] === "dev" && !!args[o + 3] && validInterface(args[o + 3]!); }
     if (args[0] === "-j" && args[1] === "link" && args[2] === "show") return args.length === 3;
-    if (args[0] === "-j" && args[1] === "-4" && args[2] === "addr" && args[3] === "show") return args.length === 4 || (args.length === 6 && args[4] === "dev" && validInterface(args[5]!));
+    if (args[0] === "-j" && args[1] === "-4" && args[2] === "addr" && args[3] === "show") return args.length === 4 || (args.length === 6 && args[4] === "dev" && /^[a-zA-Z0-9_.:-]{1,32}$/.test(args[5]!));
     if (args[0] === "-j" && args[1] === "route" && args[2] === "show" && args[3] === "default") return args.length === 4;
     if (args[0] === "link" && args[1] === "show" && args[2] === "dev") return args.length === 4 && validInterface(args[3]!);
     if (args[0] === "link" && args[1] === "add") return args.length === 5 && args[2] === "ifb0" && args[3] === "type" && args[4] === "ifb";
