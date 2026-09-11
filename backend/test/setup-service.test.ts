@@ -19,7 +19,6 @@ test("setup inspection proposes the existing uplink subnet for single-interface 
       stderr: "",
     }),
   };
-
   const report = await new SetupService(probe).inspectNetwork();
   assert.equal(report.defaultUplink, "eno1");
   assert.deepEqual(report.interfaces[0]?.addresses, ["192.168.1.254/24"]);
@@ -28,12 +27,9 @@ test("setup inspection proposes the existing uplink subnet for single-interface 
 
 test("setup apply refuses an unhealthy configuration without destroying the existing config", async () => {
   const root = await mkdtemp(join(tmpdir(), "network-control-setup-"));
-  const configPath = join(root, "config.env");
-  const dnsmasqPath = join(root, "clients.conf");
-  const nftablesPath = join(root, "network-control-system.nft");
+  const configPath = join(root, "config.env"), dnsmasqPath = join(root, "clients.conf"), nftablesPath = join(root, "network-control-system.nft");
   await writeFile(configPath, "OLD=1\n");
   await writeFile(dnsmasqPath, "old\n");
-
   const probe = {
     run: async (command: string, args: string[]) => {
       if (command === "ss") return { stdout: "", stderr: "" };
@@ -49,7 +45,6 @@ test("setup apply refuses an unhealthy configuration without destroying the exis
       return { stdout: "", stderr: "" };
     },
   };
-
   const service = new SetupService(probe, { configPath, dnsmasqPath, nftablesPath, snapshotDir: join(root, "backups") }, () => true);
   const result = await service.apply({ clientInterface: "eno1", uplinkInterface: "eno1", clientSubnet: "192.168.1.0/24", uplinkBandwidthMbps: 100, dashboardPort: 5000, sshPort: 22, dnsServers: ["1.1.1.1"], activate: false });
   assert.equal(result.applied, false);
@@ -58,9 +53,7 @@ test("setup apply refuses an unhealthy configuration without destroying the exis
 
 test("setup renders runtime config separately from the installer .env and keeps DHCP-only dnsmasq safe", async () => {
   const root = await mkdtemp(join(tmpdir(), "network-control-setup-render-"));
-  const configPath = join(root, "config.env");
-  const dnsmasqPath = join(root, "clients.conf");
-  const nftablesPath = join(root, "network-control-system.nft");
+  const configPath = join(root, "config.env"), dnsmasqPath = join(root, "clients.conf"), nftablesPath = join(root, "network-control-system.nft");
   const probe = {
     run: async (command: string, args: string[]) => {
       if (command === "ip" && args[1] === "link") return { stdout: JSON.stringify([{ ifname: "eno1", address: "aa:bb:cc:dd:ee:ff", operstate: "UP", link_type: "ether" }]), stderr: "" };
@@ -79,7 +72,7 @@ test("setup renders runtime config separately from the installer .env and keeps 
   const service = new SetupService(probe, { configPath, dnsmasqPath, nftablesPath, snapshotDir: join(root, "backups") }, () => true);
   const result = await service.apply({ clientInterface: "eno1", uplinkInterface: "eno1", clientSubnet: "192.168.1.0/24", uplinkBandwidthMbps: 100, dashboardPort: 5000, sshPort: 22, dnsServers: ["1.1.1.1"], activate: false });
   assert.equal(result.applied, true);
-  assert.doesNotMatch(await readFile(dnsmasqPath, "utf8"), /port=0/);
+  assert.match(await readFile(dnsmasqPath, "utf8"), /port=0/);
   assert.match(await readFile(nftablesPath, "utf8"), /ayad_nm_allow_ssh_management/);
   assert.match(await readFile(nftablesPath, "utf8"), /ayad_nm_single_interface_nat/);
   const config = await readFile(configPath, "utf8");
