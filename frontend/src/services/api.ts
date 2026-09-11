@@ -39,7 +39,9 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const accessToken = token();
   if (accessToken) headers.set("Authorization", `Bearer ${accessToken}`);
 
-  const response = await fetch(`${baseUrl}${path}`, { ...init, headers, credentials: "include" });
+  // API state is dynamic. Do not allow browser HTTP caching to return stale
+  // setup status/preflight results after the backend has been rebuilt/restarted.
+  const response = await fetch(`${baseUrl}${path}`, { ...init, headers, cache: "no-store", credentials: "include" });
   if (response.status === 401) {
     const message = await responseErrorMessage(response, "Authentication required");
     if (accessToken) unauthorizedHandler?.();
