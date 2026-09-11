@@ -1,17 +1,7 @@
-html{background:#f3f0ea}body{min-width:320px}#root{min-height:100vh}::selection{background:#705b48;color:#fff}::-webkit-scrollbar{width:8px;height:8px}::-webkit-scrollbar-track{background:#eeeae3}::-webkit-scrollbar-thumb{background:#c9c1b6;border-radius:8px}::-webkit-scrollbar-thumb:hover{background:#aaa095}
+html{background:#f5f7fa}body{min-width:320px}#root{min-height:100vh}::selection{background:#2563eb;color:#fff}::-webkit-scrollbar{width:8px;height:8px}::-webkit-scrollbar-track{background:#f2f4f7}::-webkit-scrollbar-thumb{background:#cbd5e1;border-radius:8px}::-webkit-scrollbar-thumb:hover{background:#98a2b3}
 
-/* Dashboard cards: keep the complete metric row inside the content area. */
-.dashboard-metrics{grid-template-columns:repeat(6,minmax(0,1fr));gap:11px;overflow:visible}
-.dashboard-metrics>.metric{width:100%;min-width:0}
-.policy-summary{grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
-.policy-summary>.metric{width:100%;min-width:0}
+.dashboard-metrics{grid-template-columns:repeat(6,minmax(0,1fr));gap:11px;overflow:visible}.dashboard-metrics>.metric{width:100%;min-width:0}.policy-summary{grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}.policy-summary>.metric{width:100%;min-width:0}
 
-@media (max-width:1250px){
-  .dashboard-metrics{grid-template-columns:repeat(3,minmax(0,1fr))}
-}
-@media (max-width:760px){
-  .dashboard-metrics,.policy-summary{grid-template-columns:1fr 1fr}
-}
-@media (max-width:480px){
-  .dashboard-metrics,.policy-summary{grid-template-columns:1fr}
-}
+@media (max-width:1250px){.dashboard-metrics{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media (max-width:760px){.dashboard-metrics,.policy-summary{grid-template-columns:1fr 1fr}}
+@media (max-width:480px){.dashboard-metrics,.policy-summary{grid-template-columns:1fr}}
