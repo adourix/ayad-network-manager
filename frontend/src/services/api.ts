@@ -95,6 +95,7 @@ export interface SetupReport {
   firewallManager: string | null;
   timeSynchronized: boolean;
   errors: string[];
+  warnings: string[];
 }
 
 export interface SetupHealth {
