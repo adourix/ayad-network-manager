@@ -46,6 +46,21 @@ function validRuleHandle(value: string): boolean { return /^[1-9][0-9]*$/.test(v
 function validRulePosition(value: string): boolean { return /^[0-9]+$/.test(value); }
 function validComment(value: string): boolean { return ["ayad_nm_allow_ssh_management", "ayad_nm_allow_dashboard_management", "ayad_nm_blocked_macs", "ayad_nm_blocked_ips", "ayad_nm_single_interface_nat", "ayad_nm_vpn_nat", "ayad_nm_vpn_fail_closed"].includes(value); }
 function validAccountingCounterName(value: string): boolean { return /^dev_(download|upload)_[0-9a-f]{12}$/.test(value); }
+function validPortRuleComment(value: string): boolean { return /^ayad_nm_port_[0-9]+(?:_return)?$/.test(value); }
+function validManagedPortRule(args: string[], start: number): boolean {
+  if (!["add", "insert"].includes(args[0] ?? "") || args.length !== start + 15) return false;
+  const directionUpload = args[start] === "iifname" && args[start + 2] === "ip" && args[start + 3] === "saddr" && args[start + 6] === "dport" && args[start + 8] === "oifname";
+  const directionDownload = args[start] === "iifname" && args[start + 2] === "ip" && args[start + 3] === "daddr" && args[start + 6] === "sport" && args[start + 8] === "oifname";
+  if (!directionUpload && !directionDownload) return false;
+  if (!validInterface(args[start + 1]!) || !validIpv4(args[start + 4]!) || !["tcp", "udp"].includes(args[start + 5]!) || !validPort(args[start + 7]!) || !validInterface(args[start + 9]!)) return false;
+  if (!["accept", "drop"].includes(args[start + 10]!)) return false;
+  if (args[start + 11] !== "comment" || !validPortRuleComment(args[start + 12]!)) return false;
+  if (directionUpload && args[start + 1] !== clientInterface) return false;
+  if (directionUpload && args[start + 9] !== uplinkInterface) return false;
+  if (directionDownload && args[start + 1] !== uplinkInterface) return false;
+  if (directionDownload && args[start + 9] !== clientInterface) return false;
+  return true;
+}
 function validAccountingRule(args: string[]): boolean {
   if (args[2] !== "inet" || args[3] !== "ayad_nm" || args[4] !== "accounting") return false;
   if (args[0] === "delete") return args.length === 7 && args[1] === "rule" && args[5] === "handle" && validRuleHandle(args[6]!);
@@ -77,12 +92,20 @@ function validManagedNftRule(args: string[]): boolean {
   const chain = args[4];
   if (table === "filter" && (chain === "INPUT" || chain === "FORWARD" || chain === "ayad_nm_forward" || chain === "ayad_nm_input")) {
     if (op === "delete") return args.length === 7 && args[5] === "handle" && validRuleHandle(args[6]!);
-    if (op === "replace") return args.length >= 8 && args[5] === "handle" && validRuleHandle(args[6]!) && validComment(args.at(-1)!);
+    if (op === "replace") return args.length >= 8 && args[5] === "handle" && validRuleHandle(args[6]!) && (validComment(args.at(-1)!) || validPortRuleComment(args.at(-1)!));
     const positionIndex = args.indexOf("position");
     if (positionIndex >= 0 && (positionIndex !== 5 || !validRulePosition(args[6]!))) return false;
     const start = positionIndex >= 0 ? 7 : 5;
     if (chain === "INPUT" || chain === "ayad_nm_input") {
       return (op === "add" || op === "insert") && args.length === start + 6 && args[start] === "tcp" && args[start + 1] === "dport" && validPort(args[start + 2]!) && args[start + 3] === "accept" && args[start + 4] === "comment" && ["ayad_nm_allow_ssh_management", "ayad_nm_allow_dashboard_management"].includes(args[start + 5]!);
+    }
+    if (chain === "ayad_nm_forward") {
+      if (validManagedPortRule(args, start)) return true;
+      if (op !== "add" && op !== "insert") return false;
+      if (args[start] === "ether" && args[start + 1] === "saddr" && args[start + 2] === "@blocked_macs" && args[start + 3] === "drop") return args.length === start + 6 && args[start + 4] === "comment" && args[start + 5] === "ayad_nm_blocked_macs";
+      if (args[start] === "ip" && args[start + 1] === "saddr" && args[start + 2] === "@blocked_ips" && args[start + 3] === "drop") return args.length === start + 6 && args[start + 4] === "comment" && args[start + 5] === "ayad_nm_blocked_ips";
+      if (args[start] === "ip" && args[start + 1] === "saddr" && validSubnetCidr(args[start + 2]!) && args[start + 3] === "oifname" && args[start + 4] === uplinkInterface && args[start + 5] === "drop" && args[start + 6] === "comment" && args[start + 7] === "ayad_nm_vpn_fail_closed") return args.length === start + 8 && !!uplinkInterface;
+      return false;
     }
     if (op !== "add" && op !== "insert") return false;
     if (args[start] === "ether" && args[start + 1] === "saddr" && args[start + 2] === "@blocked_macs" && args[start + 3] === "drop") return args.length === start + 6 && args[start + 4] === "comment" && args[start + 5] === "ayad_nm_blocked_macs";
