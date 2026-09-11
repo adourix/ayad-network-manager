@@ -48,18 +48,15 @@ function validComment(value: string): boolean { return ["ayad_nm_allow_ssh_manag
 function validAccountingCounterName(value: string): boolean { return /^dev_(download|upload)_[0-9a-f]{12}$/.test(value); }
 function validPortRuleComment(value: string): boolean { return /^ayad_nm_port_[0-9]+(?:_return)?$/.test(value); }
 function validManagedPortRule(args: string[], start: number): boolean {
-  if (!["add", "insert"].includes(args[0] ?? "") || args.length !== start + 15) return false;
-  const directionUpload = args[start] === "iifname" && args[start + 2] === "ip" && args[start + 3] === "saddr" && args[start + 6] === "dport" && args[start + 8] === "oifname";
-  const directionDownload = args[start] === "iifname" && args[start + 2] === "ip" && args[start + 3] === "daddr" && args[start + 6] === "sport" && args[start + 8] === "oifname";
-  if (!directionUpload && !directionDownload) return false;
+  if (!["add", "insert"].includes(args[0] ?? "") || args.length !== start + 13) return false;
+  const upload = args[start] === "iifname" && args[start + 2] === "ip" && args[start + 3] === "saddr" && args[start + 6] === "dport" && args[start + 8] === "oifname";
+  const download = args[start] === "iifname" && args[start + 2] === "ip" && args[start + 3] === "daddr" && args[start + 6] === "sport" && args[start + 8] === "oifname";
+  if (!upload && !download) return false;
   if (!validInterface(args[start + 1]!) || !validIpv4(args[start + 4]!) || !["tcp", "udp"].includes(args[start + 5]!) || !validPort(args[start + 7]!) || !validInterface(args[start + 9]!)) return false;
   if (!["accept", "drop"].includes(args[start + 10]!)) return false;
   if (args[start + 11] !== "comment" || !validPortRuleComment(args[start + 12]!)) return false;
-  if (directionUpload && args[start + 1] !== clientInterface) return false;
-  if (directionUpload && args[start + 9] !== uplinkInterface) return false;
-  if (directionDownload && args[start + 1] !== uplinkInterface) return false;
-  if (directionDownload && args[start + 9] !== clientInterface) return false;
-  return true;
+  if (upload) return args[start + 1] === clientInterface && args[start + 9] === uplinkInterface;
+  return args[start + 1] === uplinkInterface && args[start + 9] === clientInterface;
 }
 function validAccountingRule(args: string[]): boolean {
   if (args[2] !== "inet" || args[3] !== "ayad_nm" || args[4] !== "accounting") return false;
