@@ -20,9 +20,7 @@ const backgroundRead = new LinuxSystemCommandExecutor(true, 1_000);
 type Request = { command: string; args: string[] };
 type Job = () => Promise<void>;
 
-function ifaceAllowed(value: string): boolean {
-  return value === "ifb0" || value === clientInterface || value === uplinkInterface || value === vpnTunInterface;
-}
+function ifaceAllowed(value: string): boolean { return value === "ifb0" || value === clientInterface || value === uplinkInterface || value === vpnTunInterface; }
 function validInterface(value: string): boolean { return /^[a-zA-Z0-9_.:-]{1,32}$/.test(value) && ifaceAllowed(value); }
 function validSnapshotPath(value: string): boolean { const path = resolve(value); return path.startsWith(`${setupSnapshotDir}/`) && path.endsWith("/nftables.bak"); }
 function validNftablesConfigPath(value: string): boolean { return resolve(value) === nftablesConfigPath; }
@@ -31,9 +29,7 @@ function validSubnetCidr(value: string): boolean { const match = value.match(/^(
 function validPort(value: string): boolean { return /^[1-9][0-9]{0,4}$/.test(value) && Number(value) <= 65535; }
 function validRuleHandle(value: string): boolean { return /^[1-9][0-9]*$/.test(value); }
 function validRulePosition(value: string): boolean { return /^[0-9]+$/.test(value); }
-function validComment(value: string): boolean {
-  return ["ayad_nm_allow_ssh_management", "ayad_nm_allow_dashboard_management", "ayad_nm_blocked_macs", "ayad_nm_blocked_ips", "ayad_nm_single_interface_nat", "ayad_nm_vpn_nat", "ayad_nm_vpn_fail_closed"].includes(value);
-}
+function validComment(value: string): boolean { return ["ayad_nm_allow_ssh_management", "ayad_nm_allow_dashboard_management", "ayad_nm_blocked_macs", "ayad_nm_blocked_ips", "ayad_nm_single_interface_nat", "ayad_nm_vpn_nat", "ayad_nm_vpn_fail_closed"].includes(value); }
 function validAccountingCounterName(value: string): boolean { return /^dev_(download|upload)_[0-9a-f]{12}$/.test(value); }
 
 function validAccountingRule(args: string[]): boolean {
@@ -57,7 +53,8 @@ function validAccountingRule(args: string[]): boolean {
   const match = direction === "download"
     ? expression.length === counterIndex + 5 && expression[0] === "oifname" && expression[2] === "ip" && expression[3] === "daddr"
     : expression.length === counterIndex + 5 && expression[0] === "iifname" && expression[2] === "ip" && expression[3] === "saddr";
-  return match && validInterface(expression[1]!) && validIpv4(expression[4]!);
+  if (!match) return false;
+  return validInterface(expression[1]!) && validIpv4(expression[4]!);
 }
 
 function validManagedNftRule(args: string[]): boolean {
@@ -65,21 +62,7 @@ function validManagedNftRule(args: string[]): boolean {
   if (!["add", "insert", "delete", "replace"].includes(op ?? "") || args[1] !== "rule" || args[2] !== "ip") return false;
   const table = args[3];
   const chain = args[4];
-
-  if (table === "filter" && chain === "ayad_nm_forward") {
-    if (op === "delete") return args.length === 7 && args[5] === "handle" && validRuleHandle(args[6]!);
-    if (op !== "add") return false;
-    const start = 5;
-    if (args[start] === "ip" && args[start + 1] === "saddr" && args[start + 2] === "@blocked_ips" && args[start + 3] === "drop") {
-      return args.length === start + 6 && args[start + 4] === "comment" && args[start + 5] === "ayad_nm_blocked_ips";
-    }
-    if (args[start] === "ether" && args[start + 1] === "saddr" && args[start + 2] === "@blocked_macs" && args[start + 3] === "drop") {
-      return args.length === start + 6 && args[start + 4] === "comment" && args[start + 5] === "ayad_nm_blocked_macs";
-    }
-    return false;
-  }
-
-  if (table === "filter" && (chain === "INPUT" || chain === "FORWARD")) {
+  if (table === "filter" && (chain === "INPUT" || chain === "FORWARD" || chain === "ayad_nm_forward")) {
     if (op === "delete") return args.length === 7 && args[5] === "handle" && validRuleHandle(args[6]!);
     if (op === "replace") return args.length >= 8 && args[5] === "handle" && validRuleHandle(args[6]!) && validComment(args.at(-1)!);
     const positionIndex = args.indexOf("position");
@@ -94,7 +77,6 @@ function validManagedNftRule(args: string[]): boolean {
     if (chain === "FORWARD" && args[start] === "ip" && args[start + 1] === "saddr" && validSubnetCidr(args[start + 2]!) && args[start + 3] === "oifname" && args[start + 4] === uplinkInterface && args[start + 5] === "drop" && args[start + 6] === "comment" && args[start + 7] === "ayad_nm_vpn_fail_closed") return args.length === start + 8 && !!uplinkInterface;
     return false;
   }
-
   if (table === "nat" && chain === "POSTROUTING") {
     if (op === "delete") return args.length === 7 && args[5] === "handle" && validRuleHandle(args[6]!);
     if (op !== "add" && op !== "insert") return false;
@@ -178,7 +160,7 @@ function valid(command: string, args: string[]): boolean {
     }
     if (target === "element") {
       if (args.length !== 7 || args[2] !== "ip" || args[3] !== "filter" || !["blocked_macs", "blocked_ips"].includes(args[4]!)) return false;
-      if (args[0] === "add" || args[0] === "delete") return args[5] === "{" && args[6]?.endsWith("}");
+      if (args[0] === "add" || args[0] === "delete") return args[5] === "{" && (args[6]?.endsWith("}") ?? false);
       return false;
     }
     return false;
@@ -193,84 +175,63 @@ function isBackgroundRead(command: string, args: string[]): boolean {
   return false;
 }
 
-function send(socket: import("node:net").Socket, payload: Record<string, unknown>): void { socket.write(JSON.stringify(payload)); }
+function send(socket: import("node:net").Socket, payload: unknown): void { socket.write(`${JSON.stringify(payload)}\n`); }
 
 const priority: Job[] = [];
 const background: Job[] = [];
+let running = false;
 const maxBackgroundQueue = 8;
-let processing = false;
 
 function schedule(job: Job, isBackground: boolean): void {
   if (isBackground) {
     if (background.length >= maxBackgroundQueue) throw new Error("background enforcement queue overloaded");
     background.push(job);
-  } else {
-    priority.push(job);
-  }
-  void processQueue();
+  } else priority.push(job);
+  void drain();
 }
 
-async function processQueue(): Promise<void> {
-  if (processing) return;
-  processing = true;
+async function drain(): Promise<void> {
+  if (running) return;
+  running = true;
   try {
     while (priority.length || background.length) {
       const job = priority.shift() ?? background.shift();
       if (job) await job();
     }
-  } finally {
-    processing = false;
+  } finally { running = false; }
+}
+
+async function executeRequest(socket: import("node:net").Socket, request: Request): Promise<void> {
+  const executor = isBackgroundRead(request.command, request.args) ? backgroundRead : local;
+  try {
+    const result = await executor.execute(request.command, request.args);
+    send(socket, { ok: true, ...result });
+  } catch (error) {
+    send(socket, { ok: false, error: error instanceof Error ? error.message : String(error) });
   }
 }
 
-function enqueue(request: Request, socket: import("node:net").Socket): void {
-  const isBackground = isBackgroundRead(request.command, request.args);
-  schedule(async () => {
-    try {
-      const executor = isBackground ? backgroundRead : local;
-      const result = await executor.execute(request.command, request.args);
-      send(socket, { ok: true, ...result });
-    } catch (error) {
-      send(socket, { ok: false, error: error instanceof Error ? error.message : String(error) });
-    }
-  }, isBackground);
-}
-
-function handleSocket(socket: import("node:net").Socket): void {
+const server = createServer((socket) => {
   let buffer = "";
   socket.setEncoding("utf8");
   socket.on("data", (chunk) => {
     buffer += chunk;
-    while (true) {
-      const newline = buffer.indexOf("\n");
-      if (newline < 0) break;
-      const line = buffer.slice(0, newline);
+    let newline = buffer.indexOf("\n");
+    while (newline >= 0) {
+      const line = buffer.slice(0, newline).trim();
       buffer = buffer.slice(newline + 1);
+      newline = buffer.indexOf("\n");
       if (!line) continue;
-      try {
-        const request = JSON.parse(line) as Request;
-        if (!request || typeof request.command !== "string" || !Array.isArray(request.args) || !request.args.every((arg) => typeof arg === "string")) {
-          send(socket, { ok: false, error: "invalid enforcement request" });
-          continue;
-        }
-        if (!valid(request.command, request.args)) {
-          send(socket, { ok: false, error: "command rejected by enforcement agent" });
-          continue;
-        }
-        enqueue(request, socket);
-      } catch (error) {
-        send(socket, { ok: false, error: error instanceof Error ? error.message : String(error) });
-      }
+      let request: Request;
+      try { request = JSON.parse(line) as Request; } catch { send(socket, { ok: false, error: "invalid JSON request" }); continue; }
+      if (!valid(request.command, request.args)) { send(socket, { ok: false, error: "command rejected by enforcement agent" }); continue; }
+      try { schedule(() => executeRequest(socket, request), isBackgroundRead(request.command, request.args)); }
+      catch (error) { send(socket, { ok: false, error: error instanceof Error ? error.message : String(error) }); }
     }
   });
   socket.on("error", () => undefined);
-}
+});
 
-async function main(): Promise<void> {
-  try { await fs.mkdir(resolve(socketPath, ".."), { recursive: true }); } catch { /* service user may not own parent; systemd creates it */ }
-  try { unlinkSync(socketPath); } catch { /* socket may not exist */ }
-  const server = createServer(handleSocket);
-  server.listen(socketPath);
-}
-
-void main();
+await fs.mkdir(resolve(socketPath, ".."), { recursive: true });
+try { unlinkSync(socketPath); } catch { /* socket absent */ }
+server.listen(socketPath, () => undefined);
