@@ -8,7 +8,7 @@ export interface SetupProbe {
 }
 export interface SetupInterface { name: string; mac: string | null; state: string; addresses: string[]; kind: string | null; }
 export interface SetupNetworkReport { interfaces: SetupInterface[]; defaultUplink: string | null; uplinkSubnets: Record<string, string[]>; proposedClientSubnets: string[]; errors: string[]; }
-export interface SetupReport { root: boolean; port53Free: boolean; ifbAvailable: boolean; firewallManager: string | null; timeSynchronized: boolean; errors: string[]; }
+export interface SetupReport { root: boolean; port53Free: boolean; ifbAvailable: boolean; firewallManager: string | null; timeSynchronized: boolean; errors: string[]; warnings: string[]; }
 export interface SetupPaths { configPath: string; dnsmasqPath: string; nftablesPath: string; snapshotDir: string; leasePath?: string; }
 export interface SetupApplyInput { clientInterface: string; uplinkInterface: string; clientSubnet: string; uplinkBandwidthMbps: number; dashboardPort: number; sshPort: number; dnsServers: string[]; clientGatewayIp?: string; vpnTunnelInterface?: string; vpnTunAddress?: string; singBoxConfigPath?: string; dhcpReservationsPath?: string; activate?: boolean; }
 export interface SetupHealth { clientInterface: boolean; gatewayReachable: boolean; dhcpLeaseFile: boolean; outboundConnectivity: boolean; errors: string[]; }
@@ -36,20 +36,27 @@ export class SetupService {
 
   async preflight(): Promise<SetupReport> {
     const errors: string[] = [];
+    const warnings: string[] = [];
     const root = this.isRoot();
     const port = await this.safe("ss", ["-H", "-lun", "sport", "=", ":53"]);
     const port53Free = port.stdout.trim() === "";
-    const ifb = await this.safe("modprobe", ["ifb"]);
+
+    // IFB may already be loaded. Only try modprobe when it is not present.
+    const moduleLoaded = await this.safe("test", ["-e", "/sys/module/ifb"]);
+    const ifb = moduleLoaded.ok ? moduleLoaded : await this.safe("modprobe", ["ifb"]);
     const ifbAvailable = ifb.ok;
+
     const ufw = await this.safe("ufw", ["status"]);
     const firewallManager = ufw.ok && /Status:\s+active/i.test(ufw.stdout) ? "ufw" : null;
     const timed = await this.safe("timedatectl", ["show", "-p", "NTPSynchronized", "--value"]);
     const timeSynchronized = timed.stdout.trim() === "yes";
-    if (!root) errors.push("root privileges are required");
-    if (!ifbAvailable) errors.push("ifb kernel module is unavailable");
-    if (firewallManager) errors.push("ufw is active and must be reviewed before nftables changes");
-    if (!timeSynchronized) errors.push("system clock is not synchronized");
-    return { root, port53Free, ifbAvailable, firewallManager, timeSynchronized, errors };
+
+    if (!root) errors.push("root privileges are required; run the backend as root for gateway setup");
+    if (!ifbAvailable) errors.push("ifb kernel module is unavailable or could not be loaded");
+    if (firewallManager) warnings.push("ufw is active; review it before applying nftables changes");
+    if (!timeSynchronized) warnings.push("system clock is not synchronized");
+
+    return { root, port53Free, ifbAvailable, firewallManager, timeSynchronized, errors, warnings };
   }
 
   async inspectNetwork(): Promise<SetupNetworkReport> {
