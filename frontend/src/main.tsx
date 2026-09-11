@@ -11,7 +11,36 @@ const queryClient = new QueryClient({
   },
 });
 
+function usePathname() {
+  const [pathname, setPathname] = useState(() => window.location.pathname);
+
+  useEffect(() => {
+    const notify = () => setPathname(window.location.pathname);
+    const originalPushState = window.history.pushState;
+    const originalReplaceState = window.history.replaceState;
+
+    window.history.pushState = function (...args) {
+      originalPushState.apply(window.history, args);
+      notify();
+    };
+    window.history.replaceState = function (...args) {
+      originalReplaceState.apply(window.history, args);
+      notify();
+    };
+    window.addEventListener("popstate", notify);
+
+    return () => {
+      window.history.pushState = originalPushState;
+      window.history.replaceState = originalReplaceState;
+      window.removeEventListener("popstate", notify);
+    };
+  }, []);
+
+  return pathname;
+}
+
 function Root() {
+  const pathname = usePathname();
   const [setupComplete, setSetupComplete] = useState<boolean | null>(null);
 
   useEffect(() => {
@@ -33,12 +62,10 @@ function Root() {
   useEffect(() => {
     if (setupComplete === null) return;
 
-    const path = window.location.pathname;
-
-    if (!setupComplete && path !== "/setup") {
+    if (!setupComplete && pathname !== "/setup") {
       window.location.replace("/setup");
     }
-  }, [setupComplete]);
+  }, [pathname, setupComplete]);
 
   if (setupComplete === null) {
     return <div style={{ minHeight: "100vh", display: "grid", placeItems: "center" }}>Checking gateway setup…</div>;
@@ -46,7 +73,7 @@ function Root() {
 
   // /setup is intentionally kept accessible after completion so the final
   // Apply/health-check result remains visible and navigation to login is explicit.
-  if (window.location.pathname === "/setup") {
+  if (pathname === "/setup") {
     return <SetupPage />;
   }
 
