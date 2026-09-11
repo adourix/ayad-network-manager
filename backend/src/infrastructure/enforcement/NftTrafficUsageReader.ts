@@ -163,6 +163,25 @@ export class NftTrafficUsageReader implements TrafficUsageReader {
     return serialized.includes("saddr") && serialized.includes("iifname");
   }
 
+  private buildRuleExpressions(direction: "download" | "upload", mac: string, ip: string): string[] {
+    const { mode, clientInterface, uplinkInterface, clientSubnet } = this.topology;
+
+    if (mode === "single-interface-ifb") {
+      if (direction === "download") {
+        return ["oifname", clientInterface, "ip", "daddr", ip];
+      }
+      return ["iifname", clientInterface, "ip", "saddr", ip];
+    }
+
+    if (!uplinkInterface) throw new Error("Dual-interface accounting requires an uplink interface");
+
+    if (direction === "download") {
+      return ["iifname", uplinkInterface, "oifname", clientInterface, "ip", "daddr", ip];
+    }
+
+    return ["iifname", clientInterface, "oifname", uplinkInterface, "ip", "saddr", clientSubnet, "ether", "saddr", mac];
+  }
+
   private async addRule(expressions: string[], counterName: string, comment: string): Promise<void> {
     await this.execNftMutation([
       "add", "rule", TABLE_FAMILY, TABLE_NAME, CHAIN_NAME,
