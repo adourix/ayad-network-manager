@@ -5,7 +5,7 @@ import type { OperationsRepository } from "../../domain/repositories/OperationsR
 import { config } from "../../config.js";
 
 const IPV4_REGEX = /^(?:\d{1,3}\.){3}\d{1,3}$/;
-const PORT_RULE_POSITION = "2";
+const FORWARD_CHAIN = "ayad_nm_forward";
 
 function validIpv4(value: string): boolean {
   if (!IPV4_REGEX.test(value)) return false;
@@ -33,13 +33,13 @@ export class NftPortRuleEnforcer implements PortRuleEnforcer {
     const verdict = rule.action === "allow" ? "accept" : "drop";
     const comment = `ayad_nm_port_${rule.id}`;
     const upload = [
-      "insert", "rule", "ip", "filter", "FORWARD", "position", PORT_RULE_POSITION,
+      "add", "rule", "ip", "filter", FORWARD_CHAIN,
       "iifname", config.network.clientInterface, "ip", "saddr", device.ip,
       rule.protocol, "dport", String(rule.port), "oifname", config.network.uplinkInterface,
       verdict, "comment", comment,
     ];
     const download = [
-      "insert", "rule", "ip", "filter", "FORWARD", "position", PORT_RULE_POSITION,
+      "add", "rule", "ip", "filter", FORWARD_CHAIN,
       "iifname", config.network.uplinkInterface, "ip", "daddr", device.ip,
       rule.protocol, "sport", String(rule.port), "oifname", config.network.clientInterface,
       verdict, "comment", `${comment}_return`,
@@ -66,15 +66,14 @@ export class NftPortRuleEnforcer implements PortRuleEnforcer {
   }
 
   async remove(rule: PortRuleRecord): Promise<void> {
-    const result = await this.executor.execute("nft", ["-j", "-a", "list", "chain", "ip", "filter", "FORWARD"]);
+    const result = await this.executor.execute("nft", ["-j", "-a", "list", "chain", "ip", "filter", FORWARD_CHAIN]);
     const pattern = `\\"comment\\"\\s*:\\s*\\"ayad_nm_port_${rule.id}(?:_return)?\\"[\\s\\S]*?\\"handle\\"\\s*:\\s*(\\d+)`;
     const handles = [...result.stdout.matchAll(new RegExp(pattern, "g"))]
       .map((match) => match[1]).filter((handle): handle is string => Boolean(handle));
 
     try {
       for (const handle of handles) {
-        const remove = ["delete", "rule", "ip", "filter", "FORWARD", "handle", handle];
-        // Explicit dry-run validation is required immediately before every destructive mutation.
+        const remove = ["delete", "rule", "ip", "filter", FORWARD_CHAIN, "handle", handle];
         await this.executor.execute("nft", ["-c", ...remove]);
         await this.executor.execute("nft", remove);
       }
