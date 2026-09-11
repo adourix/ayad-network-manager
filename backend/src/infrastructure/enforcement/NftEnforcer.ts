@@ -31,6 +31,7 @@ const VPN_IP_SET_NAME = "vpn_blocked_ips";
 const MAC_SET_NAME = "blocked_macs";
 const IP_SET_NAME = "blocked_ips";
 const CONTROL_CHAIN = "ayad_nm_forward";
+const MANAGEMENT_CHAIN = "ayad_nm_input";
 const MAC_REGEX = /^([0-9a-f]{2}:){5}[0-9a-f]{2}$/i;
 const IPV4_REGEX = /^(?:\d{1,3}\.){3}\d{1,3}$/;
 const MAC_BLOCK_COMMENT = "ayad_nm_blocked_macs";
@@ -98,11 +99,26 @@ async function ensureControlChainUnlocked(): Promise<void> {
   }
 }
 
+async function ensureManagementChainUnlocked(): Promise<void> {
+  try {
+    await execNft(["add", "chain", TABLE_FAMILY, TABLE_NAME, MANAGEMENT_CHAIN, "{", "type", "filter", "hook", "input", "priority", "-300", ";", "policy", "accept", ";", "}"]);
+  } catch (error) {
+    if (!isAlreadyExists(error)) throw error;
+  }
+}
+
 async function rebuildControlChainUnlocked(): Promise<void> {
   await ensureControlChainUnlocked();
   await execNft(["flush", "chain", TABLE_FAMILY, TABLE_NAME, CONTROL_CHAIN]);
   await execNft(["add", "rule", TABLE_FAMILY, TABLE_NAME, CONTROL_CHAIN, "ip", "saddr", `@${IP_SET_NAME}`, "drop", "comment", IP_BLOCK_COMMENT]);
   await execNft(["add", "rule", TABLE_FAMILY, TABLE_NAME, CONTROL_CHAIN, "ether", "saddr", `@${MAC_SET_NAME}`, "drop", "comment", MAC_BLOCK_COMMENT]);
+}
+
+async function rebuildManagementChainUnlocked(): Promise<void> {
+  await ensureManagementChainUnlocked();
+  await execNft(["flush", "chain", TABLE_FAMILY, TABLE_NAME, MANAGEMENT_CHAIN]);
+  await execNft(["add", "rule", TABLE_FAMILY, TABLE_NAME, MANAGEMENT_CHAIN, "tcp", "dport", String(config.network.sshPort), "accept", "comment", SSH_ALLOW_COMMENT]);
+  await execNft(["add", "rule", TABLE_FAMILY, TABLE_NAME, MANAGEMENT_CHAIN, "tcp", "dport", String(config.server.port), "accept", "comment", DASHBOARD_ALLOW_COMMENT]);
 }
 
 async function ensureVpnEnforcementStateUnlocked(): Promise<void> {
@@ -153,8 +169,8 @@ export async function ensureFirewallState(): Promise<void> {
     await ensureSetUnlocked(MAC_SET_NAME, "ether_addr");
     await ensureSetUnlocked(IP_SET_NAME, "ipv4_addr");
     await rebuildControlChainUnlocked();
+    await rebuildManagementChainUnlocked();
     await ensureVpnEnforcementStateUnlocked();
-    await ensureManagementAllowRulesUnlocked();
     await clearVpnBlockedIpsUnlocked();
     vpnBlockedIpGuardEnabled = false;
   });
@@ -188,14 +204,6 @@ async function getRulesInChain(table: string, chain: string): Promise<NftRule[]>
     index += 1;
   }
   return rules;
-}
-
-async function ensureManagementAllowRulesUnlocked(): Promise<void> {
-  for (const [chain, port, comment] of [["INPUT", config.network.sshPort, SSH_ALLOW_COMMENT], ["INPUT", config.server.port, DASHBOARD_ALLOW_COMMENT]] as const) {
-    const { stdout } = await execNft(["-a", "list", "chain", TABLE_FAMILY, TABLE_NAME, chain]);
-    if (stdout.includes(comment)) continue;
-    await execNft(["insert", "rule", TABLE_FAMILY, TABLE_NAME, chain, "tcp", "dport", String(port), "accept", "comment", comment]);
-  }
 }
 
 export async function getBlockedMacs(): Promise<Set<string>> {
