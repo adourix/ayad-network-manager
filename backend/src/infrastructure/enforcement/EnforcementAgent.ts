@@ -26,247 +26,29 @@ function validSnapshotPath(value: string): boolean { const path = resolve(value)
 function validNftablesConfigPath(value: string): boolean { return resolve(value) === nftablesConfigPath; }
 function validIpv4(value: string): boolean { const parts = value.split("."); return parts.length === 4 && parts.every((part) => /^(0|[1-9][0-9]{0,2})$/.test(part) && Number(part) <= 255); }
 function validSubnetCidr(value: string): boolean { const match = value.match(/^(\d{1,3}(?:\.\d{1,3}){3})\/(\d{1,2})$/); return !!match && validIpv4(match[1]!) && Number(match[2]) <= 32; }
-function validClientAddress(value: string): boolean {
-  const match = value.match(/^(\d{1,3}(?:\.\d{1,3}){3})\/(\d{1,2})$/);
-  if (!match || !validIpv4(match[1]!)) return false;
-  if (!clientSubnet) return false;
-  const prefix = Number(match[2]);
-  return prefix === Number(clientSubnet.split("/")[1]) && sameNetwork(match[1]!, clientSubnet);
-}
+function validClientAddress(value: string): boolean { const match = value.match(/^(\d{1,3}(?:\.\d{1,3}){3})\/(\d{1,2})$/); if (!match || !validIpv4(match[1]!)) return false; if (!clientSubnet) return false; const prefix = Number(match[2]); return prefix === Number(clientSubnet.split("/")[1]) && sameNetwork(match[1]!, clientSubnet); }
 function ipv4ToNumber(value: string): number { return value.split(".").map(Number).reduce((n, octet) => (n * 256) + octet, 0) >>> 0; }
-function sameNetwork(ip: string, subnet: string): boolean {
-  const match = subnet.match(/^(\d{1,3}(?:\.\d{1,3}){3})\/(\d{1,2})$/);
-  if (!match || !validIpv4(ip) || !validIpv4(match[1]!)) return false;
-  const bits = Number(match[2]);
-  const mask = bits === 0 ? 0 : (0xffffffff << (32 - bits)) >>> 0;
-  return (ipv4ToNumber(ip) & mask) === (ipv4ToNumber(match[1]!) & mask);
-}
+function sameNetwork(ip: string, subnet: string): boolean { const match = subnet.match(/^(\d{1,3}(?:\.\d{1,3}){3})\/(\d{1,2})$/); if (!match || !validIpv4(ip) || !validIpv4(match[1]!)) return false; const bits = Number(match[2]); const mask = bits === 0 ? 0 : (0xffffffff << (32 - bits)) >>> 0; return (ipv4ToNumber(ip) & mask) === (ipv4ToNumber(match[1]!) & mask); }
 function validPort(value: string): boolean { return /^[1-9][0-9]{0,4}$/.test(value) && Number(value) <= 65535; }
 function validRuleHandle(value: string): boolean { return /^[1-9][0-9]*$/.test(value); }
 function validRulePosition(value: string): boolean { return /^[0-9]+$/.test(value); }
 function validComment(value: string): boolean { return ["ayad_nm_allow_ssh_management", "ayad_nm_allow_dashboard_management", "ayad_nm_blocked_macs", "ayad_nm_blocked_ips", "ayad_nm_single_interface_nat", "ayad_nm_vpn_nat", "ayad_nm_vpn_fail_closed"].includes(value); }
 function validAccountingCounterName(value: string): boolean { return /^dev_(download|upload)_[0-9a-f]{12}$/.test(value); }
 function validPortRuleComment(value: string): boolean { return /^ayad_nm_port_[0-9]+(?:_return)?$/.test(value); }
-function validManagedPortRule(args: string[], start: number): boolean {
-  if (!["add", "insert"].includes(args[0] ?? "") || args.length !== start + 13) return false;
-  const upload = args[start] === "iifname" && args[start + 2] === "ip" && args[start + 3] === "saddr" && args[start + 6] === "dport" && args[start + 8] === "oifname";
-  const download = args[start] === "iifname" && args[start + 2] === "ip" && args[start + 3] === "daddr" && args[start + 6] === "sport" && args[start + 8] === "oifname";
-  if (!upload && !download) return false;
-  if (!validInterface(args[start + 1]!) || !validIpv4(args[start + 4]!) || !["tcp", "udp"].includes(args[start + 5]!) || !validPort(args[start + 7]!) || !validInterface(args[start + 9]!)) return false;
-  if (!["accept", "drop"].includes(args[start + 10]!)) return false;
-  if (args[start + 11] !== "comment" || !validPortRuleComment(args[start + 12]!)) return false;
-  if (upload) return args[start + 1] === clientInterface && args[start + 9] === uplinkInterface;
-  return args[start + 1] === uplinkInterface && args[start + 9] === clientInterface;
-}
-function validAccountingRule(args: string[]): boolean {
-  if (args[2] !== "inet" || args[3] !== "ayad_nm" || args[4] !== "accounting") return false;
-  if (args[0] === "delete") return args.length === 7 && args[1] === "rule" && args[5] === "handle" && validRuleHandle(args[6]!);
-  if (args[0] !== "add" && args[0] !== "replace") return false;
-  const offset = args[0] === "replace" ? 7 : 5;
-  if (args[1] !== "rule") return false;
-  if (args[0] === "replace" && (args.length < 8 || args[5] !== "handle" || !validRuleHandle(args[6]!))) return false;
-  const expression = args.slice(offset);
-  const counterIndex = expression.indexOf("counter");
-  if (counterIndex < 0 || expression.length !== counterIndex + 5) return false;
-  if (expression[counterIndex + 1] !== "name" || expression[counterIndex + 3] !== "comment") return false;
-  const counterName = expression[counterIndex + 2];
-  const comment = expression[counterIndex + 4];
-  if (!counterName || !comment || !validAccountingCounterName(counterName)) return false;
-  const direction = counterName.startsWith("dev_download_") ? "download" : counterName.startsWith("dev_upload_") ? "upload" : null;
-  if (!direction) return false;
-  const macHex = counterName.slice(`dev_${direction}_`.length);
-  if (comment !== `ayad_nm_${direction}_${macHex}`) return false;
-  const match = direction === "download"
-    ? expression.length === counterIndex + 5 && expression[0] === "oifname" && expression[2] === "ip" && expression[3] === "daddr"
-    : expression.length === counterIndex + 5 && expression[0] === "iifname" && expression[2] === "ip" && expression[3] === "saddr";
-  if (!match) return false;
-  return validInterface(expression[1]!) && validIpv4(expression[4]!);
-}
-function validManagedNftRule(args: string[]): boolean {
-  const op = args[0];
-  if (!["add", "insert", "delete", "replace"].includes(op ?? "") || args[1] !== "rule" || args[2] !== "ip") return false;
-  const table = args[3];
-  const chain = args[4];
-  if (table === "filter" && (chain === "INPUT" || chain === "FORWARD" || chain === "ayad_nm_forward" || chain === "ayad_nm_input")) {
-    if (op === "delete") return args.length === 7 && args[5] === "handle" && validRuleHandle(args[6]!);
-    if (op === "replace") return args.length >= 8 && args[5] === "handle" && validRuleHandle(args[6]!) && (validComment(args.at(-1)!) || validPortRuleComment(args.at(-1)!));
-    const positionIndex = args.indexOf("position");
-    if (positionIndex >= 0 && (positionIndex !== 5 || !validRulePosition(args[6]!))) return false;
-    const start = positionIndex >= 0 ? 7 : 5;
-    if (chain === "INPUT" || chain === "ayad_nm_input") {
-      return (op === "add" || op === "insert") && args.length === start + 6 && args[start] === "tcp" && args[start + 1] === "dport" && validPort(args[start + 2]!) && args[start + 3] === "accept" && args[start + 4] === "comment" && ["ayad_nm_allow_ssh_management", "ayad_nm_allow_dashboard_management"].includes(args[start + 5]!);
-    }
-    if (chain === "ayad_nm_forward") {
-      if (validManagedPortRule(args, start)) return true;
-      if (op !== "add" && op !== "insert") return false;
-      if (args[start] === "ether" && args[start + 1] === "saddr" && args[start + 2] === "@blocked_macs" && args[start + 3] === "drop") return args.length === start + 6 && args[start + 4] === "comment" && args[start + 5] === "ayad_nm_blocked_macs";
-      if (args[start] === "ip" && args[start + 1] === "saddr" && args[start + 2] === "@blocked_ips" && args[start + 3] === "drop") return args.length === start + 6 && args[start + 4] === "comment" && args[start + 5] === "ayad_nm_blocked_ips";
-      if (args[start] === "ip" && args[start + 1] === "saddr" && validSubnetCidr(args[start + 2]!) && args[start + 3] === "oifname" && args[start + 4] === uplinkInterface && args[start + 5] === "drop" && args[start + 6] === "comment" && args[start + 7] === "ayad_nm_vpn_fail_closed") return args.length === start + 8 && !!uplinkInterface;
-      return false;
-    }
-    if (op !== "add" && op !== "insert") return false;
-    if (args[start] === "ether" && args[start + 1] === "saddr" && args[start + 2] === "@blocked_macs" && args[start + 3] === "drop") return args.length === start + 6 && args[start + 4] === "comment" && args[start + 5] === "ayad_nm_blocked_macs";
-    if (args[start] === "ip" && args[start + 1] === "saddr" && args[start + 2] === "@blocked_ips" && args[start + 3] === "drop") return args.length === start + 6 && args[start + 4] === "comment" && args[start + 5] === "ayad_nm_blocked_ips";
-    if (chain === "FORWARD" && args[start] === "ip" && args[start + 1] === "saddr" && validSubnetCidr(args[start + 2]!) && args[start + 3] === "oifname" && args[start + 4] === uplinkInterface && args[start + 5] === "drop" && args[start + 6] === "comment" && args[start + 7] === "ayad_nm_vpn_fail_closed") return args.length === start + 8 && !!uplinkInterface;
-    return false;
-  }
-  if (table === "nat" && chain === "POSTROUTING") {
-    if (op === "delete") return args.length === 7 && args[5] === "handle" && validRuleHandle(args[6]!);
-    if (op !== "add" && op !== "insert") return false;
-    const positionIndex = args.indexOf("position");
-    if (positionIndex >= 0 && (positionIndex !== 5 || !validRulePosition(args[6]!))) return false;
-    const start = positionIndex >= 0 ? 7 : 5;
-    if (args.length !== start + 8 || args[start] !== "ip" || args[start + 1] !== "saddr" || !validSubnetCidr(args[start + 2]!) || args[start + 3] !== "oifname" || args[start + 5] !== "masquerade" || args[start + 6] !== "comment") return false;
-    const egress = args[start + 4];
-    const comment = args[start + 7];
-    if (comment === "ayad_nm_single_interface_nat") return egress === uplinkInterface && !!uplinkInterface;
-    if (comment === "ayad_nm_vpn_nat") return egress === vpnTunInterface && !!vpnTunInterface;
-    return false;
-  }
-  return false;
-}
+function validManagedPortRule(args: string[], start: number): boolean { if (args[0] !== "add" || args.length !== start + 13) return false; const upload = args[start] === "iifname" && args[start + 2] === "ip" && args[start + 3] === "saddr" && args[start + 6] === "dport" && args[start + 8] === "oifname"; const download = args[start] === "iifname" && args[start + 2] === "ip" && args[start + 3] === "daddr" && args[start + 6] === "sport" && args[start + 8] === "oifname"; if (!upload && !download) return false; if (!validInterface(args[start + 1]!) || !validIpv4(args[start + 4]!) || !["tcp", "udp"].includes(args[start + 5]!) || !validPort(args[start + 7]!) || !validInterface(args[start + 9]!)) return false; if (!["accept", "drop"].includes(args[start + 10]!)) return false; if (args[start + 11] !== "comment" || !validPortRuleComment(args[start + 12]!)) return false; if (upload) return args[start + 1] === clientInterface && args[start + 9] === uplinkInterface; return args[start + 1] === uplinkInterface && args[start + 9] === clientInterface; }
+function validAccountingRule(args: string[]): boolean { if (args[2] !== "inet" || args[3] !== "ayad_nm" || args[4] !== "accounting") return false; if (args[0] === "delete") return args.length === 7 && args[1] === "rule" && args[5] === "handle" && validRuleHandle(args[6]!); if (args[0] !== "add" && args[0] !== "replace") return false; const offset = args[0] === "replace" ? 7 : 5; if (args[1] !== "rule") return false; if (args[0] === "replace" && (args.length < 8 || args[5] !== "handle" || !validRuleHandle(args[6]!))) return false; const expression = args.slice(offset); const counterIndex = expression.indexOf("counter"); if (counterIndex < 0 || expression.length !== counterIndex + 5) return false; if (expression[counterIndex + 1] !== "name" || expression[counterIndex + 3] !== "comment") return false; const counterName = expression[counterIndex + 2], comment = expression[counterIndex + 4]; if (!counterName || !comment || !validAccountingCounterName(counterName)) return false; const direction = counterName.startsWith("dev_download_") ? "download" : counterName.startsWith("dev_upload_") ? "upload" : null; if (!direction) return false; const macHex = counterName.slice(`dev_${direction}_`.length); if (comment !== `ayad_nm_${direction}_${macHex}`) return false; const match = direction === "download" ? expression.length === counterIndex + 5 && expression[0] === "oifname" && expression[2] === "ip" && expression[3] === "daddr" : expression.length === counterIndex + 5 && expression[0] === "iifname" && expression[2] === "ip" && expression[3] === "saddr"; if (!match) return false; return validInterface(expression[1]!) && validIpv4(expression[4]!); }
+function validManagedNftRule(args: string[]): boolean { const op = args[0]; if (!["add", "insert", "delete", "replace"].includes(op ?? "") || args[1] !== "rule" || args[2] !== "ip") return false; const table = args[3], chain = args[4]; if (table === "filter" && (chain === "INPUT" || chain === "FORWARD" || chain === "ayad_nm_forward" || chain === "ayad_nm_input")) { if (op === "delete") return args.length === 7 && args[5] === "handle" && validRuleHandle(args[6]!); if (op === "replace") return args.length >= 8 && args[5] === "handle" && validRuleHandle(args[6]!) && (validComment(args.at(-1)!) || validPortRuleComment(args.at(-1)!)); const positionIndex = args.indexOf("position"); if (positionIndex >= 0 && (positionIndex !== 5 || !validRulePosition(args[6]!))) return false; const start = positionIndex >= 0 ? 7 : 5; if (chain === "INPUT" || chain === "ayad_nm_input") return (op === "add" || op === "insert") && args.length === start + 6 && args[start] === "tcp" && args[start + 1] === "dport" && validPort(args[start + 2]!) && args[start + 3] === "accept" && args[start + 4] === "comment" && ["ayad_nm_allow_ssh_management", "ayad_nm_allow_dashboard_management"].includes(args[start + 5]!); if (chain === "ayad_nm_forward") { if (validManagedPortRule(args, start)) return true; if (op !== "add" && op !== "insert") return false; if (args[start] === "ether" && args[start + 1] === "saddr" && args[start + 2] === "@blocked_macs" && args[start + 3] === "drop") return args.length === start + 6 && args[start + 4] === "comment" && args[start + 5] === "ayad_nm_blocked_macs"; if (args[start] === "ip" && args[start + 1] === "saddr" && args[start + 2] === "@blocked_ips" && args[start + 3] === "drop") return args.length === start + 6 && args[start + 4] === "comment" && args[start + 5] === "ayad_nm_blocked_ips"; if (args[start] === "ip" && args[start + 1] === "saddr" && validSubnetCidr(args[start + 2]!) && args[start + 3] === "oifname" && args[start + 4] === uplinkInterface && args[start + 5] === "drop" && args[start + 6] === "comment" && args[start + 7] === "ayad_nm_vpn_fail_closed") return args.length === start + 8 && !!uplinkInterface; return false; } if (op !== "add" && op !== "insert") return false; if (args[start] === "ether" && args[start + 1] === "saddr" && args[start + 2] === "@blocked_macs" && args[start + 3] === "drop") return args.length === start + 6 && args[start + 4] === "comment" && args[start + 5] === "ayad_nm_blocked_macs"; if (args[start] === "ip" && args[start + 1] === "saddr" && args[start + 2] === "@blocked_ips" && args[start + 3] === "drop") return args.length === start + 6 && args[start + 4] === "comment" && args[start + 5] === "ayad_nm_blocked_ips"; if (chain === "FORWARD" && args[start] === "ip" && args[start + 1] === "saddr" && validSubnetCidr(args[start + 2]!) && args[start + 3] === "oifname" && args[start + 4] === uplinkInterface && args[start + 5] === "drop" && args[start + 6] === "comment" && args[start + 7] === "ayad_nm_vpn_fail_closed") return args.length === start + 8 && !!uplinkInterface; return false; } if (table === "nat" && chain === "POSTROUTING") { if (op === "delete") return args.length === 7 && args[5] === "handle" && validRuleHandle(args[6]!); if (op !== "add" && op !== "insert") return false; const positionIndex = args.indexOf("position"); if (positionIndex >= 0 && (positionIndex !== 5 || !validRulePosition(args[6]!))) return false; const start = positionIndex >= 0 ? 7 : 5; if (args.length !== start + 8 || args[start] !== "ip" || args[start + 1] !== "saddr" || !validSubnetCidr(args[start + 2]!) || args[start + 3] !== "oifname" || args[start + 5] !== "masquerade" || args[start + 6] !== "comment") return false; const egress = args[start + 4], comment = args[start + 7]; if (comment === "ayad_nm_single_interface_nat") return egress === uplinkInterface && !!uplinkInterface; if (comment === "ayad_nm_vpn_nat") return egress === vpnTunInterface && !!vpnTunInterface; return false; } return false; }
 function isNftMutation(args: string[]): boolean { return args[0] !== "-c" && args[0] !== "-j" && args[0] !== "-a" && ["add", "insert", "delete", "replace", "flush", "reset", "-f"].includes(args[0] ?? ""); }
-function valid(command: string, args: string[]): boolean {
-  if (!allowed.has(command) || args.length > 64 || args.some((arg) => typeof arg !== "string" || arg.length > 512 || /\0/.test(arg))) return false;
-  if (command !== "write-sing-box-config" && args.some((arg) => /[\r\n]/.test(arg))) return false;
-  if (command === "systemctl") {
-    if (args[0] === "daemon-reload") return args.length === 1;
-    if (!["start", "stop", "restart", "enable", "is-active"].includes(args[0] ?? "")) return false;
-    if (args[0] === "is-active") return args.length === 3 && args[1] === "--quiet" && allowedSystemctlUnits.has(args[2]!);
-    return args.length >= 2 && args.slice(1).every((arg) => allowedSystemctlUnits.has(arg));
-  }
-  if (command === "sing-box") return args.length === 3 && args[0] === "check" && args[1] === "-c" && args[2] === vpnConfigStagePath;
-  if (command === "write-sing-box-config") return args.length >= 2 && args[0] === vpnConfigPath && args.slice(1).every((arg) => arg.length <= 512 && !/[\r\n]/.test(arg));
-  if (command === "ip") {
-    if (args[0] === "neigh" || (args[0] === "-j" && args[1] === "neigh")) { const o = args[0] === "-j" ? 1 : 0; return args[o] === "neigh" && args[o + 1] === "show" && args[o + 2] === "dev" && !!args[o + 3] && validInterface(args[o + 3]!); }
-    if (args[0] === "-j" && args[1] === "link" && args[2] === "show") return args.length === 3;
-    if (args[0] === "-j" && args[1] === "-4" && args[2] === "addr" && args[3] === "show") return args.length === 4 || (args.length === 6 && args[4] === "dev" && /^[a-zA-Z0-9_.:-]{1,32}$/.test(args[5]!));
-    if (args[0] === "-j" && args[1] === "route" && args[2] === "show" && args[3] === "default") return args.length === 4;
-    if (args[0] === "route" && args[1] === "get") return args.length === 3 && validIpv4(args[2]!);
-    if (args[0] === "addr" && (args[1] === "add" || args[1] === "del")) return args.length === 5 && validClientAddress(args[2]!) && args[3] === "dev" && validInterface(args[4]!);
-    if (args[0] === "link" && args[1] === "show" && args[2] === "dev") return args.length === 4 && validInterface(args[3]!);
-    if (args[0] === "link" && args[1] === "add") return args.length === 5 && args[2] === "ifb0" && args[3] === "type" && args[4] === "ifb";
-    if (args[0] === "link" && args[1] === "set") return args.length === 5 && args[2] === "dev" && args[3] === "ifb0" && args[4] === "up";
-    if (args[0] === "link" && args[1] === "delete") return args.length === 5 && args[2] === "ifb0" && args[3] === "type" && args[4] === "ifb";
-    return false;
-  }
-  if (command === "tc") {
-    const op = args[0];
-    if (!["qdisc", "class", "filter"].includes(op ?? "")) return false;
-    const devIndex = args.indexOf("dev");
-    if (devIndex >= 0 && (!args[devIndex + 1] || !validInterface(args[devIndex + 1]!))) return false;
-    if (op === "qdisc" && args[1] === "show") return devIndex >= 0 && args.length <= 5;
-    if (op === "class" && args[1] === "show") return devIndex >= 0;
-    if (op === "filter" && args[1] === "show") return devIndex >= 0;
-    if (!["add", "change", "del"].includes(args[1] ?? "") || devIndex < 0) return false;
-    return args.every((arg) => !/[;{}]/.test(arg));
-  }
-  if (command === "nft") {
-    if (args[0] === "-c") return valid("nft", args.slice(1));
-    if (args[0] === "-f") return args.length === 2 && (validSnapshotPath(args[1]!) || validNftablesConfigPath(args[1]!));
-    const readPrefix = args.filter((arg) => arg === "-j" || arg === "-a");
-    const readArgs = args.filter((arg) => arg !== "-j" && arg !== "-a");
-    if (readPrefix.length <= 2 && readArgs[0] === "list") return args.every((arg) => !/[;{}]/.test(arg));
-    if (args[0] === "flush" && args.length === 5 && args[1] === "chain" && args[2] === "inet" && args[3] === "ayad_nm" && args[4] === "accounting") return true;
-    if (args[0] === "flush" && args.length === 5 && args[1] === "chain" && args[2] === "ip" && args[3] === "filter" && (args[4] === "ayad_nm_forward" || args[4] === "ayad_nm_input")) return true;
-    if (!["add", "insert", "delete", "replace"].includes(args[0] ?? "")) return false;
-    const target = args[1];
-    if (target === "counter") return args[0] === "add" && args.length === 5 && args[2] === "inet" && args[3] === "ayad_nm" && validAccountingCounterName(args[4]!);
-    if (target === "table") return args[0] === "add" && args.length === 4 && ((args[2] === "ip" && args[3] === "ayad_nm") || (args[2] === "inet" && args[3] === "ayad_nm"));
-    if (target === "chain") {
-      if (args[0] !== "add" || args.length !== 17) return false;
-      if (args[2] === "ip" && args[3] === "ayad_nm" && args[4] === "blocked_devices_prerouting") return args[5] === "{" && args[6] === "type" && args[7] === "filter" && args[8] === "hook" && args[9] === "prerouting" && args[10] === "priority" && args[11] === "-301" && args[12] === ";" && args[13] === "policy" && args[14] === "accept" && args[15] === ";" && args[16] === "}";
-      if (args[2] === "inet" && args[3] === "ayad_nm" && args[4] === "accounting") return args[5] === "{" && args[6] === "type" && args[7] === "filter" && args[8] === "hook" && args[9] === "forward" && args[10] === "priority" && args[11] === "filter" && args[12] === ";" && args[13] === "policy" && args[14] === "accept" && args[15] === ";" && args[16] === "}";
-      if (args[2] === "ip" && args[3] === "filter" && (args[4] === "ayad_nm_forward" || args[4] === "ayad_nm_input")) {
-        const hook = args[4] === "ayad_nm_forward" ? "forward" : "input";
-        return args[5] === "{" && args[6] === "type" && args[7] === "filter" && args[8] === "hook" && args[9] === hook && args[10] === "priority" && args[11] === "-300" && args[12] === ";" && args[13] === "policy" && args[14] === "accept" && args[15] === ";" && args[16] === "}";
-      }
-      return false;
-    }
-    if (!["set", "element", "rule"].includes(target ?? "")) return false;
-    if (target === "rule" && args[2] === "ip" && (args[3] === "filter" || args[3] === "nat")) return validManagedNftRule(args);
-    if (target === "rule" && args[3] === "ayad_nm" && args[4] === "blocked_devices_prerouting") {
-      if (args[0] !== "add" || args.length !== 12) return false;
-      return args[2] === "ip" && args[5] === "ip" && args[6] === "saddr" && args[7] === "@vpn_blocked_ips" && args[8] === "counter" && args[9] === "drop" && args[10] === "comment" && args[11] === "ayad_nm_vpn_blocked_ips";
-    }
-    if (target === "rule" && args[2] === "inet" && args[3] === "ayad_nm" && args[4] === "accounting") return validAccountingRule(args);
-    if (target === "set") {
-      if (args[0] !== "add" || args.length !== 10) return false;
-      if (args[2] === "ip" && args[3] === "filter" && (args[4] === "blocked_macs" || args[4] === "blocked_ips")) return args[5] === "{" && args[6] === "type" && (args[7] === "ether_addr" || args[7] === "ipv4_addr") && args[8] === ";" && args[9] === "}";
-      if (args[2] === "ip" && args[3] === "ayad_nm" && args[4] === "vpn_blocked_ips") return args[5] === "{" && args[6] === "type" && args[7] === "ipv4_addr" && args[8] === ";" && args[9] === "}";
-      return false;
-    }
-    if (target === "element") {
-      if (args.length !== 7) return false;
-      if (args[2] === "ip" && args[3] === "filter" && ["blocked_macs", "blocked_ips"].includes(args[4]!)) {
-        if (args[0] === "add" || args[0] === "delete") return args[5] === "{" && (args[6]?.endsWith("}") ?? false);
-      }
-      if (args[2] === "ip" && args[3] === "ayad_nm" && args[4] === "vpn_blocked_ips" && validIpv4(args[6]?.replace(/[{}]/g, "") ?? "")) {
-        return (args[0] === "add" || args[0] === "delete") && args[5] === "{" && args[6]?.endsWith("}") === true;
-      }
-      return false;
-    }
-    return false;
-  }
-  return false;
-}
-function isBackgroundRead(command: string, args: string[]): boolean {
-  if (command === "tc") return args[1] === "show";
-  if (command === "ip") return args[0] === "-j" || args[0] === "neigh" || (args[0] === "route" && args[1] === "get");
-  if (command === "nft") return args.includes("list") && !isNftMutation(args);
-  return false;
-}
+function valid(command: string, args: string[]): boolean { if (!allowed.has(command) || args.length > 64 || args.some((arg) => typeof arg !== "string" || arg.length > 512 || /\0/.test(arg))) return false; if (command !== "write-sing-box-config" && args.some((arg) => /[\r\n]/.test(arg))) return false; if (command === "systemctl") { if (args[0] === "daemon-reload") return args.length === 1; if (!["start", "stop", "restart", "enable", "is-active"].includes(args[0] ?? "")) return false; if (args[0] === "is-active") return args.length === 3 && args[1] === "--quiet" && allowedSystemctlUnits.has(args[2]!); return args.length >= 2 && args.slice(1).every((arg) => allowedSystemctlUnits.has(arg)); } if (command === "sing-box") return args.length === 3 && args[0] === "check" && args[1] === "-c" && args[2] === vpnConfigStagePath; if (command === "write-sing-box-config") return args.length >= 2 && args[0] === vpnConfigPath && args.slice(1).every((arg) => arg.length <= 512 && !/[\r\n]/.test(arg)); if (command === "ip") { if (args[0] === "neigh" || (args[0] === "-j" && args[1] === "neigh")) { const o = args[0] === "-j" ? 1 : 0; return args[o] === "neigh" && args[o + 1] === "show" && args[o + 2] === "dev" && !!args[o + 3] && validInterface(args[o + 3]!); } if (args[0] === "-j" && args[1] === "link" && args[2] === "show") return args.length === 3; if (args[0] === "-j" && args[1] === "-4" && args[2] === "addr" && args[3] === "show") return args.length === 4 || (args.length === 6 && args[4] === "dev" && /^[a-zA-Z0-9_.:-]{1,32}$/.test(args[5]!)); if (args[0] === "-j" && args[1] === "route" && args[2] === "show" && args[3] === "default") return args.length === 4; if (args[0] === "route" && args[1] === "get") return args.length === 3 && validIpv4(args[2]!); if (args[0] === "addr" && (args[1] === "add" || args[1] === "del")) return args.length === 5 && validClientAddress(args[2]!) && args[3] === "dev" && validInterface(args[4]!); if (args[0] === "link" && args[1] === "show" && args[2] === "dev") return args.length === 4 && validInterface(args[3]!); if (args[0] === "link" && args[1] === "add") return args.length === 5 && args[2] === "ifb0" && args[3] === "type" && args[4] === "ifb"; if (args[0] === "link" && args[1] === "set") return args.length === 5 && args[2] === "dev" && args[3] === "ifb0" && args[4] === "up"; if (args[0] === "link" && args[1] === "delete") return args.length === 5 && args[2] === "ifb0" && args[3] === "type" && args[4] === "ifb"; return false; } if (command === "tc") { const op = args[0]; if (!["qdisc", "class", "filter"].includes(op ?? "")) return false; const devIndex = args.indexOf("dev"); if (devIndex >= 0 && (!args[devIndex + 1] || !validInterface(args[devIndex + 1]!))) return false; if (op === "qdisc" && args[1] === "show") return devIndex >= 0 && args.length <= 5; if (op === "class" && args[1] === "show") return devIndex >= 0; if (op === "filter" && args[1] === "show") return devIndex >= 0; if (!["add", "change", "del"].includes(args[1] ?? "") || devIndex < 0) return false; return args.every((arg) => !/[;{}]/.test(arg)); } if (command === "nft") { if (args[0] === "-c") return valid("nft", args.slice(1)); if (args[0] === "-f") return args.length === 2 && (validSnapshotPath(args[1]!) || validNftablesConfigPath(args[1]!)); const readPrefix = args.filter((arg) => arg === "-j" || arg === "-a"); const readArgs = args.filter((arg) => arg !== "-j" && arg !== "-a"); if (readPrefix.length <= 2 && readArgs[0] === "list") return args.every((arg) => !/[;{}]/.test(arg)); if (args[0] === "flush" && args.length === 5 && args[1] === "chain" && args[2] === "inet" && args[3] === "ayad_nm" && args[4] === "accounting") return true; if (args[0] === "flush" && args.length === 5 && args[1] === "chain" && args[2] === "ip" && args[3] === "filter" && (args[4] === "ayad_nm_forward" || args[4] === "ayad_nm_input")) return true; if (!["add", "insert", "delete", "replace"].includes(args[0] ?? "")) return false; const target = args[1]; if (target === "counter") return args[0] === "add" && args.length === 5 && args[2] === "inet" && args[3] === "ayad_nm" && validAccountingCounterName(args[4]!); if (target === "table") return args[0] === "add" && args.length === 4 && ((args[2] === "ip" && args[3] === "ayad_nm") || (args[2] === "inet" && args[3] === "ayad_nm")); if (target === "chain") { if (args[0] !== "add" || args.length !== 17) return false; if (args[2] === "ip" && args[3] === "ayad_nm" && args[4] === "blocked_devices_prerouting") return args[5] === "{" && args[6] === "type" && args[7] === "filter" && args[8] === "hook" && args[9] === "prerouting" && args[10] === "priority" && args[11] === "-301" && args[12] === ";" && args[13] === "policy" && args[14] === "accept" && args[15] === ";" && args[16] === "}"; if (args[2] === "inet" && args[3] === "ayad_nm" && args[4] === "accounting") return args[5] === "{" && args[6] === "type" && args[7] === "filter" && args[8] === "hook" && args[9] === "forward" && args[10] === "priority" && args[11] === "filter" && args[12] === ";" && args[13] === "policy" && args[14] === "accept" && args[15] === ";" && args[16] === "}"; if (args[2] === "ip" && args[3] === "filter" && (args[4] === "ayad_nm_forward" || args[4] === "ayad_nm_input")) { const hook = args[4] === "ayad_nm_forward" ? "forward" : "input"; return args[5] === "{" && args[6] === "type" && args[7] === "filter" && args[8] === "hook" && args[9] === hook && args[10] === "priority" && args[11] === "-300" && args[12] === ";" && args[13] === "policy" && args[14] === "accept" && args[15] === ";" && args[16] === "}"; } return false; } if (!["set", "element", "rule"].includes(target ?? "")) return false; if (target === "rule" && args[2] === "ip" && (args[3] === "filter" || args[3] === "nat")) return validManagedNftRule(args); if (target === "rule" && args[3] === "ayad_nm" && args[4] === "blocked_devices_prerouting") { if (args[0] !== "add" || args.length !== 12) return false; return args[2] === "ip" && args[5] === "ip" && args[6] === "saddr" && args[7] === "@vpn_blocked_ips" && args[8] === "counter" && args[9] === "drop" && args[10] === "comment" && args[11] === "ayad_nm_vpn_blocked_ips"; } if (target === "rule" && args[2] === "inet" && args[3] === "ayad_nm" && args[4] === "accounting") return validAccountingRule(args); if (target === "set") { if (args[0] !== "add" || args.length !== 10) return false; if (args[2] === "ip" && args[3] === "filter" && (args[4] === "blocked_macs" || args[4] === "blocked_ips")) return args[5] === "{" && args[6] === "type" && (args[7] === "ether_addr" || args[7] === "ipv4_addr") && args[8] === ";" && args[9] === "}"; if (args[2] === "ip" && args[3] === "ayad_nm" && args[4] === "vpn_blocked_ips") return args[5] === "{" && args[6] === "type" && args[7] === "ipv4_addr" && args[8] === ";" && args[9] === "}"; return false; } if (target === "element") { if (args.length !== 7) return false; if (args[2] === "ip" && args[3] === "filter" && ["blocked_macs", "blocked_ips"].includes(args[4]!)) { if (args[0] === "add" || args[0] === "delete") return args[5] === "{" && (args[6]?.endsWith("}") ?? false); } if (args[2] === "ip" && args[3] === "ayad_nm" && args[4] === "vpn_blocked_ips" && validIpv4(args[6]?.replace(/[{}]/g, "") ?? "")) return (args[0] === "add" || args[0] === "delete") && args[5] === "{" && args[6]?.endsWith("}") === true; return false; } return false; } return false; }
+function isBackgroundRead(command: string, args: string[]): boolean { if (command === "tc") return args[1] === "show"; if (command === "ip") return args[0] === "-j" || args[0] === "neigh" || (args[0] === "route" && args[1] === "get"); if (command === "nft") return args.includes("list") && !isNftMutation(args); return false; }
 function send(socket: import("node:net").Socket, payload: unknown): void { socket.write(`${JSON.stringify(payload)}\n`); }
-const priority: Job[] = [];
-const background: Job[] = [];
+const priority: Job[] = [], background: Job[] = [];
 let running = false;
 const maxBackgroundQueue = 8;
-function schedule(job: Job, isBackground: boolean): void {
-  if (isBackground) {
-    if (background.length >= maxBackgroundQueue) throw new Error("background enforcement queue overloaded");
-    background.push(job);
-  } else priority.push(job);
-  void drain();
-}
-async function drain(): Promise<void> {
-  if (running) return;
-  running = true;
-  try {
-    while (priority.length || background.length) {
-      const job = priority.shift() ?? background.shift();
-      if (job) await job();
-    }
-  } finally { running = false; }
-}
-async function executeRequest(socket: import("node:net").Socket, request: Request): Promise<void> {
-  const executor = isBackgroundRead(request.command, request.args) ? backgroundRead : local;
-  try {
-    const result = await executor.execute(request.command, request.args);
-    send(socket, { ok: true, ...result });
-  } catch (error) {
-    send(socket, { ok: false, error: error instanceof Error ? error.message : String(error) });
-  }
-}
-const server = createServer((socket) => {
-  let buffer = "";
-  socket.setEncoding("utf8");
-  socket.on("data", (chunk) => {
-    buffer += chunk;
-    let newline = buffer.indexOf("\n");
-    while (newline >= 0) {
-      const line = buffer.slice(0, newline).trim();
-      buffer = buffer.slice(newline + 1);
-      newline = buffer.indexOf("\n");
-      if (!line) continue;
-      let request: Request;
-      try { request = JSON.parse(line) as Request; } catch { send(socket, { ok: false, error: "invalid JSON request" }); continue; }
-      if (!valid(request.command, request.args)) { send(socket, { ok: false, error: "command rejected by enforcement agent" }); continue; }
-      try { schedule(() => executeRequest(socket, request), isBackgroundRead(request.command, request.args)); }
-      catch (error) { send(socket, { ok: false, error: error instanceof Error ? error.message : String(error) }); }
-    }
-  });
-  socket.on("error", () => undefined);
-});
+function schedule(job: Job, isBackground: boolean): void { if (isBackground) { if (background.length >= maxBackgroundQueue) throw new Error("background enforcement queue overloaded"); background.push(job); } else priority.push(job); void drain(); }
+async function drain(): Promise<void> { if (running) return; running = true; try { while (priority.length || background.length) { const job = priority.shift() ?? background.shift(); if (job) await job(); } } finally { running = false; } }
+async function executeRequest(socket: import("node:net").Socket, request: Request): Promise<void> { const executor = isBackgroundRead(request.command, request.args) ? backgroundRead : local; try { const result = await executor.execute(request.command, request.args); send(socket, { ok: true, ...result }); } catch (error) { send(socket, { ok: false, error: error instanceof Error ? error.message : String(error) }); } }
+const server = createServer((socket) => { let buffer = ""; socket.setEncoding("utf8"); socket.on("data", (chunk) => { buffer += chunk; let newline = buffer.indexOf("\n"); while (newline >= 0) { const line = buffer.slice(0, newline).trim(); buffer = buffer.slice(newline + 1); newline = buffer.indexOf("\n"); if (!line) continue; let request: Request; try { request = JSON.parse(line) as Request; } catch { send(socket, { ok: false, error: "invalid JSON request" }); continue; } if (!valid(request.command, request.args)) { send(socket, { ok: false, error: "command rejected by enforcement agent" }); continue; } try { schedule(() => executeRequest(socket, request), isBackgroundRead(request.command, request.args)); } catch (error) { send(socket, { ok: false, error: error instanceof Error ? error.message : String(error) }); } } }); socket.on("error", () => undefined); });
 await fs.mkdir(resolve(socketPath, ".."), { recursive: true });
 try { unlinkSync(socketPath); } catch { /* socket absent */ }
 server.listen(socketPath, () => undefined);
