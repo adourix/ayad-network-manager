@@ -1,5 +1,6 @@
 import { StrictMode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
+import { flushSync } from "react-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import "./index.css";
 import App from "./App.tsx";
@@ -15,7 +16,10 @@ function usePathname() {
   const [pathname, setPathname] = useState(() => window.location.pathname);
 
   useEffect(() => {
-    const notify = () => setPathname(window.location.pathname);
+    const notify = () => {
+      const nextPathname = window.location.pathname;
+      flushSync(() => setPathname(nextPathname));
+    };
     const originalPushState = window.history.pushState;
     const originalReplaceState = window.history.replaceState;
 
