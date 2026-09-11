@@ -13,10 +13,11 @@ const nftablesConfigPath = resolve(process.env.NFTABLES_CONFIG_PATH ?? "/etc/nft
 const clientInterface = process.env.CLIENT_INTERFACE ?? "";
 const uplinkInterface = process.env.UPLINK_INTERFACE ?? "";
 const vpnTunInterface = process.env.VPN_TUN_INTERFACE ?? "";
+const clientSubnet = process.env.CLIENT_SUBNET ?? "";
 const allowedSystemctlUnits = new Set(["sing-box", "dnsmasq", "network-control-enforcement.service", "network-control-backend.service", vpnConfigInstallUnit]);
 const allowed = new Set(["nft", "tc", "ip", "systemctl", "sing-box", "write-sing-box-config"]);
 const local = new LinuxSystemCommandExecutor(true);
-const backgroundRead = new LinuxSystemCommandExecutor(true, 1_000);
+const backgroundRead = new LinuxSystemCommandExecutor(true, 30_000);
 type Request = { command: string; args: string[] };
 type Job = () => Promise<void>;
 function ifaceAllowed(value: string): boolean { return value === "ifb0" || value === clientInterface || value === uplinkInterface || value === vpnTunInterface; }
@@ -25,6 +26,21 @@ function validSnapshotPath(value: string): boolean { const path = resolve(value)
 function validNftablesConfigPath(value: string): boolean { return resolve(value) === nftablesConfigPath; }
 function validIpv4(value: string): boolean { const parts = value.split("."); return parts.length === 4 && parts.every((part) => /^(0|[1-9][0-9]{0,2})$/.test(part) && Number(part) <= 255); }
 function validSubnetCidr(value: string): boolean { const match = value.match(/^(\d{1,3}(?:\.\d{1,3}){3})\/(\d{1,2})$/); return !!match && validIpv4(match[1]!) && Number(match[2]) <= 32; }
+function validClientAddress(value: string): boolean {
+  const match = value.match(/^(\d{1,3}(?:\.\d{1,3}){3})\/(\d{1,2})$/);
+  if (!match || !validIpv4(match[1]!)) return false;
+  if (!clientSubnet) return false;
+  const prefix = Number(match[2]);
+  return prefix === Number(clientSubnet.split("/")[1]) && sameNetwork(match[1]!, clientSubnet);
+}
+function ipv4ToNumber(value: string): number { return value.split(".").map(Number).reduce((n, octet) => (n * 256) + octet, 0) >>> 0; }
+function sameNetwork(ip: string, subnet: string): boolean {
+  const match = subnet.match(/^(\d{1,3}(?:\.\d{1,3}){3})\/(\d{1,2})$/);
+  if (!match || !validIpv4(ip) || !validIpv4(match[1]!)) return false;
+  const bits = Number(match[2]);
+  const mask = bits === 0 ? 0 : (0xffffffff << (32 - bits)) >>> 0;
+  return (ipv4ToNumber(ip) & mask) === (ipv4ToNumber(match[1]!) & mask);
+}
 function validPort(value: string): boolean { return /^[1-9][0-9]{0,4}$/.test(value) && Number(value) <= 65535; }
 function validRuleHandle(value: string): boolean { return /^[1-9][0-9]*$/.test(value); }
 function validRulePosition(value: string): boolean { return /^[0-9]+$/.test(value); }
@@ -59,13 +75,13 @@ function validManagedNftRule(args: string[]): boolean {
   if (!["add", "insert", "delete", "replace"].includes(op ?? "") || args[1] !== "rule" || args[2] !== "ip") return false;
   const table = args[3];
   const chain = args[4];
-  if (table === "filter" && (chain === "INPUT" || chain === "FORWARD" || chain === "ayad_nm_forward")) {
+  if (table === "filter" && (chain === "INPUT" || chain === "FORWARD" || chain === "ayad_nm_forward" || chain === "ayad_nm_input")) {
     if (op === "delete") return args.length === 7 && args[5] === "handle" && validRuleHandle(args[6]!);
     if (op === "replace") return args.length >= 8 && args[5] === "handle" && validRuleHandle(args[6]!) && validComment(args.at(-1)!);
     const positionIndex = args.indexOf("position");
     if (positionIndex >= 0 && (positionIndex !== 5 || !validRulePosition(args[6]!))) return false;
     const start = positionIndex >= 0 ? 7 : 5;
-    if (chain === "INPUT") {
+    if (chain === "INPUT" || chain === "ayad_nm_input") {
       return (op === "add" || op === "insert") && args.length === start + 6 && args[start] === "tcp" && args[start + 1] === "dport" && validPort(args[start + 2]!) && args[start + 3] === "accept" && args[start + 4] === "comment" && ["ayad_nm_allow_ssh_management", "ayad_nm_allow_dashboard_management"].includes(args[start + 5]!);
     }
     if (op !== "add" && op !== "insert") return false;
@@ -106,6 +122,8 @@ function valid(command: string, args: string[]): boolean {
     if (args[0] === "-j" && args[1] === "link" && args[2] === "show") return args.length === 3;
     if (args[0] === "-j" && args[1] === "-4" && args[2] === "addr" && args[3] === "show") return args.length === 4 || (args.length === 6 && args[4] === "dev" && /^[a-zA-Z0-9_.:-]{1,32}$/.test(args[5]!));
     if (args[0] === "-j" && args[1] === "route" && args[2] === "show" && args[3] === "default") return args.length === 4;
+    if (args[0] === "route" && args[1] === "get") return args.length === 3 && validIpv4(args[2]!);
+    if (args[0] === "addr" && (args[1] === "add" || args[1] === "del")) return args.length === 5 && validClientAddress(args[2]!) && args[3] === "dev" && validInterface(args[4]!);
     if (args[0] === "link" && args[1] === "show" && args[2] === "dev") return args.length === 4 && validInterface(args[3]!);
     if (args[0] === "link" && args[1] === "add") return args.length === 5 && args[2] === "ifb0" && args[3] === "type" && args[4] === "ifb";
     if (args[0] === "link" && args[1] === "set") return args.length === 5 && args[2] === "dev" && args[3] === "ifb0" && args[4] === "up";
@@ -130,7 +148,7 @@ function valid(command: string, args: string[]): boolean {
     const readArgs = args.filter((arg) => arg !== "-j" && arg !== "-a");
     if (readPrefix.length <= 2 && readArgs[0] === "list") return args.every((arg) => !/[;{}]/.test(arg));
     if (args[0] === "flush" && args.length === 5 && args[1] === "chain" && args[2] === "inet" && args[3] === "ayad_nm" && args[4] === "accounting") return true;
-    if (args[0] === "flush" && args.length === 5 && args[1] === "chain" && args[2] === "ip" && args[3] === "filter" && args[4] === "ayad_nm_forward") return true;
+    if (args[0] === "flush" && args.length === 5 && args[1] === "chain" && args[2] === "ip" && args[3] === "filter" && (args[4] === "ayad_nm_forward" || args[4] === "ayad_nm_input")) return true;
     if (!["add", "insert", "delete", "replace"].includes(args[0] ?? "")) return false;
     const target = args[1];
     if (target === "counter") return args[0] === "add" && args.length === 5 && args[2] === "inet" && args[3] === "ayad_nm" && validAccountingCounterName(args[4]!);
@@ -139,7 +157,10 @@ function valid(command: string, args: string[]): boolean {
       if (args[0] !== "add" || args.length !== 17) return false;
       if (args[2] === "ip" && args[3] === "ayad_nm" && args[4] === "blocked_devices_prerouting") return args[5] === "{" && args[6] === "type" && args[7] === "filter" && args[8] === "hook" && args[9] === "prerouting" && args[10] === "priority" && args[11] === "-301" && args[12] === ";" && args[13] === "policy" && args[14] === "accept" && args[15] === ";" && args[16] === "}";
       if (args[2] === "inet" && args[3] === "ayad_nm" && args[4] === "accounting") return args[5] === "{" && args[6] === "type" && args[7] === "filter" && args[8] === "hook" && args[9] === "forward" && args[10] === "priority" && args[11] === "filter" && args[12] === ";" && args[13] === "policy" && args[14] === "accept" && args[15] === ";" && args[16] === "}";
-      if (args[2] === "ip" && args[3] === "filter" && args[4] === "ayad_nm_forward") return args[5] === "{" && args[6] === "type" && args[7] === "filter" && args[8] === "hook" && args[9] === "forward" && args[10] === "priority" && args[11] === "-300" && args[12] === ";" && args[13] === "policy" && args[14] === "accept" && args[15] === ";" && args[16] === "}";
+      if (args[2] === "ip" && args[3] === "filter" && (args[4] === "ayad_nm_forward" || args[4] === "ayad_nm_input")) {
+        const hook = args[4] === "ayad_nm_forward" ? "forward" : "input";
+        return args[5] === "{" && args[6] === "type" && args[7] === "filter" && args[8] === "hook" && args[9] === hook && args[10] === "priority" && args[11] === "-300" && args[12] === ";" && args[13] === "policy" && args[14] === "accept" && args[15] === ";" && args[16] === "}";
+      }
       return false;
     }
     if (!["set", "element", "rule"].includes(target ?? "")) return false;
@@ -156,8 +177,13 @@ function valid(command: string, args: string[]): boolean {
       return false;
     }
     if (target === "element") {
-      if (args.length !== 7 || args[2] !== "ip" || args[3] !== "filter" || !["blocked_macs", "blocked_ips"].includes(args[4]!)) return false;
-      if (args[0] === "add" || args[0] === "delete") return args[5] === "{" && (args[6]?.endsWith("}") ?? false);
+      if (args.length !== 7) return false;
+      if (args[2] === "ip" && args[3] === "filter" && ["blocked_macs", "blocked_ips"].includes(args[4]!)) {
+        if (args[0] === "add" || args[0] === "delete") return args[5] === "{" && (args[6]?.endsWith("}") ?? false);
+      }
+      if (args[2] === "ip" && args[3] === "ayad_nm" && args[4] === "vpn_blocked_ips" && validIpv4(args[6]?.replace(/[{}]/g, "") ?? "")) {
+        return (args[0] === "add" || args[0] === "delete") && args[5] === "{" && args[6]?.endsWith("}") === true;
+      }
       return false;
     }
     return false;
@@ -166,7 +192,7 @@ function valid(command: string, args: string[]): boolean {
 }
 function isBackgroundRead(command: string, args: string[]): boolean {
   if (command === "tc") return args[1] === "show";
-  if (command === "ip") return args[0] === "-j" || args[0] === "neigh";
+  if (command === "ip") return args[0] === "-j" || args[0] === "neigh" || (args[0] === "route" && args[1] === "get");
   if (command === "nft") return args.includes("list") && !isNftMutation(args);
   return false;
 }
