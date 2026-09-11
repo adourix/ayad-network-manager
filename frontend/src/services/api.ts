@@ -8,7 +8,6 @@ export class ApiError extends Error {
   constructor(status: number, message: string) {
     super(message);
     this.name = "ApiError";
-    this.status = status;
   }
 }
 
@@ -139,6 +138,19 @@ export interface SetupDiagnostics {
   errors: string[];
 }
 
+export interface SetupRuntimeConfig {
+  setupComplete: boolean;
+  clientInterface: string;
+  uplinkInterface: string;
+  clientSubnet: string;
+  clientGatewayIp: string;
+  uplinkBandwidthMbps: string;
+  dashboardPort: string;
+  sshPort: string;
+  dnsServers: string[];
+  networkMode: string;
+}
+
 export const api = {
   login: (username: string, password: string) => request<LoginResponse>("/api/auth/login", {
     method: "POST", body: JSON.stringify({ username, password }),
@@ -183,6 +195,8 @@ export const api = {
 };
 
 export const setupApi = {
+  status: () => request<{ setupComplete: boolean }>("/api/setup/status"),
+  config: () => request<SetupRuntimeConfig>("/api/setup/config"),
   preflight: () => request<SetupReport>("/api/setup/preflight"),
   network: () => request<SetupNetworkReport>("/api/setup/network"),
   diagnostics: (interfaceName?: string) => request<SetupDiagnostics>(`/api/setup/diagnostics${interfaceName ? `?interface=${encodeURIComponent(interfaceName)}` : ""}`),
