@@ -11,6 +11,7 @@ export class TrafficReconciliationService {
     private readonly deviceRepository: DeviceRepository,
     private readonly policyRepository: DevicePolicyRepository,
     private readonly trafficEnforcer: TrafficEnforcer,
+    private readonly quotaThrottleMbps = 0.5,
     private readonly intervalMs = 10_000,
   ) {}
 
@@ -43,7 +44,9 @@ export class TrafficReconciliationService {
           device.identityValidated &&
           device.ip !== null &&
           policy !== null &&
-          (policy.downloadLimit !== null || policy.uploadLimit !== null),
+          (policy.downloadLimit !== null ||
+            policy.uploadLimit !== null ||
+            policy.quotaEnforcedAction === "throttle"),
       );
 
       if (enforceablePolicies.length === 0) {
@@ -57,26 +60,43 @@ export class TrafficReconciliationService {
       const expectedUploadClasses = new Set<string>();
       const failures: Error[] = [];
 
+      if (!Number.isFinite(this.quotaThrottleMbps) || this.quotaThrottleMbps <= 0) {
+        throw new Error("Quota throttle rate must be greater than zero");
+      }
+      const quotaThrottleBits = BigInt(Math.round(this.quotaThrottleMbps * 1_000_000));
+
       for (const { device, policy } of enforceablePolicies) {
         try {
           if (!policy || !device.ip) continue;
 
-          if (policy.downloadLimit !== null) {
+          const throttled = policy.quotaEnforcedAction === "throttle";
+
+          if (policy.downloadLimit !== null || throttled) {
             expectedDownloadClasses.add(
               TcClassId.fromMac(device.mac.toString(), "download"),
             );
-            await this.trafficEnforcer.limitDownload(device, {
-              rateMbps: policy.downloadLimit,
-            });
+
+            if (throttled) {
+              await this.trafficEnforcer.limitDownloadBits(device, quotaThrottleBits);
+            } else {
+              await this.trafficEnforcer.limitDownload(device, {
+                rateMbps: policy.downloadLimit!,
+              });
+            }
           }
 
-          if (policy.uploadLimit !== null) {
+          if (policy.uploadLimit !== null || throttled) {
             expectedUploadClasses.add(
               TcClassId.fromMac(device.mac.toString(), "upload"),
             );
-            await this.trafficEnforcer.limitUpload(device, {
-              rateMbps: policy.uploadLimit,
-            });
+
+            if (throttled) {
+              await this.trafficEnforcer.limitUploadBits(device, quotaThrottleBits);
+            } else {
+              await this.trafficEnforcer.limitUpload(device, {
+                rateMbps: policy.uploadLimit!,
+              });
+            }
           }
         } catch (error) {
           const failure = error instanceof Error ? error : new Error(String(error));
