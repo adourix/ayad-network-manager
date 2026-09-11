@@ -45,12 +45,10 @@ export class SetupService {
     const firewallManager = ufw.ok && /Status:\s+active/i.test(ufw.stdout) ? "ufw" : null;
     const timed = await this.safe("timedatectl", ["show", "-p", "NTPSynchronized", "--value"]);
     const timeSynchronized = timed.stdout.trim() === "yes";
-
     if (!root) errors.push("root privileges are required");
     if (!ifbAvailable) errors.push("ifb kernel module is unavailable");
     if (firewallManager) errors.push("ufw is active and must be reviewed before nftables changes");
     if (!timeSynchronized) errors.push("system clock is not synchronized");
-
     return { root, port53Free, ifbAvailable, firewallManager, timeSynchronized, errors };
   }
 
@@ -60,14 +58,12 @@ export class SetupService {
     const addresses = await this.readJson("ip", ["-j", "-4", "addr", "show"]);
     const routes = await this.readJson("ip", ["-j", "route", "show", "default"]);
     const addressMap = new Map<string, string[]>();
-
     for (const row of Array.isArray(addresses) ? addresses : []) {
       const name = String(row.ifname ?? "");
       addressMap.set(name, Array.isArray(row.addr_info)
         ? row.addr_info.filter((a: any) => a.family === "inet").map((a: any) => `${a.local}/${a.prefixlen}`)
         : []);
     }
-
     const interfaces = (Array.isArray(links) ? links : [])
       .map((row: any): SetupInterface => ({
         name: String(row.ifname ?? ""),
@@ -77,16 +73,13 @@ export class SetupService {
         kind: typeof row.link_type === "string" ? row.link_type : null,
       }))
       .filter((x) => x.name && x.name !== "lo");
-
     const defaultUplink = Array.isArray(routes) && typeof routes[0]?.dev === "string" ? routes[0].dev : null;
     const uplinkSubnets: Record<string, string[]> = {};
     for (const item of interfaces) uplinkSubnets[item.name] = item.addresses.map(networkOf).filter((x): x is string => Boolean(x));
-
     const proposedClientSubnets = [...new Set(defaultUplink ? uplinkSubnets[defaultUplink] ?? [] : [])];
     if (!defaultUplink) errors.push("No default-route interface detected");
     if (!interfaces.length) errors.push("No usable network interfaces detected");
     if (!proposedClientSubnets.length) errors.push("No IPv4 subnet found on the default uplink interface");
-
     return { interfaces, defaultUplink, uplinkSubnets, proposedClientSubnets, errors };
   }
 
@@ -99,7 +92,6 @@ export class SetupService {
     if (!iface.test(selected) || !network.interfaces.some((item) => item.name === selected)) {
       return { interface: selected, linkSpeedMbps: null, duplex: null, usbSpeed: null, warnings, errors: ["Interface is not a detected interface"] };
     }
-
     const link = await this.safe("ethtool", [selected]);
     const speed = link.stdout.match(/Speed:\s*(\d+)Mb\/s/i)?.[1];
     const duplex = link.stdout.match(/Duplex:\s*(\S+)/i)?.[1] ?? null;
@@ -115,33 +107,26 @@ export class SetupService {
   async apply(input: SetupApplyInput): Promise<SetupApplyResult> {
     const validation = this.validateInput(input);
     if (validation.length) return this.failed(validation);
-
     const network = await this.inspectNetwork();
     const selected = new Set(network.interfaces.map((item) => item.name));
     const selectionErrors: string[] = [];
     if (!selected.has(input.clientInterface)) selectionErrors.push(`client interface not found: ${input.clientInterface}`);
     if (!selected.has(input.uplinkInterface)) selectionErrors.push(`uplink interface not found: ${input.uplinkInterface}`);
     if (input.clientInterface !== input.uplinkInterface) selectionErrors.push("Single-Interface + IFB requires CLIENT_INTERFACE and UPLINK_INTERFACE to be the same interface");
-
     const uplinkRanges = network.uplinkSubnets[input.uplinkInterface] ?? [];
     if (!uplinkRanges.length) selectionErrors.push("selected uplink interface has no IPv4 subnet");
-    else if (!uplinkRanges.some((range) => networkOf(range) === networkOf(input.clientSubnet))) {
-      selectionErrors.push("client subnet must be the existing uplink subnet in Single-Interface + IFB mode");
-    }
-
+    else if (!uplinkRanges.some((range) => networkOf(range) === networkOf(input.clientSubnet))) selectionErrors.push("client subnet must be the existing uplink subnet in Single-Interface + IFB mode");
     const selectedInterface = network.interfaces.find((item) => item.name === input.uplinkInterface);
     const gateway = input.clientGatewayIp ?? deriveGateway(selectedInterface?.addresses ?? [], input.clientSubnet);
     if (!gateway) selectionErrors.push("unable to derive CLIENT_GATEWAY_IP from the selected uplink interface");
     else if (!sameNetwork(gateway, input.clientSubnet)) selectionErrors.push("CLIENT_GATEWAY_IP must belong to CLIENT_SUBNET");
-    else if (selectedInterface && !selectedInterface.addresses.some((address) => address.split("/")[0] === gateway)) {
-      selectionErrors.push("CLIENT_GATEWAY_IP must be an existing IP address on the selected interface in Single-Interface + IFB mode");
-    }
+    else if (selectedInterface && !selectedInterface.addresses.some((address) => address.split("/")[0] === gateway)) selectionErrors.push("CLIENT_GATEWAY_IP must be an existing IP address on the selected interface in Single-Interface + IFB mode");
     if (selectionErrors.length) return this.failed(selectionErrors);
-
     const preflight = await this.preflight();
     if (preflight.errors.length) return this.failed(preflight.errors);
 
     const snapshot = await this.snapshot();
+    let health: SetupHealth | null = null;
     try {
       await this.installPrerequisites();
       const rendered = this.render(input, gateway!);
@@ -149,7 +134,6 @@ export class SetupService {
       await this.writeAtomic(this.paths.dnsmasqPath, rendered.dnsmasq);
       await this.writeAtomic(this.paths.nftablesPath, rendered.nftables);
       await this.writeAtomic(rendered.reservationsPath, "# Generated by network-control-system; do not edit.\n");
-
       if (input.activate !== false) {
         await this.migrateLegacyDnsmasqConfig();
         const existing = await this.safe("nft", ["list", "table", "ip", "filter"]);
@@ -160,18 +144,9 @@ export class SetupService {
         await this.probe.run("dnsmasq", ["--test"]);
         await this.probe.run("systemctl", ["restart", "dnsmasq"]);
       }
-
-      const health = await this.health(input.clientInterface, gateway!);
+      health = await this.health(input.clientInterface, gateway!);
       if (health.errors.length) throw new Error(health.errors.join("; "));
-
-      return {
-        applied: true,
-        configPath: this.paths.configPath,
-        renderedFiles: [this.paths.configPath, this.paths.dnsmasqPath, this.paths.nftablesPath, rendered.reservationsPath],
-        health,
-        rolledBack: false,
-        errors: [],
-      };
+      return { applied: true, configPath: this.paths.configPath, renderedFiles: [this.paths.configPath, this.paths.dnsmasqPath, this.paths.nftablesPath, rendered.reservationsPath], health, rolledBack: false, errors: [] };
     } catch (error) {
       await this.rollback(snapshot);
       const message = error instanceof Error ? error.message : String(error);
@@ -179,24 +154,18 @@ export class SetupService {
         applied: false,
         configPath: this.paths.configPath,
         renderedFiles: [],
-        health: { clientInterface: false, gatewayReachable: false, dhcpLeaseFile: false, outboundConnectivity: false, errors: [message] },
+        health: health ?? { clientInterface: false, gatewayReachable: false, dhcpLeaseFile: false, outboundConnectivity: false, errors: [message] },
         rolledBack: true,
         errors: [message],
       };
     }
   }
 
-  async restartBackend(): Promise<void> {
-    await this.probe.run("systemctl", ["restart", "network-control-backend.service"]);
-  }
+  async restartBackend(): Promise<void> { await this.probe.run("systemctl", ["restart", "network-control-backend.service"]); }
 
   async rollbackLatest(): Promise<void> {
     const snapshot = join(this.paths.snapshotDir, "latest");
-    for (const [target, name] of [
-      [this.paths.configPath, "config.env"],
-      [this.paths.dnsmasqPath, "clients.conf"],
-      [this.paths.nftablesPath, "network-control-system.nft"],
-    ] as const) {
+    for (const [target, name] of [[this.paths.configPath, "config.env"], [this.paths.dnsmasqPath, "clients.conf"], [this.paths.nftablesPath, "network-control-system.nft"]] as const) {
       try { await fs.copyFile(join(snapshot, name), target); } catch {}
     }
     const reservationsPath = process.env.DHCP_RESERVATIONS_PATH ?? "/var/lib/misc/network-control-reservations.conf";
@@ -221,27 +190,13 @@ export class SetupService {
     const dir = join(this.paths.snapshotDir, `setup-${Date.now()}`);
     await fs.mkdir(dir, { recursive: true });
     const reservationsPath = process.env.DHCP_RESERVATIONS_PATH ?? "/var/lib/misc/network-control-reservations.conf";
-    for (const [target, name] of [
-      [this.paths.configPath, "config.env"],
-      [this.paths.dnsmasqPath, "clients.conf"],
-      [this.paths.nftablesPath, "network-control-system.nft"],
-      [reservationsPath, "reservations.conf"],
-    ] as const) {
+    for (const [target, name] of [[this.paths.configPath, "config.env"], [this.paths.dnsmasqPath, "clients.conf"], [this.paths.nftablesPath, "network-control-system.nft"], [reservationsPath, "reservations.conf"]] as const) {
       try { await fs.copyFile(target, join(dir, name)); } catch {}
     }
-    if (this.probe.snapshotNft) try {
-      const nft = await this.probe.snapshotNft();
-      await fs.writeFile(join(dir, "nftables.bak"), nft, "utf8");
-    } catch {}
-
+    if (this.probe.snapshotNft) try { const nft = await this.probe.snapshotNft(); await fs.writeFile(join(dir, "nftables.bak"), nft, "utf8"); } catch {}
     const latest = join(this.paths.snapshotDir, "latest");
     await fs.mkdir(latest, { recursive: true });
-    for (const [target, name] of [
-      [this.paths.configPath, "config.env"],
-      [this.paths.dnsmasqPath, "clients.conf"],
-      [this.paths.nftablesPath, "network-control-system.nft"],
-      [reservationsPath, "reservations.conf"],
-    ] as const) {
+    for (const [target, name] of [[this.paths.configPath, "config.env"], [this.paths.dnsmasqPath, "clients.conf"], [this.paths.nftablesPath, "network-control-system.nft"], [reservationsPath, "reservations.conf"]] as const) {
       try { await fs.copyFile(target, join(latest, name)); } catch {}
     }
     try { await fs.copyFile(join(dir, "nftables.bak"), join(latest, "nftables.bak")); } catch {}
@@ -249,24 +204,12 @@ export class SetupService {
   }
 
   private failed(errors: string[]): SetupApplyResult {
-    return {
-      applied: false,
-      configPath: this.paths.configPath,
-      renderedFiles: [],
-      health: { clientInterface: false, gatewayReachable: false, dhcpLeaseFile: false, outboundConnectivity: false, errors },
-      rolledBack: false,
-      errors,
-    };
+    return { applied: false, configPath: this.paths.configPath, renderedFiles: [], health: { clientInterface: false, gatewayReachable: false, dhcpLeaseFile: false, outboundConnectivity: false, errors }, rolledBack: false, errors };
   }
 
   private async rollback(snapshot: string) {
     const reservationsPath = process.env.DHCP_RESERVATIONS_PATH ?? "/var/lib/misc/network-control-reservations.conf";
-    for (const [target, name] of [
-      [this.paths.configPath, "config.env"],
-      [this.paths.dnsmasqPath, "clients.conf"],
-      [this.paths.nftablesPath, "network-control-system.nft"],
-      [reservationsPath, "reservations.conf"],
-    ] as const) {
+    for (const [target, name] of [[this.paths.configPath, "config.env"], [this.paths.dnsmasqPath, "clients.conf"], [this.paths.nftablesPath, "network-control-system.nft"], [reservationsPath, "reservations.conf"]] as const) {
       try { await fs.copyFile(join(snapshot, name), target); } catch {}
     }
     if (this.probe.restoreNft) try { await this.probe.restoreNft(join(snapshot, "nftables.bak")); } catch {}
@@ -280,25 +223,16 @@ export class SetupService {
     try {
       const rows = JSON.parse(link.stdout) as Array<{ ifname?: string; addr_info?: Array<{ family?: string; local?: string; prefixlen?: number }> }>;
       const row = rows.find((item) => item.ifname === client);
-      clientAddresses = Array.isArray(row?.addr_info)
-        ? row!.addr_info.filter((addr) => addr.family === "inet" && typeof addr.local === "string").map((addr) => `${addr.local}/${addr.prefixlen ?? 32}`)
-        : [];
+      clientAddresses = Array.isArray(row?.addr_info) ? row!.addr_info.filter((addr) => addr.family === "inet" && typeof addr.local === "string").map((addr) => `${addr.local}/${addr.prefixlen ?? 32}`) : [];
       clientInterface = link.ok && clientAddresses.length > 0;
     } catch {}
-
-    // In Single-Interface + IFB mode the configured gateway IP is the gateway
-    // address owned by this machine. It must be present on the client/uplink
-    // interface; it is not an external next-hop that should be pinged or routed
-    // through itself.
     const gatewayConfigured = clientInterface && clientAddresses.some((address) => address.split("/")[0] === gateway);
     const connectedRoute = gatewayConfigured && (await this.safe("ip", ["route", "get", gateway])).ok;
     const defaultRoute = gatewayConfigured && (await this.safe("ip", ["route", "show", "default"])).ok;
     const gatewayReachable = Boolean(gatewayConfigured && connectedRoute && defaultRoute);
-
     const lease = await this.safe("cat", [this.paths.leasePath ?? "/var/lib/misc/dnsmasq.leases"]);
     const dhcpLeaseFile = lease.ok;
     const outboundConnectivity = (await this.safe("ping", ["-c", "1", "-W", "2", "-I", client, "1.1.1.1"])).ok;
-
     if (!clientInterface) errors.push("client interface is not configured");
     if (!gatewayReachable) errors.push("gateway address or host routes are not configured");
     if (!dhcpLeaseFile) errors.push("dnsmasq lease file is not readable");
@@ -309,8 +243,7 @@ export class SetupService {
   private async migrateLegacyDnsmasqConfig(): Promise<void> {
     try {
       const legacy = await fs.readFile(LEGACY_DNSMASQ_PATH, "utf8");
-      const marker = /network-control|ayad[_ -]?nm/i.test(legacy);
-      if (!marker) return;
+      if (!/network-control|ayad[_ -]?nm/i.test(legacy)) return;
       const disabled = `${LEGACY_DNSMASQ_PATH}.disabled`;
       try { await fs.rm(disabled, { force: true }); } catch {}
       await fs.rename(LEGACY_DNSMASQ_PATH, disabled);
@@ -346,45 +279,9 @@ export class SetupService {
       DHCP_LEASES_PATH: leasePath,
       SETUP_COMPLETED: "true",
     };
-
     const config = Object.entries(values).map(([key, value]) => `${key}=${value}`).join("\n") + "\n";
-    const dnsmasq = [
-      "# Generated by network-control-system; do not edit.",
-      "bind-interfaces",
-      "port=0",
-      `interface=${input.clientInterface}`,
-      `dhcp-range=${start},${end},12h`,
-      `dhcp-option=3,${gateway}`,
-      `dhcp-option=6,${input.dnsServers.join(",")}`,
-      `conf-file=${reservationsPath}`,
-      "",
-    ].join("\n");
-
-    const nftables = [
-      "# Generated by network-control-system; do not edit.",
-      "table ip filter {",
-      "  set blocked_macs { type ether_addr; }",
-      "  set blocked_ips { type ipv4_addr; }",
-      "  chain INPUT {",
-      "    type filter hook input priority 0; policy accept;",
-      `    tcp dport ${input.sshPort} accept comment \"ayad_nm_allow_ssh_management\"`,
-      `    tcp dport ${input.dashboardPort} accept comment \"ayad_nm_allow_dashboard_management\"`,
-      "  }",
-      "  chain FORWARD {",
-      "    type filter hook forward priority 0; policy accept;",
-      "    ip saddr @blocked_ips drop comment \"ayad_nm_blocked_ips\"",
-      "    ether saddr @blocked_macs drop comment \"ayad_nm_blocked_macs\"",
-      "  }",
-      "  chain OUTPUT { type filter hook output priority 0; policy accept; }",
-      "}",
-      "table ip nat {",
-      "  chain POSTROUTING {",
-      "    type nat hook postrouting priority 100; policy accept;",
-      `    ip saddr ${input.clientSubnet} oifname \"${input.uplinkInterface}\" masquerade comment \"ayad_nm_single_interface_nat\"`,
-      "  }",
-      "}",
-      "",
-    ].join("\n");
+    const dnsmasq = ["# Generated by network-control-system; do not edit.", "bind-interfaces", "port=0", `interface=${input.clientInterface}`, `dhcp-range=${start},${end},12h`, `dhcp-option=3,${gateway}`, `dhcp-option=6,${input.dnsServers.join(",")}`, `conf-file=${reservationsPath}`, ""].join("\n");
+    const nftables = ["# Generated by network-control-system; do not edit.", "table ip filter {", "  set blocked_macs { type ether_addr; }", "  set blocked_ips { type ipv4_addr; }", "  chain INPUT {", "    type filter hook input priority 0; policy accept;", `    tcp dport ${input.sshPort} accept comment \"ayad_nm_allow_ssh_management\"`, `    tcp dport ${input.dashboardPort} accept comment \"ayad_nm_allow_dashboard_management\"`, "  }", "  chain FORWARD {", "    type filter hook forward priority 0; policy accept;", "    ip saddr @blocked_ips drop comment \"ayad_nm_blocked_ips\"", "    ether saddr @blocked_macs drop comment \"ayad_nm_blocked_macs\"", "  }", "  chain OUTPUT { type filter hook output priority 0; policy accept; }", "}", "table ip nat {", "  chain POSTROUTING {", "    type nat hook postrouting priority 100; policy accept;", `    ip saddr ${input.clientSubnet} oifname \"${input.uplinkInterface}\" masquerade comment \"ayad_nm_single_interface_nat\"`, "  }", "}", ""].join("\n");
     return { config, dnsmasq, nftables, reservationsPath };
   }
 
@@ -395,30 +292,16 @@ export class SetupService {
     if (!network || prefix(input.clientSubnet) > 30 || network[1]!.split(".").some((part) => Number(part) > 255)) errors.push("clientSubnet must be a valid IPv4 network with prefix <= 30");
     if (input.clientGatewayIp && (!ipv4.test(input.clientGatewayIp) || input.clientGatewayIp.split(".").some((part) => Number(part) > 255))) errors.push("clientGatewayIp must be a valid IPv4 address");
     if (input.vpnTunnelInterface && !iface.test(input.vpnTunnelInterface)) errors.push("VPN tunnel interface is invalid");
-    for (const value of [input.vpnTunAddress, input.singBoxConfigPath, input.dhcpReservationsPath]) {
-      if (value !== undefined && (!value.trim() || /[\r\n]/.test(value))) errors.push("setup path/address values must not be empty or contain newlines");
-    }
+    for (const value of [input.vpnTunAddress, input.singBoxConfigPath, input.dhcpReservationsPath]) if (value !== undefined && (!value.trim() || /[\r\n]/.test(value))) errors.push("setup path/address values must not be empty or contain newlines");
     if (!Number.isInteger(input.uplinkBandwidthMbps) || input.uplinkBandwidthMbps <= 0) errors.push("uplink bandwidth must be a positive integer");
     if (!Number.isInteger(input.dashboardPort) || input.dashboardPort < 1 || input.dashboardPort > 65535 || !Number.isInteger(input.sshPort) || input.sshPort < 1 || input.sshPort > 65535) errors.push("management ports must be valid TCP ports");
     if (!Array.isArray(input.dnsServers) || input.dnsServers.length === 0 || input.dnsServers.some((x) => !ipv4.test(x) || x.split(".").some((part) => Number(part) > 255))) errors.push("DNS servers must be IPv4 addresses");
     return errors;
   }
 
-  private async readJson(command: string, args: string[]) {
-    try { return JSON.parse((await this.probe.run(command, args)).stdout); } catch { return []; }
-  }
-
-  private async safe(command: string, args: string[]) {
-    try { return { ok: true, ...await this.probe.run(command, args) }; }
-    catch (error) { return { ok: false, stdout: "", stderr: error instanceof Error ? error.message : String(error) }; }
-  }
-
-  private async writeAtomic(path: string, value: string) {
-    await fs.mkdir(dirname(path), { recursive: true });
-    const temp = `${path}.tmp-${process.pid}`;
-    await fs.writeFile(temp, value, "utf8");
-    await fs.rename(temp, path);
-  }
+  private async readJson(command: string, args: string[]) { try { return JSON.parse((await this.probe.run(command, args)).stdout); } catch { return []; } }
+  private async safe(command: string, args: string[]) { try { return { ok: true, ...await this.probe.run(command, args) }; } catch (error) { return { ok: false, stdout: "", stderr: error instanceof Error ? error.message : String(error) }; } }
+  private async writeAtomic(path: string, value: string) { await fs.mkdir(dirname(path), { recursive: true }); const temp = `${path}.tmp-${process.pid}`; await fs.writeFile(temp, value, "utf8"); await fs.rename(temp, path); }
 }
 
 function prefix(value: string): number { return Number(cidr.exec(value)?.[2] ?? 32); }
