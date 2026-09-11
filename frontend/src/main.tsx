@@ -12,6 +12,8 @@ const queryClient = new QueryClient({
   },
 });
 
+const SETUP_STATUS_TIMEOUT_MS = 5_000;
+
 function usePathname() {
   const [pathname, setPathname] = useState(() => window.location.pathname);
 
@@ -43,24 +45,43 @@ function usePathname() {
   return pathname;
 }
 
+async function fetchSetupStatus(signal: AbortSignal): Promise<{ setupComplete: boolean }> {
+  const response = await fetch("/api/setup/status", {
+    headers: { Accept: "application/json" },
+    credentials: "include",
+    signal,
+  });
+  if (!response.ok) throw new Error(`Setup status request failed (${response.status})`);
+  return response.json() as Promise<{ setupComplete: boolean }>;
+}
+
 function Root() {
   const pathname = usePathname();
   const [setupComplete, setSetupComplete] = useState<boolean | null>(null);
 
   useEffect(() => {
+    // Never let a stalled setup-status request leave the entire application on
+    // a permanent "Checking gateway setup" screen. If the status endpoint is
+    // unavailable, setup mode is the safe fallback because it does not assume
+    // that gateway configuration has completed.
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), SETUP_STATUS_TIMEOUT_MS);
     let cancelled = false;
-    fetch("/api/setup/status", { headers: { Accept: "application/json" }, credentials: "include" })
-      .then((response) => {
-        if (!response.ok) throw new Error(`Setup status request failed (${response.status})`);
-        return response.json() as Promise<{ setupComplete: boolean }>;
-      })
+
+    fetchSetupStatus(controller.signal)
       .then((result) => {
         if (!cancelled) setSetupComplete(result.setupComplete === true);
       })
       .catch(() => {
         if (!cancelled) setSetupComplete(false);
-      });
-    return () => { cancelled = true; };
+      })
+      .finally(() => window.clearTimeout(timeout));
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+      window.clearTimeout(timeout);
+    };
   }, []);
 
   useEffect(() => {
