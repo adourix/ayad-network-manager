@@ -171,6 +171,7 @@ function valid(command: string, args: string[]): boolean {
     const readPrefix = args.filter((arg) => arg === "-j" || arg === "-a");
     const readArgs = args.filter((arg) => arg !== "-j" && arg !== "-a");
     if (readPrefix.length <= 2 && readArgs[0] === "list") return args.every((arg) => !/[;{}]/.test(arg));
+    if (args[0] === "flush" && args.length === 5 && args[1] === "chain" && args[2] === "inet" && args[3] === "ayad_nm" && args[4] === "accounting") return true;
     if (!["add", "insert", "delete", "replace"].includes(args[0] ?? "")) return false;
     const target = args[1];
     if (target === "counter") return args[0] === "add" && args.length === 5 && args[2] === "inet" && args[3] === "ayad_nm" && validAccountingCounterName(args[4]!);
