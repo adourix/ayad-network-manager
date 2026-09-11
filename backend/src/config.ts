@@ -1,13 +1,13 @@
-import dotenv from "dotenv";
+import { config as loadDotenv } from "dotenv";
 
 // Load installer-owned static settings first (database, auth, paths, etc.).
-dotenv.config();
+loadDotenv();
 
 // Setup-owned network/runtime settings are persisted outside .env. Load them
 // explicitly so bootstrap sees the same configuration whether it is started by
 // systemd, manually, or another process manager.
 const systemConfigPath = process.env.SYSTEM_CONFIG_PATH ?? "/etc/network-control-system/config.env";
-dotenv.config({ path: systemConfigPath, override: false });
+loadDotenv({ path: systemConfigPath, override: false });
 
 function optional(name: string): string { return process.env[name] ?? ""; }
 function numberFromEnv(name: string, fallback: number): number {
