@@ -31,6 +31,7 @@ export interface LiveTraffic {
 }
 
 const DEFAULT_INTERVAL_MS = 1_000;
+const ACCOUNTING_RECONCILE_INTERVAL_MS = 10_000;
 const HISTORY_BUCKET_MS = 60_000;
 
 export class TrafficAccountingService {
@@ -39,6 +40,7 @@ export class TrafficAccountingService {
   private timer: NodeJS.Timeout | undefined;
   private running = false;
   private readonly live = new Map<string, LiveTraffic>();
+  private lastAccountingReconcileAt = 0;
 
   constructor(
     private readonly deviceRepository: DeviceRepository,
@@ -78,12 +80,23 @@ export class TrafficAccountingService {
 
     try {
       const discoveredDevices = await this.discoveryService.discover();
-
-      await this.trafficUsageReader.reconcileDeviceAccounting(
-        discoveredDevices.map((device) => ({ mac: device.mac, ip: device.ip })),
-      );
-
       const now = new Date();
+      const nowMs = now.getTime();
+
+      // Accounting rules do not need to be rebuilt on every live sample.
+      // Reconcile periodically while keeping the actual traffic samples at
+      // 1-2 seconds. This prevents nft/tc work from starving policy/setup
+      // operations while still repairing accounting state promptly.
+      if (
+        this.lastAccountingReconcileAt === 0 ||
+        nowMs - this.lastAccountingReconcileAt >= ACCOUNTING_RECONCILE_INTERVAL_MS
+      ) {
+        await this.trafficUsageReader.reconcileDeviceAccounting(
+          discoveredDevices.map((device) => ({ mac: device.mac, ip: device.ip })),
+        );
+        this.lastAccountingReconcileAt = nowMs;
+      }
+
       const activeDeviceIds = new Set<number>();
 
       for (const discovered of discoveredDevices) {
