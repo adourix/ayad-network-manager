@@ -2,7 +2,7 @@
 set -euo pipefail
 
 APP_ROOT="${APP_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
-CONFIG_FILE="${CONFIG_FILE:-${APP_ROOT}/.env}"
+CONFIG_FILE="${CONFIG_FILE:-/etc/network-control-system/config.env}"
 SYSTEMD_DIR="/etc/systemd/system"
 SYSTEMD_HELPER_DIR="/usr/local/lib/network-control"
 TEMPLATE_DIR="${APP_ROOT}/deploy/systemd"
@@ -84,6 +84,21 @@ fi
 
 if ! grep -qE '^ReadWritePaths=.*(^|[[:space:]])/var/lib/misc([[:space:]]|$)' "${BACKEND_UNIT}"; then
   echo "backend systemd unit is missing writable DHCP state path" >&2
+  exit 1
+fi
+
+# The privileged enforcement agent must receive the same runtime network
+# configuration selected by setup. Never fall back to .env for this value:
+# .env is installer-owned and intentionally contains empty network placeholders.
+ENFORCEMENT_UNIT="${SYSTEMD_DIR}/network-control-enforcement.service"
+if ! grep -qF "EnvironmentFile=-${CONFIG_FILE}" "${ENFORCEMENT_UNIT}"; then
+  echo "enforcement systemd unit is missing runtime config: ${CONFIG_FILE}" >&2
+  exit 1
+fi
+if grep -qF "EnvironmentFile=-${APP_ROOT}/.env" "${ENFORCEMENT_UNIT}"; then
+  :
+else
+  echo "enforcement systemd unit is missing installer environment file" >&2
   exit 1
 fi
 
