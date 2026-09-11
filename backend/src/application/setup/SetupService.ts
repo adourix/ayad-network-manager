@@ -117,9 +117,6 @@ export class SetupService {
     if (!uplinkRanges.length) selectionErrors.push("selected uplink interface has no IPv4 subnet");
     else if (!uplinkRanges.some((range) => networkOf(range) === networkOf(input.clientSubnet))) selectionErrors.push("client subnet must be the existing uplink subnet in Single-Interface + IFB mode");
     const selectedInterface = network.interfaces.find((item) => item.name === input.uplinkInterface);
-    // In Single-Interface + IFB mode the gateway is always this machine's
-    // existing IPv4 address on the selected interface. Never accept the
-    // upstream router address as CLIENT_GATEWAY_IP.
     const gateway = deriveGateway(selectedInterface?.addresses ?? [], input.clientSubnet);
     if (!gateway) selectionErrors.push("unable to derive CLIENT_GATEWAY_IP from the selected interface");
     else if (!sameNetwork(gateway, input.clientSubnet)) selectionErrors.push("derived CLIENT_GATEWAY_IP must belong to CLIENT_SUBNET");
@@ -223,24 +220,30 @@ export class SetupService {
     let clientInterface = false;
     let localAddresses: string[] = [];
     try {
-      const rows = JSON.parse(link.stdout) as Array<{ ifname?: string; addr_info?: Array<{ family?: string; local?: string }> }>;
-      for (const row of rows) {
-        if (row.ifname !== client || !Array.isArray(row.addr_info)) continue;
-        localAddresses = row.addr_info
+      const parsed = JSON.parse(link.stdout) as unknown;
+      const rows = Array.isArray(parsed) ? parsed : [parsed];
+      for (const row of rows as Array<{ ifname?: string; addr_info?: Array<{ family?: string; local?: string }> }>) {
+        if (row.ifname && row.ifname !== client) continue;
+        if (!Array.isArray(row.addr_info)) continue;
+        localAddresses.push(...row.addr_info
           .filter((addr) => addr.family === "inet" && typeof addr.local === "string")
-          .map((addr) => addr.local!);
+          .map((addr) => addr.local!.trim()));
       }
+      localAddresses = [...new Set(localAddresses)];
       clientInterface = link.ok && localAddresses.length > 0;
     } catch {}
-    const gatewayConfigured = clientInterface && localAddresses.includes(gateway);
-    const gatewayRouteResult = gatewayConfigured ? await this.safe("ip", ["route", "get", gateway]) : null;
+
+    const normalizedGateway = gateway.trim().split("/")[0];
+    const gatewayConfigured = clientInterface && localAddresses.some((address) => address === normalizedGateway);
+    const gatewayRouteResult = gatewayConfigured ? await this.safe("ip", ["route", "get", normalizedGateway]) : null;
     const gatewayRoute = Boolean(gatewayRouteResult?.ok);
     const gatewayReachable = Boolean(gatewayConfigured && gatewayRoute);
     const lease = await this.safe("cat", [this.paths.leasePath ?? "/var/lib/misc/dnsmasq.leases"]);
     const dhcpLeaseFile = lease.ok;
     const outboundConnectivity = (await this.safe("ping", ["-c", "1", "-W", "2", "-I", client, "1.1.1.1"])).ok;
-    if (!clientInterface) errors.push("client interface is not configured");
-    if (!gatewayReachable) errors.push(`client gateway ${gateway} is not configured on ${client}`);
+    if (!clientInterface) errors.push(`client interface ${client} has no IPv4 address`);
+    if (!gatewayConfigured) errors.push(`client gateway ${normalizedGateway} is not configured on ${client}`);
+    else if (!gatewayRoute) errors.push(`client gateway ${normalizedGateway} has no local route on ${client}`);
     if (!dhcpLeaseFile) errors.push("dnsmasq lease file is not readable");
     if (!outboundConnectivity) errors.push("gateway outbound connectivity test failed");
     return { clientInterface, gatewayReachable, dhcpLeaseFile, outboundConnectivity, errors };
