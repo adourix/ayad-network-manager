@@ -19,6 +19,12 @@ const REMOTE_CONNECT_RETRIES = 20;
 const REMOTE_CONNECT_RETRY_DELAY_MS = 250;
 const COMMAND_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
 
+function describeCommand(command: string, args: string[]): string {
+  // Never include the sing-box config payload in an error because it may contain secrets.
+  if (command === "write-sing-box-config") return command;
+  return [command, ...args].join(" ");
+}
+
 export class LinuxSystemCommandExecutor implements SystemCommandExecutor {
   constructor(
     private readonly localOnly = false,
@@ -54,13 +60,21 @@ export class LinuxSystemCommandExecutor implements SystemCommandExecutor {
       ? Math.max(this.timeoutMs, SYSTEMCTL_TIMEOUT_MS)
       : this.timeoutMs;
 
-    const { stdout, stderr } = await execFileAsync(executable, args, {
-      timeout,
-      killSignal: "SIGKILL",
-      maxBuffer: COMMAND_MAX_BUFFER_BYTES,
-    });
+    try {
+      const { stdout, stderr } = await execFileAsync(executable, args, {
+        timeout,
+        killSignal: "SIGKILL",
+        maxBuffer: COMMAND_MAX_BUFFER_BYTES,
+      });
 
-    return { stdout, stderr };
+      return { stdout, stderr };
+    } catch (error) {
+      const failure = error instanceof Error ? error : new Error(String(error));
+      throw new Error(
+        `${describeCommand(command, args)} failed: ${failure.message}`,
+        { cause: failure },
+      );
+    }
   }
 
   private async executeRemote(
@@ -158,7 +172,7 @@ export class LinuxSystemCommandExecutor implements SystemCommandExecutor {
           if (!result.ok) {
             finish(
               new Error(
-                result.error ?? "privileged enforcement command failed",
+                `${describeCommand(command, args)} failed: ${result.error ?? "privileged enforcement command failed"}`,
               ),
             );
             return;
