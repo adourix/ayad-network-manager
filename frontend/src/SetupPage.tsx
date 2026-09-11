@@ -100,12 +100,10 @@ function SetupPage() {
     : "Detect the gateway network, validate prerequisites, review the configuration, then apply the Single-Interface + IFB setup.";
 
   const finish = () => {
-    const target = new URL(window.location.href);
-    if (dashboardPort) target.port = dashboardPort;
-    target.pathname = reconfigure ? "/" : "/login";
-    target.search = "";
-    target.hash = "";
-    window.location.assign(target.toString());
+    // Settings is served outside the authenticated React Router tree. Return to
+    // the current origin's root instead of rewriting the port from the form;
+    // this keeps reverse-proxy/custom-port deployments working as well.
+    window.location.assign(reconfigure ? "/" : "/login");
   };
 
   return (
