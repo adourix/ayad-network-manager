@@ -60,8 +60,8 @@ function Root() {
   const [setupComplete, setSetupComplete] = useState<boolean | null>(null);
 
   useEffect(() => {
-    // Never let a stalled setup-status request leave the entire application on
-    // a permanent "Checking gateway setup" screen. If the status endpoint is
+    // Never let a stalled setup-status request leave the application on a
+    // permanent "Checking gateway setup" screen. If the status endpoint is
     // unavailable, setup mode is the safe fallback because it does not assume
     // that gateway configuration has completed.
     const controller = new AbortController();
@@ -92,14 +92,15 @@ function Root() {
     }
   }, [pathname, setupComplete]);
 
-  if (setupComplete === null) {
-    return <div style={{ minHeight: "100vh", display: "grid", placeItems: "center" }}>Checking gateway setup…</div>;
-  }
-
-  // /setup is intentionally kept accessible after completion so the final
-  // Apply/health-check result remains visible and navigation to login is explicit.
+  // The setup page must never be blocked by the setup-status gate. This also
+  // makes a direct /setup navigation usable when the status endpoint is slow
+  // or unavailable.
   if (pathname === "/setup") {
     return <SetupPage />;
+  }
+
+  if (setupComplete === null) {
+    return <div style={{ minHeight: "100vh", display: "grid", placeItems: "center" }}>Checking gateway setup…</div>;
   }
 
   if (!setupComplete) {
