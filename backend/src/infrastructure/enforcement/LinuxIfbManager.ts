@@ -121,7 +121,12 @@ export class LinuxIfbManager implements IfbManager {
 
   private async ensureIngressQdisc(interfaceName: string): Promise<void> {
     const result = await this.executor.execute("tc", ["qdisc", "show", "dev", interfaceName]);
-    if (/\bqdisc\s+ingress\s+ffff:\s+dev\s+\S+/i.test(result.stdout)) return;
+    // `tc qdisc show dev ...` normally reports the ingress qdisc as
+    // `qdisc ingress ffff: parent ffff:fff1 ...`; it does not include `dev`
+    // in that line. The previous matcher therefore failed to recognize an
+    // existing ingress qdisc and attempted a duplicate `add`, which tc rejects
+    // with `Exclusivity flag on, cannot modify.`.
+    if (/\bqdisc\s+ingress\s+ffff:/i.test(result.stdout)) return;
     await this.executor.execute("tc", ["qdisc", "add", "dev", interfaceName, "handle", "ffff:", "ingress"]);
   }
 
