@@ -41,6 +41,7 @@ npm run build
 
 install -d -m 0755 "${SYSTEMD_HELPER_DIR}"
 install -d -m 0755 "${BACKUP_DIR}"
+install -d -m 0755 /etc/modules-load.d /etc/systemd/system/dnsmasq.service.d
 # The backend runs as root with only the capabilities required for gateway
 # setup/enforcement. Keep setup storage root-writable so CAP_DAC_OVERRIDE is
 # not needed just to create setup snapshots.
@@ -64,28 +65,21 @@ render_and_install \
 
 # ProtectSystem=strict makes the filesystem read-only to the service except
 # for explicit ReadWritePaths. Keep every path used by setup's atomic writes
-# writable, including nftables config, DHCP reservations and lease state.
+# writable, including nftables config, DHCP reservations, IFB module loading
+# and the dnsmasq restart policy override.
 BACKEND_UNIT="${SYSTEMD_DIR}/network-control-backend.service"
 if grep -q '^ReadWritePaths=' "${BACKEND_UNIT}"; then
-  sed -i "s|^ReadWritePaths=.*$|ReadWritePaths=${APP_ROOT} /run/network-control /etc/dnsmasq.d /etc/nftables.d /etc/network-control-system /var/lib/network-control /var/lib/misc|" "${BACKEND_UNIT}"
+  sed -i "s|^ReadWritePaths=.*$|ReadWritePaths=${APP_ROOT} /run/network-control /etc/dnsmasq.d /etc/nftables.d /etc/network-control-system /etc/modules-load.d /etc/systemd/system/dnsmasq.service.d /var/lib/network-control /var/lib/misc|" "${BACKEND_UNIT}"
 else
-  printf '\nReadWritePaths=%s /run/network-control /etc/dnsmasq.d /etc/nftables.d /etc/network-control-system /var/lib/network-control /var/lib/misc\n' "${APP_ROOT}" >> "${BACKEND_UNIT}"
+  printf '\nReadWritePaths=%s /run/network-control /etc/dnsmasq.d /etc/nftables.d /etc/network-control-system /etc/modules-load.d /etc/systemd/system/dnsmasq.service.d /var/lib/network-control /var/lib/misc\n' "${APP_ROOT}" >> "${BACKEND_UNIT}"
 fi
 
-if ! grep -qE '^ReadWritePaths=.*(^|[[:space:]])/var/lib/network-control([[:space:]]|$)' "${BACKEND_UNIT}"; then
-  echo "backend systemd unit is missing writable setup backup path" >&2
-  exit 1
-fi
-
-if ! grep -qE '^ReadWritePaths=.*(^|[[:space:]])/etc/nftables\.d([[:space:]]|$)' "${BACKEND_UNIT}"; then
-  echo "backend systemd unit is missing writable nftables config path" >&2
-  exit 1
-fi
-
-if ! grep -qE '^ReadWritePaths=.*(^|[[:space:]])/var/lib/misc([[:space:]]|$)' "${BACKEND_UNIT}"; then
-  echo "backend systemd unit is missing writable DHCP state path" >&2
-  exit 1
-fi
+for path in /var/lib/network-control /etc/nftables.d /var/lib/misc /etc/modules-load.d /etc/systemd/system/dnsmasq.service.d; do
+  if ! grep -qE "^ReadWritePaths=.*(^|[[:space:]])${path//./\\.}([[:space:]]|$)" "${BACKEND_UNIT}"; then
+    echo "backend systemd unit is missing writable setup path: ${path}" >&2
+    exit 1
+  fi
+done
 
 # The privileged enforcement agent must receive the same runtime network
 # configuration selected by setup. Never fall back to .env for this value:
