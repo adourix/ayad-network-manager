@@ -66,7 +66,6 @@ export const config = {
     vpnTunnelInterface: optional("VPN_TUN_INTERFACE"),
     vpnConfigPath: optional("SING_BOX_CONFIG_PATH"),
     vpnTunAddress: optional("VPN_TUN_ADDRESS"),
-    vpnTunAddress: optional("VPN_TUN_ADDRESS"),
     sshPort: numberFromEnv("SSH_PORT", 22),
     dnsServers,
   },
