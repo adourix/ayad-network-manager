@@ -12,36 +12,13 @@ export function configureNftAudit(repository: OperationsRepository): void {
 async function execNft(args: string[]): Promise<{ stdout: string; stderr: string }> {
   const mutating = ["add", "insert", "delete", "replace", "flush", "reset"].includes(args[0] ?? "");
   if (mutating) await commandExecutor.execute("nft", ["-c", ...args]);
-  await nftAudit?.audit({
-    action: "enforcement-command-before",
-    actor: "system",
-    details: { command: "nft", args },
-  });
+  await nftAudit?.audit({ action: "enforcement-command-before", actor: "system", details: { command: "nft", args } });
   try {
     const result = await commandExecutor.execute("nft", args);
-    await nftAudit?.audit({
-      action: "enforcement-command-after",
-      actor: "system",
-      details: {
-        command: "nft",
-        args,
-        result: "success",
-        stdout: result.stdout.slice(0, 2000),
-        stderr: result.stderr.slice(0, 2000),
-      },
-    });
+    await nftAudit?.audit({ action: "enforcement-command-after", actor: "system", details: { command: "nft", args, result: "success", stdout: result.stdout.slice(0, 2000), stderr: result.stderr.slice(0, 2000) } });
     return result;
   } catch (error) {
-    await nftAudit?.audit({
-      action: "enforcement-command-after",
-      actor: "system",
-      details: {
-        command: "nft",
-        args,
-        result: "failure",
-        error: error instanceof Error ? error.message : String(error),
-      },
-    });
+    await nftAudit?.audit({ action: "enforcement-command-after", actor: "system", details: { command: "nft", args, result: "failure", error: error instanceof Error ? error.message : String(error) } });
     throw error;
   }
 }
@@ -53,7 +30,6 @@ const VPN_PREROUTING_CHAIN = "blocked_devices_prerouting";
 const VPN_IP_SET_NAME = "vpn_blocked_ips";
 const MAC_SET_NAME = "blocked_macs";
 const IP_SET_NAME = "blocked_ips";
-const FORWARD_CHAIN = "FORWARD";
 const CONTROL_CHAIN = "ayad_nm_forward";
 const MAC_REGEX = /^([0-9a-f]{2}:){5}[0-9a-f]{2}$/i;
 const IPV4_REGEX = /^(?:\d{1,3}\.){3}\d{1,3}$/;
@@ -70,9 +46,7 @@ let vpnBlockedIpGuardEnabled = false;
 function withMutationLock<T>(operation: () => Promise<T>): Promise<T> {
   const previous = mutationTail;
   let release!: () => void;
-  mutationTail = new Promise<void>((resolve) => {
-    release = resolve;
-  });
+  mutationTail = new Promise<void>((resolve) => { release = resolve; });
   return previous.then(operation).finally(release);
 }
 
@@ -86,9 +60,7 @@ function validateIp(ip: string): string {
   const normalized = ip.trim();
   if (!IPV4_REGEX.test(normalized)) throw new Error(`Invalid IPv4 address: ${ip}`);
   const parts = normalized.split(".").map(Number);
-  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
-    throw new Error(`Invalid IPv4 address: ${ip}`);
-  }
+  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) throw new Error(`Invalid IPv4 address: ${ip}`);
   return normalized;
 }
 
@@ -97,12 +69,7 @@ function validSubnet(subnet: string): boolean {
   if (!match) return false;
   const octets = match[1]!.split(".").map(Number);
   const prefix = Number(match[2]);
-  return (
-    octets.length === 4 &&
-    octets.every((octet) => Number.isInteger(octet) && octet >= 0 && octet <= 255) &&
-    prefix >= 0 &&
-    prefix <= 32
-  );
+  return octets.length === 4 && octets.every((octet) => Number.isInteger(octet) && octet >= 0 && octet <= 255) && prefix >= 0 && prefix <= 32;
 }
 
 function isAlreadyExists(error: unknown): boolean {
@@ -125,25 +92,7 @@ async function ensureSetUnlocked(name: string, type: string): Promise<void> {
 
 async function ensureControlChainUnlocked(): Promise<void> {
   try {
-    await execNft([
-      "add",
-      "chain",
-      TABLE_FAMILY,
-      TABLE_NAME,
-      CONTROL_CHAIN,
-      "{",
-      "type",
-      "filter",
-      "hook",
-      "forward",
-      "priority",
-      "-300",
-      ";",
-      "policy",
-      "accept",
-      ";",
-      "}",
-    ]);
+    await execNft(["add", "chain", TABLE_FAMILY, TABLE_NAME, CONTROL_CHAIN, "{", "type", "filter", "hook", "forward", "priority", "-300", ";", "policy", "accept", ";", "}"]);
   } catch (error) {
     if (!isAlreadyExists(error)) throw error;
   }
@@ -152,88 +101,16 @@ async function ensureControlChainUnlocked(): Promise<void> {
 async function rebuildControlChainUnlocked(): Promise<void> {
   await ensureControlChainUnlocked();
   await execNft(["flush", "chain", TABLE_FAMILY, TABLE_NAME, CONTROL_CHAIN]);
-  await execNft([
-    "add",
-    "rule",
-    TABLE_FAMILY,
-    TABLE_NAME,
-    CONTROL_CHAIN,
-    "ip",
-    "saddr",
-    `@${IP_SET_NAME}`,
-    "drop",
-    "comment",
-    IP_BLOCK_COMMENT,
-  ]);
-  await execNft([
-    "add",
-    "rule",
-    TABLE_FAMILY,
-    TABLE_NAME,
-    CONTROL_CHAIN,
-    "ether",
-    "saddr",
-    `@${MAC_SET_NAME}`,
-    "drop",
-    "comment",
-    MAC_BLOCK_COMMENT,
-  ]);
+  await execNft(["add", "rule", TABLE_FAMILY, TABLE_NAME, CONTROL_CHAIN, "ip", "saddr", `@${IP_SET_NAME}`, "drop", "comment", IP_BLOCK_COMMENT]);
+  await execNft(["add", "rule", TABLE_FAMILY, TABLE_NAME, CONTROL_CHAIN, "ether", "saddr", `@${MAC_SET_NAME}`, "drop", "comment", MAC_BLOCK_COMMENT]);
 }
 
 async function ensureVpnEnforcementStateUnlocked(): Promise<void> {
-  try {
-    await execNft(["add", "table", TABLE_FAMILY, VPN_TABLE_NAME]);
-  } catch (error) {
-    if (!isAlreadyExists(error)) throw error;
-  }
-
-  try {
-    await execNft(["add", "set", TABLE_FAMILY, VPN_TABLE_NAME, VPN_IP_SET_NAME, "{", "type", "ipv4_addr", ";", "}"]);
-  } catch (error) {
-    if (!isAlreadyExists(error)) throw error;
-  }
-
-  try {
-    await execNft([
-      "add",
-      "chain",
-      TABLE_FAMILY,
-      VPN_TABLE_NAME,
-      VPN_PREROUTING_CHAIN,
-      "{",
-      "type",
-      "filter",
-      "hook",
-      "prerouting",
-      "priority",
-      "-301",
-      ";",
-      "policy",
-      "accept",
-      ";",
-      "}",
-    ]);
-  } catch (error) {
-    if (!isAlreadyExists(error)) throw error;
-  }
-
+  try { await execNft(["add", "table", TABLE_FAMILY, VPN_TABLE_NAME]); } catch (error) { if (!isAlreadyExists(error)) throw error; }
+  try { await execNft(["add", "set", TABLE_FAMILY, VPN_TABLE_NAME, VPN_IP_SET_NAME, "{", "type", "ipv4_addr", ";", "}"]); } catch (error) { if (!isAlreadyExists(error)) throw error; }
+  try { await execNft(["add", "chain", TABLE_FAMILY, VPN_TABLE_NAME, VPN_PREROUTING_CHAIN, "{", "type", "filter", "hook", "prerouting", "priority", "-301", ";", "policy", "accept", ";", "}"]); } catch (error) { if (!isAlreadyExists(error)) throw error; }
   const { stdout } = await execNft(["-a", "list", "chain", TABLE_FAMILY, VPN_TABLE_NAME, VPN_PREROUTING_CHAIN]);
-  if (!stdout.includes(VPN_IP_BLOCK_COMMENT)) {
-    await execNft([
-      "add",
-      "rule",
-      TABLE_FAMILY,
-      VPN_TABLE_NAME,
-      VPN_PREROUTING_CHAIN,
-      "ip",
-      "saddr",
-      `@${VPN_IP_SET_NAME}`,
-      "counter",
-      "drop",
-      "comment",
-      VPN_IP_BLOCK_COMMENT,
-    ]);
-  }
+  if (!stdout.includes(VPN_IP_BLOCK_COMMENT)) await execNft(["add", "rule", TABLE_FAMILY, VPN_TABLE_NAME, VPN_PREROUTING_CHAIN, "ip", "saddr", `@${VPN_IP_SET_NAME}`, "counter", "drop", "comment", VPN_IP_BLOCK_COMMENT]);
 }
 
 async function syncVpnBlockedIpUnlocked(ip: string): Promise<void> {
@@ -275,7 +152,6 @@ export async function ensureFirewallState(): Promise<void> {
   await withMutationLock(async () => {
     await ensureSetUnlocked(MAC_SET_NAME, "ether_addr");
     await ensureSetUnlocked(IP_SET_NAME, "ipv4_addr");
-    await ensureControlChainUnlocked();
     await rebuildControlChainUnlocked();
     await ensureVpnEnforcementStateUnlocked();
     await ensureManagementAllowRulesUnlocked();
@@ -287,48 +163,38 @@ export async function ensureFirewallState(): Promise<void> {
 export async function ensureSingleInterfaceNat(clientSubnet: string): Promise<void> {
   if (!validSubnet(clientSubnet)) throw new Error(`Invalid client subnet: ${clientSubnet}`);
   await withMutationLock(async () => {
-    const args = [
-      "add",
-      "rule",
-      TABLE_FAMILY,
-      "nat",
-      "POSTROUTING",
-      "ip",
-      "saddr",
-      clientSubnet,
-      "oifname",
-      config.network.uplinkInterface,
-      "masquerade",
-      "comment",
-      NAT_COMMENT,
-    ];
-    await execNft(["delete", "rule", TABLE_FAMILY, "nat", "POSTROUTING", "handle", "0"]).catch(() => undefined);
+    const rules = await getRulesInChain("nat", "POSTROUTING");
+    const existing = rules.find((rule) => rule.comment === NAT_COMMENT);
+    const args = ["add", "rule", TABLE_FAMILY, "nat", "POSTROUTING", "ip", "saddr", clientSubnet, "oifname", config.network.uplinkInterface, "masquerade", "comment", NAT_COMMENT];
+    if (existing) await execNft(["delete", "rule", TABLE_FAMILY, "nat", "POSTROUTING", "handle", String(existing.handle)]);
     await execNft(args);
   });
 }
 
+interface NftRule { handle: number; comment: string | null; index: number; }
+async function getRulesInChain(table: string, chain: string): Promise<NftRule[]> {
+  const { stdout } = await execNft(["-j", "list", "chain", TABLE_FAMILY, table, chain]);
+  let document: { nftables?: unknown[] };
+  try { document = JSON.parse(stdout); } catch { throw new Error(`Failed to parse nft JSON for ${table}/${chain}`); }
+  const rules: NftRule[] = [];
+  let index = 0;
+  for (const item of document.nftables ?? []) {
+    if (typeof item !== "object" || item === null) continue;
+    const value = item as Record<string, unknown>;
+    if (typeof value.rule !== "object" || value.rule === null) continue;
+    const rule = value.rule as Record<string, unknown>;
+    if (typeof rule.handle !== "number") continue;
+    rules.push({ handle: rule.handle, comment: typeof rule.comment === "string" ? rule.comment : null, index });
+    index += 1;
+  }
+  return rules;
+}
+
 async function ensureManagementAllowRulesUnlocked(): Promise<void> {
-  for (const [chain, port, comment] of [
-    ["INPUT", config.network.sshPort, SSH_ALLOW_COMMENT],
-    ["INPUT", config.server.port, DASHBOARD_ALLOW_COMMENT],
-  ] as const) {
+  for (const [chain, port, comment] of [["INPUT", config.network.sshPort, SSH_ALLOW_COMMENT], ["INPUT", config.server.port, DASHBOARD_ALLOW_COMMENT]] as const) {
     const { stdout } = await execNft(["-a", "list", "chain", TABLE_FAMILY, TABLE_NAME, chain]);
     if (stdout.includes(comment)) continue;
-    await execNft([
-      "insert",
-      "rule",
-      TABLE_FAMILY,
-      TABLE_NAME,
-      chain,
-      "position",
-      "0",
-      "tcp",
-      "dport",
-      String(port),
-      "accept",
-      "comment",
-      comment,
-    ]);
+    await execNft(["insert", "rule", TABLE_FAMILY, TABLE_NAME, chain, "tcp", "dport", String(port), "accept", "comment", comment]);
   }
 }
 
@@ -358,20 +224,12 @@ export async function getBlockedIps(): Promise<Set<string>> {
 
 async function addElementUnlocked(table: string, setName: string, value: string): Promise<void> {
   const args = ["add", "element", TABLE_FAMILY, table, setName, `{ ${value} }`];
-  try {
-    await execNft(args);
-  } catch (error) {
-    if (!isAlreadyExists(error)) throw error;
-  }
+  try { await execNft(args); } catch (error) { if (!isAlreadyExists(error)) throw error; }
 }
 
 async function deleteElementUnlocked(table: string, setName: string, value: string): Promise<void> {
   const args = ["delete", "element", TABLE_FAMILY, table, setName, `{ ${value} }`];
-  try {
-    await execNft(args);
-  } catch (error) {
-    if (!isMissingElement(error)) throw error;
-  }
+  try { await execNft(args); } catch (error) { if (!isMissingElement(error)) throw error; }
 }
 
 async function blockIpUnlocked(ip: string): Promise<void> {
@@ -382,9 +240,7 @@ async function blockIpUnlocked(ip: string): Promise<void> {
   if (vpnBlockedIpGuardEnabled) await syncVpnBlockedIpUnlocked(validatedIp);
 }
 
-export async function blockIp(ip: string): Promise<void> {
-  await withMutationLock(() => blockIpUnlocked(ip));
-}
+export async function blockIp(ip: string): Promise<void> { await withMutationLock(() => blockIpUnlocked(ip)); }
 
 export async function unblockIp(ip: string): Promise<void> {
   await withMutationLock(async () => {
