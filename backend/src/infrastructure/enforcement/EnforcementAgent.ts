@@ -12,13 +12,17 @@ const setupSnapshotDir = resolve(process.env.SETUP_SNAPSHOT_DIR ?? "/var/lib/net
 const nftablesConfigPath = resolve(process.env.NFTABLES_CONFIG_PATH ?? "/etc/nftables.d/network-control-system.nft");
 const clientInterface = process.env.CLIENT_INTERFACE ?? "";
 const uplinkInterface = process.env.UPLINK_INTERFACE ?? "";
+const vpnTunInterface = process.env.VPN_TUN_INTERFACE ?? "";
 const allowedSystemctlUnits = new Set(["sing-box", "dnsmasq", "network-control-enforcement.service", "network-control-backend.service", vpnConfigInstallUnit]);
 const allowed = new Set(["nft", "tc", "ip", "systemctl", "sing-box", "write-sing-box-config"]);
 const local = new LinuxSystemCommandExecutor(true);
 const backgroundRead = new LinuxSystemCommandExecutor(true, 1_000);
 type Request = { command: string; args: string[] };
 type Job = () => Promise<void>;
-function ifaceAllowed(value: string): boolean { return value === "ifb0" || value === clientInterface || value === uplinkInterface; }
+
+function ifaceAllowed(value: string): boolean {
+  return value === "ifb0" || value === clientInterface || value === uplinkInterface || value === vpnTunInterface;
+}
 function validInterface(value: string): boolean { return /^[a-zA-Z0-9_.:-]{1,32}$/.test(value) && ifaceAllowed(value); }
 function validSnapshotPath(value: string): boolean { const path = resolve(value); return path.startsWith(`${setupSnapshotDir}/`) && path.endsWith("/nftables.bak"); }
 function validNftablesConfigPath(value: string): boolean { return resolve(value) === nftablesConfigPath; }
@@ -27,8 +31,19 @@ function validSubnetCidr(value: string): boolean { const match = value.match(/^(
 function validPort(value: string): boolean { return /^[1-9][0-9]{0,4}$/.test(value) && Number(value) <= 65535; }
 function validRuleHandle(value: string): boolean { return /^[1-9][0-9]*$/.test(value); }
 function validRulePosition(value: string): boolean { return /^[0-9]+$/.test(value); }
-function validComment(value: string): boolean { return ["ayad_nm_allow_ssh_management", "ayad_nm_allow_dashboard_management", "ayad_nm_blocked_macs", "ayad_nm_blocked_ips", "ayad_nm_single_interface_nat"].includes(value); }
+function validComment(value: string): boolean {
+  return [
+    "ayad_nm_allow_ssh_management",
+    "ayad_nm_allow_dashboard_management",
+    "ayad_nm_blocked_macs",
+    "ayad_nm_blocked_ips",
+    "ayad_nm_single_interface_nat",
+    "ayad_nm_vpn_nat",
+    "ayad_nm_vpn_fail_closed",
+  ].includes(value);
+}
 function validAccountingCounterName(value: string): boolean { return /^dev_(download|upload)_[0-9a-f]{12}$/.test(value); }
+
 function validAccountingRule(args: string[]): boolean {
   if (args[2] !== "inet" || args[3] !== "ayad_nm" || args[4] !== "accounting") return false;
   if (args[0] === "delete") return args.length === 7 && args[1] === "rule" && args[5] === "handle" && validRuleHandle(args[6]!);
@@ -53,40 +68,67 @@ function validAccountingRule(args: string[]): boolean {
   if (!match) return false;
   return validInterface(expression[1]!) && validIpv4(expression[4]!);
 }
+
 function validManagedNftRule(args: string[]): boolean {
   const op = args[0];
   if (!["add", "insert", "delete", "replace"].includes(op ?? "") || args[1] !== "rule" || args[2] !== "ip") return false;
   const table = args[3];
   const chain = args[4];
+
   if (table === "filter" && (chain === "INPUT" || chain === "FORWARD")) {
     if (op === "delete") return args.length === 7 && args[5] === "handle" && validRuleHandle(args[6]!);
     if (op === "replace") return args.length >= 8 && args[5] === "handle" && validRuleHandle(args[6]!) && validComment(args.at(-1)!);
     const positionIndex = args.indexOf("position");
     if (positionIndex >= 0 && (positionIndex !== 5 || !validRulePosition(args[6]!))) return false;
     const start = positionIndex >= 0 ? 7 : 5;
+
     if (chain === "INPUT") {
-      return (op === "add" || op === "insert") && args.length === start + 6 && args[start] === "tcp" && args[start + 1] === "dport" && validPort(args[start + 2]!) && args[start + 3] === "accept" && args[start + 4] === "comment" && ["ayad_nm_allow_ssh_management", "ayad_nm_allow_dashboard_management"].includes(args[start + 5]!);
+      return (op === "add" || op === "insert") && args.length === start + 6 &&
+        args[start] === "tcp" && args[start + 1] === "dport" && validPort(args[start + 2]!) &&
+        args[start + 3] === "accept" && args[start + 4] === "comment" &&
+        ["ayad_nm_allow_ssh_management", "ayad_nm_allow_dashboard_management"].includes(args[start + 5]!);
     }
+
     if (op !== "add" && op !== "insert") return false;
-    if (args.length !== start + 6 || args[start + 4] !== "comment") return false;
-    if (args[start] === "ether" && args[start + 1] === "saddr" && args[start + 2] === "@blocked_macs" && args[start + 3] === "drop") return args[start + 5] === "ayad_nm_blocked_macs";
-    if (args[start] === "ip" && args[start + 1] === "saddr" && args[start + 2] === "@blocked_ips" && args[start + 3] === "drop") return args[start + 5] === "ayad_nm_blocked_ips";
+    if (args[start] === "ether" && args[start + 1] === "saddr" && args[start + 2] === "@blocked_macs" && args[start + 3] === "drop") {
+      return args.length === start + 6 && args[start + 4] === "comment" && args[start + 5] === "ayad_nm_blocked_macs";
+    }
+    if (args[start] === "ip" && args[start + 1] === "saddr" && args[start + 2] === "@blocked_ips" && args[start + 3] === "drop") {
+      return args.length === start + 6 && args[start + 4] === "comment" && args[start + 5] === "ayad_nm_blocked_ips";
+    }
+    if (chain === "FORWARD" && args[start] === "ip" && args[start + 1] === "saddr" && validSubnetCidr(args[start + 2]!) &&
+        args[start + 3] === "oifname" && args[start + 4] === uplinkInterface && args[start + 5] === "drop" &&
+        args[start + 6] === "comment" && args[start + 7] === "ayad_nm_vpn_fail_closed") {
+      return args.length === start + 8 && !!uplinkInterface;
+    }
     return false;
   }
+
   if (table === "nat" && chain === "POSTROUTING") {
     if (op === "delete") return args.length === 7 && args[5] === "handle" && validRuleHandle(args[6]!);
     if (op !== "add" && op !== "insert") return false;
     const positionIndex = args.indexOf("position");
     if (positionIndex >= 0 && (positionIndex !== 5 || !validRulePosition(args[6]!))) return false;
     const start = positionIndex >= 0 ? 7 : 5;
-    return args.length === start + 8 && args[start] === "ip" && args[start + 1] === "saddr" && validSubnetCidr(args[start + 2]!) && args[start + 3] === "oifname" && validInterface(args[start + 4]!) && args[start + 5] === "masquerade" && args[start + 6] === "comment" && args[start + 7] === "ayad_nm_single_interface_nat";
+    if (args.length !== start + 8 || args[start] !== "ip" || args[start + 1] !== "saddr" || !validSubnetCidr(args[start + 2]!) ||
+        args[start + 3] !== "oifname" || args[start + 5] !== "masquerade" || args[start + 6] !== "comment") return false;
+    const egress = args[start + 4];
+    const comment = args[start + 7];
+    if (comment === "ayad_nm_single_interface_nat") return egress === uplinkInterface && !!uplinkInterface;
+    if (comment === "ayad_nm_vpn_nat") return egress === vpnTunInterface && !!vpnTunInterface;
+    return false;
   }
   return false;
 }
-function isNftMutation(args: string[]): boolean { return args[0] !== "-c" && args[0] !== "-j" && args[0] !== "-a" && ["add", "insert", "delete", "replace", "flush", "reset", "-f"].includes(args[0] ?? ""); }
+
+function isNftMutation(args: string[]): boolean {
+  return args[0] !== "-c" && args[0] !== "-j" && args[0] !== "-a" && ["add", "insert", "delete", "replace", "flush", "reset", "-f"].includes(args[0] ?? "");
+}
+
 function valid(command: string, args: string[]): boolean {
   if (!allowed.has(command) || args.length > 64 || args.some((arg) => typeof arg !== "string" || arg.length > 512 || /\0/.test(arg))) return false;
   if (command !== "write-sing-box-config" && args.some((arg) => /[\r\n]/.test(arg))) return false;
+
   if (command === "systemctl") {
     if (args[0] === "daemon-reload") return args.length === 1;
     if (!["start", "stop", "restart", "enable", "is-active"].includes(args[0] ?? "")) return false;
@@ -95,8 +137,12 @@ function valid(command: string, args: string[]): boolean {
   }
   if (command === "sing-box") return args.length === 3 && args[0] === "check" && args[1] === "-c" && args[2] === vpnConfigStagePath;
   if (command === "write-sing-box-config") return args.length >= 2 && args[0] === vpnConfigPath && args.slice(1).every((arg) => arg.length <= 512 && !/[\r\n]/.test(arg));
+
   if (command === "ip") {
-    if (args[0] === "neigh" || (args[0] === "-j" && args[1] === "neigh")) { const o = args[0] === "-j" ? 1 : 0; return args[o] === "neigh" && args[o + 1] === "show" && args[o + 2] === "dev" && !!args[o + 3] && validInterface(args[o + 3]!); }
+    if (args[0] === "neigh" || (args[0] === "-j" && args[1] === "neigh")) {
+      const o = args[0] === "-j" ? 1 : 0;
+      return args[o] === "neigh" && args[o + 1] === "show" && args[o + 2] === "dev" && !!args[o + 3] && validInterface(args[o + 3]!);
+    }
     if (args[0] === "-j" && args[1] === "link" && args[2] === "show") return args.length === 3;
     if (args[0] === "-j" && args[1] === "-4" && args[2] === "addr" && args[3] === "show") return args.length === 4 || (args.length === 6 && args[4] === "dev" && /^[a-zA-Z0-9_.:-]{1,32}$/.test(args[5]!));
     if (args[0] === "-j" && args[1] === "route" && args[2] === "show" && args[3] === "default") return args.length === 4;
@@ -106,8 +152,10 @@ function valid(command: string, args: string[]): boolean {
     if (args[0] === "link" && args[1] === "delete") return args.length === 5 && args[2] === "ifb0" && args[3] === "type" && args[4] === "ifb";
     return false;
   }
+
   if (command === "tc") {
-    const op = args[0]; if (!["qdisc", "class", "filter"].includes(op ?? "")) return false;
+    const op = args[0];
+    if (!["qdisc", "class", "filter"].includes(op ?? "")) return false;
     const devIndex = args.indexOf("dev");
     if (devIndex >= 0 && (!args[devIndex + 1] || !validInterface(args[devIndex + 1]!))) return false;
     if (op === "qdisc" && args[1] === "show") return devIndex >= 0 && args.length <= 5;
@@ -116,6 +164,7 @@ function valid(command: string, args: string[]): boolean {
     if (!["add", "change", "del"].includes(args[1] ?? "") || devIndex < 0) return false;
     return args.every((arg) => !/[;{}]/.test(arg));
   }
+
   if (command === "nft") {
     if (args[0] === "-c") return valid("nft", args.slice(1));
     if (args[0] === "-f") return args.length === 2 && (validSnapshotPath(args[1]!) || validNftablesConfigPath(args[1]!));
@@ -151,33 +200,70 @@ function valid(command: string, args: string[]): boolean {
   }
   return false;
 }
+
 function isBackgroundRead(command: string, args: string[]): boolean {
   if (command === "nft" || command === "sing-box" || command === "write-sing-box-config" || command === "systemctl") return false;
   if (command === "tc") return (args[0] === "filter" && args[1] === "show") || (args[0] === "class" && args[1] === "show") || (args[0] === "qdisc" && args[1] === "show");
   if (command === "ip") return (args[0] === "neigh" && args[1] === "show") || (args[0] === "-j" && args[1] === "neigh") || (args[0] === "-j" && args[1] === "link") || (args[0] === "-j" && args[1] === "-4") || (args[0] === "-j" && args[1] === "route") || (args[0] === "link" && args[1] === "show");
   return false;
 }
+
 class EnforcementScheduler {
-  private running = false; private readonly priority: Job[] = []; private readonly background: Job[] = [];
+  private running = false;
+  private readonly priority: Job[] = [];
+  private readonly background: Job[] = [];
   constructor(private readonly maxBackgroundQueue = 8, private readonly maxPriorityQueue = 64) {}
-  enqueue(job: Job, background: boolean): void { const queue = background ? this.background : this.priority; const limit = background ? this.maxBackgroundQueue : this.maxPriorityQueue; if (queue.length >= limit) throw new Error(background ? "background enforcement queue overloaded" : "enforcement queue overloaded"); queue.push(job); void this.drain(); }
-  private async drain(): Promise<void> { if (this.running) return; this.running = true; try { while (this.priority.length || this.background.length) { const job = this.priority.shift() ?? this.background.shift(); if (!job) continue; try { await job(); } catch (error) { console.error("enforcement job failed", error instanceof Error ? error.message : String(error)); } } } finally { this.running = false; if (this.priority.length || this.background.length) void this.drain(); } }
+  enqueue(job: Job, background: boolean): void {
+    const queue = background ? this.background : this.priority;
+    const limit = background ? this.maxBackgroundQueue : this.maxPriorityQueue;
+    if (queue.length >= limit) throw new Error(background ? "background enforcement queue overloaded" : "enforcement queue overloaded");
+    queue.push(job);
+    void this.drain();
+  }
+  private async drain(): Promise<void> {
+    if (this.running) return;
+    this.running = true;
+    try {
+      while (this.priority.length || this.background.length) {
+        const job = this.priority.shift() ?? this.background.shift();
+        if (!job) continue;
+        try { await job(); } catch (error) { console.error("enforcement job failed", error instanceof Error ? error.message : String(error)); }
+      }
+    } finally {
+      this.running = false;
+      if (this.priority.length || this.background.length) void this.drain();
+    }
+  }
 }
+
 const scheduler = new EnforcementScheduler();
+
 async function writeSingBoxConfig(args: string[]): Promise<void> {
-  const target = args[0]; if (target !== vpnConfigPath) throw new Error("sing-box config path rejected");
-  const content = args.slice(1).join(""); if (!content || content.length > 32 * 1024) throw new Error("sing-box config payload rejected");
+  const target = args[0];
+  if (target !== vpnConfigPath) throw new Error("sing-box config path rejected");
+  const content = args.slice(1).join("");
+  if (!content || content.length > 32 * 1024) throw new Error("sing-box config payload rejected");
   try { JSON.parse(content); } catch { throw new Error("sing-box config must be valid JSON"); }
-  try { await fs.writeFile(vpnConfigStagePath, content, { encoding: "utf8", mode: 0o600 }); await fs.chmod(vpnConfigStagePath, 0o600); await local.execute("sing-box", ["check", "-c", vpnConfigStagePath]); await local.execute("systemctl", ["start", vpnConfigInstallUnit]); }
-  catch (error) { try { await fs.rm(vpnConfigStagePath, { force: true }); } catch {} throw error; }
+  try {
+    await fs.writeFile(vpnConfigStagePath, content, { encoding: "utf8", mode: 0o600 });
+    await fs.chmod(vpnConfigStagePath, 0o600);
+    await local.execute("sing-box", ["check", "-c", vpnConfigStagePath]);
+    await local.execute("systemctl", ["start", vpnConfigInstallUnit]);
+  } catch (error) {
+    try { await fs.rm(vpnConfigStagePath, { force: true }); } catch {}
+    throw error;
+  }
   await fs.rm(vpnConfigStagePath, { force: true });
 }
+
 function isDeferredRestart(command: string, args: string[]): boolean {
   return command === "systemctl" && args[0] === "restart" && (args.includes("network-control-enforcement.service") || args.includes("network-control-backend.service"));
 }
+
 try { unlinkSync(socketPath); } catch {}
 const server = createServer((socket) => {
-  let input = ""; let handled = false;
+  let input = "";
+  let handled = false;
   const send = (payload: object): void => { if (!socket.destroyed) socket.end(`${JSON.stringify(payload)}\n`); };
   const executeRequest = async (request: Request, background: boolean): Promise<void> => {
     try {
