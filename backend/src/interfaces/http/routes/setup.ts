@@ -74,11 +74,13 @@ async function markSetupComplete(value: boolean): Promise<void> {
 
 function restartAfterResponse(reply: FastifyReply, service: SetupService): void {
   reply.raw.once("finish", () => {
-    void service.restartBackend().catch((error) => {
-      // The response is already committed. Keep the failure in the server log
-      // instead of turning a successful setup response into a fetch error.
-      reply.log.error({ error }, "Failed to restart backend after setup response");
-    });
+    setTimeout(() => {
+      void service.restartBackend().catch((error) => {
+        // The response is already committed. Keep the failure in the server log
+        // instead of turning a successful setup response into a fetch error.
+        reply.log.error({ error }, "Failed to restart backend after setup response");
+      });
+    }, 2000);
   });
 }
 
