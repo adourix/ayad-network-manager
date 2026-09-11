@@ -85,7 +85,8 @@ function SetupPage() {
     setClientInterface(name);
     const item = interfaces.find((candidate) => candidate.name === name);
     const address = item?.addresses.find((value) => value.includes("/")) ?? "";
-    setClientSubnet(address);
+    const subnet = network.data?.uplinkSubnets[name]?.[0] ?? address;
+    setClientSubnet(subnet);
     setGateway(address.split("/")[0] ?? "");
   };
 
@@ -100,9 +101,6 @@ function SetupPage() {
     : "Detect the gateway network, validate prerequisites, review the configuration, then apply the Single-Interface + IFB setup.";
 
   const finish = () => {
-    // Settings is served outside the authenticated React Router tree. Return to
-    // the current origin's root instead of rewriting the port from the form;
-    // this keeps reverse-proxy/custom-port deployments working as well.
     window.location.assign(reconfigure ? "/" : "/login");
   };
 
@@ -130,15 +128,15 @@ function SetupPage() {
 
         {step === 0 && (
           <section className="setup-card">
-            <div className="setup-card-head"><div><span className="setup-eyebrow">STEP 01</span><h2>System preflight</h2><p>Nothing is changed until the prerequisites pass.</p></div>{preflight.isFetching && <span className="setup-loading">Checking…</span>}</div>
+            <div className="setup-card-head"><div><span className="setup-eyebrow">STEP 01</span><h2>System preflight</h2><p>Nothing is changed until the required prerequisites pass.</p></div>{preflight.isFetching && <span className="setup-loading">Checking…</span>}</div>
             <div className="setup-check-grid">
               {[
-                ["Root privileges", Boolean(preflight.data?.root)],
-                ["Port 53 available", Boolean(preflight.data?.port53Free)],
-                ["IFB kernel module", Boolean(preflight.data?.ifbAvailable)],
-                ["Firewall manager", !preflight.data?.firewallManager],
-                ["System time synchronized", Boolean(preflight.data?.timeSynchronized)],
-              ].map(([label, ok]) => <div className="setup-check-row" key={String(label)}><Check ok={Boolean(ok)}/><span>{label}</span><small>{ok ? "Ready" : label === "Port 53 available" ? "DNS listener detected; DHCP-only mode is supported" : "Needs attention"}</small></div>)}
+                ["Root privileges", Boolean(preflight.data?.root), preflight.data?.root ? "Ready" : "Needs attention"],
+                ["Port 53 available (optional)", true, preflight.data?.port53Free ? "Available" : "Occupied; DHCP-only mode will use port 0"],
+                ["IFB kernel module", Boolean(preflight.data?.ifbAvailable), preflight.data?.ifbAvailable ? "Ready" : "Needs attention"],
+                ["Firewall manager", !preflight.data?.firewallManager, preflight.data?.firewallManager ? "Needs attention" : "Ready"],
+                ["System time synchronized", Boolean(preflight.data?.timeSynchronized), preflight.data?.timeSynchronized ? "Ready" : "Needs attention"],
+              ].map(([label, ok, status]) => <div className="setup-check-row" key={String(label)}><Check ok={Boolean(ok)}/><span>{label}</span><small>{String(status)}</small></div>)}
             </div>
             {preflight.data?.errors.map((item) => <div className="setup-warning" key={item}>{item}</div>)}
             <div className="setup-actions"><button className="setup-primary" disabled={!preflightOk} onClick={() => setStep(1)}>Continue to network</button></div>
@@ -176,7 +174,7 @@ function SetupPage() {
               <label>SSH port<input type="number" min="1" max="65535" value={sshPort} onChange={(event) => setSshPort(event.target.value)}/></label>
               <label>DNS servers<input value={dnsServers} onChange={(event) => setDnsServers(event.target.value)} placeholder="1.1.1.1,8.8.8.8"/></label>
             </div>
-            <div className="setup-note"><b>Single-Interface + IFB</b><span>Download shaping uses the client destination IP; upload shaping uses IFB with the client source IP.</span></div>
+            <div className="setup-note"><b>Single-Interface + IFB</b><span>Download shaping uses the client destination IP; upload shaping uses IFB with the client source IP. DHCP uses port 0, so an existing DNS listener on port 53 does not block setup.</span></div>
             {error && <div className="setup-error">{error}</div>}
             <div className="setup-actions"><button className="setup-secondary" onClick={() => setStep(1)}>Back</button><button className="setup-primary" disabled={!formReady} onClick={() => { setError(""); setStep(3); }}>Review and apply</button></div>
           </section>
@@ -188,7 +186,7 @@ function SetupPage() {
               <div>
                 <span className="setup-eyebrow">STEP 04</span>
                 <h2>{apply.isSuccess ? "Setup applied" : "Apply configuration"}</h2>
-                <p>{apply.isSuccess ? "The gateway configuration has been applied and persisted." : "The backend will render the OS configuration, persist runtime values to /etc/network-control-system/config.env, activate services, and run the setup health checks."}</p>
+                <p>{apply.isSuccess ? "The gateway configuration has been applied and persisted. The backend will reload after this response is delivered." : "The backend will render the OS configuration, persist runtime values to /etc/network-control-system/config.env, activate services, and run the setup health checks."}</p>
               </div>
               {apply.isPending && <span className="setup-loading">Applying…</span>}
             </div>
@@ -207,9 +205,9 @@ function SetupPage() {
             {apply.isSuccess && apply.data && (
               <div className="setup-check-grid">
                 <div className="setup-check-row"><Check ok={apply.data.health.clientInterface}/><span>Client interface</span><small>{apply.data.health.clientInterface ? "Ready" : "Failed"}</small></div>
-                <div className="setup-check-row"><Check ok={apply.data.health.gatewayReachable}/><span>Gateway reachability</span><small>{apply.data.health.gatewayReachable ? "Ready" : "Failed"}</small></div>
-                <div className="setup-check-row"><Check ok={apply.data.health.dhcpLeaseFile}/><span>DHCP lease</span><small>{apply.data.health.dhcpLeaseFile ? "Issued" : "Failed"}</small></div>
-                <div className="setup-check-row"><Check ok={apply.data.health.outboundConnectivity}/><span>Outbound connectivity</span><small>{apply.data.health.outboundConnectivity ? "Ready" : "Failed"}</small></div>
+                <div className="setup-check-row"><Check ok={apply.data.health.gatewayReachable}/><span>Gateway address and route</span><small>{apply.data.health.gatewayReachable ? "Ready" : "Failed"}</small></div>
+                <div className="setup-check-row"><Check ok={apply.data.health.dhcpLeaseFile}/><span>DHCP lease database</span><small>{apply.data.health.dhcpLeaseFile ? "Ready" : "Failed"}</small></div>
+                <div className="setup-check-row"><Check ok={apply.data.health.outboundConnectivity}/><span>Gateway outbound connectivity</span><small>{apply.data.health.outboundConnectivity ? "Ready" : "Failed"}</small></div>
               </div>
             )}
 
