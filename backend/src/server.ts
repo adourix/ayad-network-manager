@@ -99,7 +99,7 @@ const quotaPeriodRepository = new PrismaQuotaPeriodRepository();
 const quotaService = new QuotaService(deviceRepository, policyRepository, trafficEnforcementService, firewallService, notificationRepository, quotaPeriodRepository);
 const trafficUsageReader = new NftTrafficUsageReader({ mode: config.network.networkMode, clientInterface: config.network.clientInterface, uplinkInterface: null, clientSubnet: config.network.clientSubnet }, systemCommandExecutor);
 const trafficSampleRepository = new PrismaTrafficSampleRepository(); const trafficAccountingService = new TrafficAccountingService(deviceRepository, discoveryService, trafficUsageReader, trafficSampleRepository, quotaService);
-const trafficReconciliationService = new TrafficReconciliationService(deviceRepository, policyRepository, trafficEnforcer);
+const trafficReconciliationService = new TrafficReconciliationService(deviceRepository, policyRepository, trafficEnforcer, config.network.quotaThrottleMbps);
 await deviceRoutes(app, deviceService, devicePolicyService, firewallService, liveMonitoringService, trafficEnforcementService, quotaService, trafficAccountingService, trafficSampleRepository);
 const portRuleEnforcer = new NftPortRuleEnforcer(systemCommandExecutor, operationsRepository); await policyCatalogRoutes(app, new PolicyCatalogService(policyCatalogRepository, deviceRepository, portRuleEnforcer));
 await operationsRoutes(app, new OperationsService(operationsRepository));
