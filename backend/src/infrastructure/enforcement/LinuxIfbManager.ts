@@ -50,7 +50,6 @@ export class LinuxIfbManager implements IfbManager {
     for (const priority of stalePriorities) await this.deleteRedirectFilter(interfaceName, priority);
   }
 
-  // Compatibility API for older tests/deployments. Current enforcement uses upload redirects.
   async ensureDownloadRedirect(interfaceName: string, downloadIp: string): Promise<void> {
     await this.ensureRedirect(interfaceName, downloadIp, "dst");
   }
@@ -82,15 +81,12 @@ export class LinuxIfbManager implements IfbManager {
 
     const existing = matching.find((filter) => filter.device === IFB_NAME);
     if (existing) {
-      // Remove duplicate filters for the same target/direction while keeping one valid IFB redirect.
       for (const duplicate of matching) {
         if (duplicate.priority !== existing.priority) await this.deleteRedirectFilter(interfaceName, duplicate.priority);
       }
       return;
     }
 
-    // A matching filter with a different target is stale/conflicting. Remove it
-    // before installing the desired IFB redirect instead of creating duplicates.
     for (const conflict of matching) await this.deleteRedirectFilter(interfaceName, conflict.priority);
 
     const remainingFilters = filters.filter((filter) => !matching.some((match) => match.priority === filter.priority));
@@ -121,11 +117,6 @@ export class LinuxIfbManager implements IfbManager {
 
   private async ensureIngressQdisc(interfaceName: string): Promise<void> {
     const result = await this.executor.execute("tc", ["qdisc", "show", "dev", interfaceName]);
-    // `tc qdisc show dev ...` normally reports the ingress qdisc as
-    // `qdisc ingress ffff: parent ffff:fff1 ...`; it does not include `dev`
-    // in that line. The previous matcher therefore failed to recognize an
-    // existing ingress qdisc and attempted a duplicate `add`, which tc rejects
-    // with `Exclusivity flag on, cannot modify.`.
     if (/\bqdisc\s+ingress\s+ffff:/i.test(result.stdout)) return;
     await this.executor.execute("tc", ["qdisc", "add", "dev", interfaceName, "handle", "ffff:", "ingress"]);
   }
@@ -200,7 +191,8 @@ export class LinuxIfbManager implements IfbManager {
 
   private isMissingIngressQdiscError(error: unknown): boolean {
     const message = this.errorMessage(error).toLowerCase();
-    return message.includes("cannot find ingress") ||
+    return message.includes("invalid handle") ||
+      message.includes("cannot find ingress") ||
       (message.includes("ingress qdisc") && message.includes("not found")) ||
       message.includes("no such file or directory") ||
       (message.includes("cannot delete qdisc") && message.includes("not found"));
