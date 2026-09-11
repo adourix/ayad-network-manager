@@ -26,7 +26,7 @@ function validSnapshotPath(value: string): boolean { const path = resolve(value)
 function validNftablesConfigPath(value: string): boolean { return resolve(value) === nftablesConfigPath; }
 function validIpv4(value: string): boolean { const parts = value.split("."); return parts.length === 4 && parts.every((part) => /^(0|[1-9][0-9]{0,2})$/.test(part) && Number(part) <= 255); }
 function validSubnetCidr(value: string): boolean { const match = value.match(/^(\d{1,3}(?:\.\d{1,3}){3})\/(\d{1,2})$/); return !!match && validIpv4(match[1]!) && Number(match[2]) <= 32; }
-function validClientAddress(value: string): boolean { const match = value.match(/^(\d{1,3}(?:\.\d{1,3}){3})\/(\d{1,2})$/); if (!match || !validIpv4(match[1]!)) return false; if (!clientSubnet) return false; const prefix = Number(match[2]); return prefix === Number(clientSubnet.split("/")[1]) && sameNetwork(match[1]!, clientSubnet); }
+function validClientAddress(value: string): boolean { const match = value.match(/^(\d{1,3}(?:\.\d{1,3}){3})\/(\d{1,2})$/); return !!match && validIpv4(match[1]!) && Number(match[2]) <= 32; }
 function ipv4ToNumber(value: string): number { return value.split(".").map(Number).reduce((n, octet) => (n * 256) + octet, 0) >>> 0; }
 function sameNetwork(ip: string, subnet: string): boolean { const match = subnet.match(/^(\d{1,3}(?:\.\d{1,3}){3})\/(\d{1,2})$/); if (!match || !validIpv4(ip) || !validIpv4(match[1]!)) return false; const bits = Number(match[2]); const mask = bits === 0 ? 0 : (0xffffffff << (32 - bits)) >>> 0; return (ipv4ToNumber(ip) & mask) === (ipv4ToNumber(match[1]!) & mask); }
 function validPort(value: string): boolean { return /^[1-9][0-9]{0,4}$/.test(value) && Number(value) <= 65535; }
