@@ -40,22 +40,17 @@ export class SetupService {
     const root = this.isRoot();
     const port = await this.safe("ss", ["-H", "-lun", "sport", "=", ":53"]);
     const port53Free = port.stdout.trim() === "";
-
-    // IFB may already be loaded. Only try modprobe when it is not present.
     const moduleLoaded = await this.safe("test", ["-e", "/sys/module/ifb"]);
     const ifb = moduleLoaded.ok ? moduleLoaded : await this.safe("modprobe", ["ifb"]);
     const ifbAvailable = ifb.ok;
-
     const ufw = await this.safe("ufw", ["status"]);
     const firewallManager = ufw.ok && /Status:\s+active/i.test(ufw.stdout) ? "ufw" : null;
     const timed = await this.safe("timedatectl", ["show", "-p", "NTPSynchronized", "--value"]);
     const timeSynchronized = timed.stdout.trim() === "yes";
-
     if (!root) errors.push("root privileges are required; run the backend as root for gateway setup");
     if (!ifbAvailable) errors.push("ifb kernel module is unavailable or could not be loaded");
     if (firewallManager) warnings.push("ufw is active; review it before applying nftables changes");
     if (!timeSynchronized) warnings.push("system clock is not synchronized");
-
     return { root, port53Free, ifbAvailable, firewallManager, timeSynchronized, errors, warnings };
   }
 
@@ -123,18 +118,19 @@ export class SetupService {
     const uplinkRanges = network.uplinkSubnets[input.uplinkInterface] ?? [];
     if (!uplinkRanges.length) selectionErrors.push("selected uplink interface has no IPv4 subnet");
     else if (!uplinkRanges.some((range) => networkOf(range) === networkOf(input.clientSubnet))) selectionErrors.push("client subnet must be the existing uplink subnet in Single-Interface + IFB mode");
-    const selectedInterface = network.interfaces.find((item) => item.name === input.uplinkInterface);
-    const gateway = deriveGateway(selectedInterface?.addresses ?? [], input.clientSubnet);
-    if (!gateway) selectionErrors.push("unable to derive CLIENT_GATEWAY_IP from the selected interface");
-    else if (!sameNetwork(gateway, input.clientSubnet)) selectionErrors.push("derived CLIENT_GATEWAY_IP must belong to CLIENT_SUBNET");
+    const gateway = input.clientGatewayIp ?? deriveGateway(network.uplinkSubnets[input.uplinkInterface] ?? [], input.clientSubnet);
+    if (!gateway) selectionErrors.push("unable to derive CLIENT_GATEWAY_IP from CLIENT_SUBNET");
+    else if (!sameNetwork(gateway, input.clientSubnet)) selectionErrors.push("CLIENT_GATEWAY_IP must belong to CLIENT_SUBNET");
     if (selectionErrors.length) return this.failed(selectionErrors);
     const preflight = await this.preflight();
     if (preflight.errors.length) return this.failed(preflight.errors);
 
     const snapshot = await this.snapshot();
     let health: SetupHealth | null = null;
+    let gatewayAdded = false;
     try {
       await this.installPrerequisites();
+      gatewayAdded = await this.ensureGatewayAddress(input.clientInterface, gateway!, input.clientSubnet);
       const rendered = this.render(input, gateway!);
       await this.writeAtomic(this.paths.configPath, rendered.config);
       await this.writeAtomic(this.paths.dnsmasqPath, rendered.dnsmasq);
@@ -154,6 +150,7 @@ export class SetupService {
       if (health.errors.length) throw new Error(health.errors.join("; "));
       return { applied: true, configPath: this.paths.configPath, renderedFiles: [this.paths.configPath, this.paths.dnsmasqPath, this.paths.nftablesPath, rendered.reservationsPath], health, rolledBack: false, errors: [] };
     } catch (error) {
+      if (gatewayAdded) await this.removeGatewayAddress(input.clientInterface, gateway!, input.clientSubnet);
       await this.rollback(snapshot);
       const message = error instanceof Error ? error.message : String(error);
       return {
@@ -221,6 +218,29 @@ export class SetupService {
     if (this.probe.restoreNft) try { await this.probe.restoreNft(join(snapshot, "nftables.bak")); } catch {}
   }
 
+  private async ensureGatewayAddress(client: string, gateway: string, subnet: string): Promise<boolean> {
+    const prefixLength = prefix(subnet);
+    const normalized = gateway.trim().replace(/\/.*$/, "");
+    const current = await this.safe("ip", ["-j", "-4", "addr", "show", "dev", client]);
+    if (!current.ok) throw new Error(`unable to inspect IPv4 addresses on ${client}: ${current.stderr}`);
+    try {
+      const parsed = JSON.parse(current.stdout) as unknown;
+      const rows = Array.isArray(parsed) ? parsed : [parsed];
+      const addresses = rows.flatMap((row: any) => Array.isArray(row.addr_info) ? row.addr_info.filter((a: any) => a.family === "inet").map((a: any) => String(a.local ?? "")) : []);
+      if (addresses.includes(normalized)) return false;
+    } catch {
+      throw new Error(`unable to parse IPv4 addresses on ${client}`);
+    }
+    const added = await this.safe("ip", ["addr", "add", `${normalized}/${prefixLength}`, "dev", client]);
+    if (!added.ok) throw new Error(`failed to configure client gateway ${normalized} on ${client}: ${added.stderr || "ip addr add failed"}`);
+    return true;
+  }
+
+  private async removeGatewayAddress(client: string, gateway: string, subnet: string): Promise<void> {
+    const normalized = gateway.trim().replace(/\/.*$/, "");
+    await this.safe("ip", ["addr", "del", `${normalized}/${prefix(subnet)}`, "dev", client]);
+  }
+
   private async health(client: string, gateway: string): Promise<SetupHealth> {
     const errors: string[] = [];
     const link = await this.safe("ip", ["-j", "-4", "addr", "show", "dev", client]);
@@ -239,7 +259,6 @@ export class SetupService {
       localAddresses = [...new Set(localAddresses)];
       clientInterface = link.ok && localAddresses.length > 0;
     } catch {}
-
     const normalizedGateway = gateway.trim().replace(/\/.*$/, "");
     const gatewayConfigured = clientInterface && localAddresses.some((address) => address === normalizedGateway);
     const gatewayRouteResult = gatewayConfigured ? await this.safe("ip", ["route", "get", normalizedGateway]) : null;
@@ -327,6 +346,7 @@ export class SetupService {
     if (!iface.test(input.clientInterface) || !iface.test(input.uplinkInterface)) errors.push("interface selections are invalid");
     const network = cidr.exec(input.clientSubnet);
     if (!network || prefix(input.clientSubnet) > 30 || network[1]!.split(".").some((part) => Number(part) > 255)) errors.push("clientSubnet must be a valid IPv4 network with prefix <= 30");
+    if (input.clientGatewayIp !== undefined && (!ipv4.test(input.clientGatewayIp) || input.clientGatewayIp.split(".").some((part) => Number(part) > 255))) errors.push("CLIENT_GATEWAY_IP must be a valid IPv4 address");
     if (input.vpnTunnelInterface && !iface.test(input.vpnTunnelInterface)) errors.push("VPN tunnel interface is invalid");
     for (const value of [input.vpnTunAddress, input.singBoxConfigPath, input.dhcpReservationsPath]) {
       if (value !== undefined && (!value.trim() || /[\r\n]/.test(value))) errors.push("setup path/address values must not be empty or contain newlines");
@@ -338,17 +358,10 @@ export class SetupService {
   }
 
   private async migrateLegacyDnsmasqConfig(): Promise<void> {
-    try {
-      await fs.access(LEGACY_DNSMASQ_PATH);
-    } catch {
-      return;
-    }
+    try { await fs.access(LEGACY_DNSMASQ_PATH); } catch { return; }
     const disabledPath = `${LEGACY_DNSMASQ_PATH}.disabled`;
-    try {
-      await fs.rename(LEGACY_DNSMASQ_PATH, disabledPath);
-    } catch (error) {
-      throw new Error(`failed to disable legacy dnsmasq configuration: ${error instanceof Error ? error.message : String(error)}`);
-    }
+    try { await fs.rename(LEGACY_DNSMASQ_PATH, disabledPath); }
+    catch (error) { throw new Error(`failed to disable legacy dnsmasq configuration: ${error instanceof Error ? error.message : String(error)}`); }
   }
 
   private async readJson(command: string, args: string[]) {
@@ -378,7 +391,9 @@ function networkOf(value: string): string | null {
   return `${network >>> 24}.${(network >>> 16) & 255}.${(network >>> 8) & 255}.${network & 255}/${bits}`;
 }
 function sameNetwork(ip: string, subnet: string): boolean { return networkOf(`${ip}/${prefix(subnet)}`) === networkOf(subnet); }
-function deriveGateway(addresses: string[], subnet: string): string | null { return addresses.find((address) => sameNetwork(address.split("/")[0]!, subnet))?.split("/")[0] ?? null; }
+function deriveGateway(addresses: string[], subnet: string): string | null {
+  return addresses.find((address) => sameNetwork(address.split("/")[0]!, subnet))?.split("/")[0] ?? null;
+}
 function dhcpRange(subnet: string): [string, string] {
   const network = networkOf(subnet);
   if (!network) throw new Error("Invalid subnet");
