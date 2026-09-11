@@ -155,8 +155,8 @@ function valid(command: string, args: string[]): boolean {
     }
     if (target === "rule" && args[2] === "inet" && args[3] === "ayad_nm" && args[4] === "accounting") return validAccountingRule(args);
     if (target === "set") {
-      if (args[0] === "delete") return args.length === 6 && args[2] === "ip" && args[3] === "filter" && (args[4] === "blocked_macs" || args[4] === "blocked_ips");
-      return args[0] === "add" && args.length === 9 && args[2] === "ip" && args[3] === "filter" && (args[4] === "blocked_macs" || args[4] === "blocked_ips") && args[5] === "{" && args[6] === "type" && (args[7] === "ether_addr" || args[7] === "ipv4_addr") && args[8] === "}";
+      if (args[0] !== "add" || args.length !== 10) return false;
+      return args[2] === "ip" && args[3] === "filter" && (args[4] === "blocked_macs" || args[4] === "blocked_ips") && args[5] === "{" && args[6] === "type" && (args[7] === "ether_addr" || args[7] === "ipv4_addr") && args[8] === ";" && args[9] === "}";
     }
     if (target === "element") {
       if (args.length !== 7 || args[2] !== "ip" || args[3] !== "filter" || !["blocked_macs", "blocked_ips"].includes(args[4]!)) return false;
