@@ -18,8 +18,16 @@ function numberFromEnv(name: string, fallback: number): number {
   return parsed;
 }
 function networkModeFromEnv(): "dual-interface" | "single-interface-ifb" {
-  const value = process.env.NETWORK_MODE ?? "single-interface-ifb";
-  if (value !== "dual-interface" && value !== "single-interface-ifb") throw new Error(`Invalid NETWORK_MODE: ${value}. Expected "dual-interface" or "single-interface-ifb".`);
+  const value = (process.env.NETWORK_MODE ?? "single-interface-ifb").trim().toLowerCase();
+  // Accept the setup wizard's persisted legacy spelling as well as the
+  // canonical values used internally. This module is imported before the
+  // bootstrap can decide whether setup mode is required, so an old persisted
+  // value must never crash the setup server.
+  if (value === "single_iface_ifb" || value === "single-iface-ifb") return "single-interface-ifb";
+  if (value === "dual_iface" || value === "dual_iface_ifb") return "dual-interface";
+  if (value !== "dual-interface" && value !== "single-interface-ifb") {
+    throw new Error(`Invalid NETWORK_MODE: ${process.env.NETWORK_MODE}. Expected "dual-interface" or "single-interface-ifb".`);
+  }
   return value;
 }
 
