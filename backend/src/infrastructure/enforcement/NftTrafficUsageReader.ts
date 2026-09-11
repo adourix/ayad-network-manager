@@ -56,17 +56,37 @@ export class NftTrafficUsageReader implements TrafficUsageReader {
 
     await this.ensureTable();
     const counters = await this.readCounters();
-    const rules = await this.readRules();
+    let rules = await this.readRules();
     await this.ensureDeviceCounters(normalizedMac, counters);
-    await this.ensureRuleWithState("download", normalizedMac, normalizedIp, this.counterName(normalizedMac, "download"), rules);
-    await this.ensureRuleWithState("upload", normalizedMac, normalizedIp, this.counterName(normalizedMac, "upload"), rules);
+    rules = await this.dedupeAccountingRules(rules);
+    await this.ensureRuleWithState(
+      "download",
+      normalizedMac,
+      normalizedIp,
+      this.counterName(normalizedMac, "download"),
+      rules,
+    );
+    rules = await this.readRules();
+    await this.ensureRuleWithState(
+      "upload",
+      normalizedMac,
+      normalizedIp,
+      this.counterName(normalizedMac, "upload"),
+      rules,
+    );
   }
 
   async reconcileDeviceAccounting(devices: TrafficUsageDevice[]): Promise<void> {
     await this.ensureTable();
 
     const counters = await this.readCounters();
-    const rules = await this.readRules();
+    let rules = await this.readRules();
+
+    // Repair the live accounting chain before applying desired state. Older
+    // versions appended the same named rule repeatedly, producing hundreds of
+    // duplicate rules. Keep exactly one rule per managed accounting comment.
+    rules = await this.dedupeAccountingRules(rules);
+
     const activeComments = new Set<string>();
 
     for (const device of devices) {
@@ -78,16 +98,52 @@ export class NftTrafficUsageReader implements TrafficUsageReader {
       activeComments.add(this.ruleComment(mac, "upload"));
 
       await this.ensureDeviceCounters(mac, counters);
-      await this.ensureRuleWithState("download", mac, ip, this.counterName(mac, "download"), rules);
-      await this.ensureRuleWithState("upload", mac, ip, this.counterName(mac, "upload"), rules);
+      await this.ensureRuleWithState(
+        "download",
+        mac,
+        ip,
+        this.counterName(mac, "download"),
+        rules,
+      );
+      rules = await this.readRules();
+      await this.ensureRuleWithState(
+        "upload",
+        mac,
+        ip,
+        this.counterName(mac, "upload"),
+        rules,
+      );
+      rules = await this.readRules();
     }
 
-    const finalRules = await this.readRules();
-    for (const rule of finalRules) {
+    // Remove accounting rules for devices that are no longer discovered.
+    // Keep counters themselves: named nft counters retain their accumulated
+    // values and can be reused if the device returns.
+    for (const rule of rules) {
       if (!rule.comment.startsWith("ayad_nm_")) continue;
       if (activeComments.has(rule.comment)) continue;
       await this.deleteRule(rule.handle);
     }
+  }
+
+  private async dedupeAccountingRules(rules: NftRule[]): Promise<NftRule[]> {
+    const kept = new Map<string, NftRule>();
+
+    for (const rule of rules) {
+      if (!rule.comment.startsWith("ayad_nm_")) continue;
+
+      const existing = kept.get(rule.comment);
+      if (!existing) {
+        kept.set(rule.comment, rule);
+        continue;
+      }
+
+      // Delete only the duplicate rule. The named counter is not deleted, so
+      // accumulated traffic totals remain intact.
+      await this.deleteRule(rule.handle);
+    }
+
+    return [...kept.values()];
   }
 
   private async ensureDeviceCounters(mac: string, counters: Map<string, bigint>): Promise<void> {
