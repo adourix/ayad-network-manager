@@ -56,7 +56,6 @@ function SetupPage() {
   const preflightOk = Boolean(preflight.data && preflight.data.errors.length === 0);
   const networkOk = Boolean(network.data && network.data.errors.length === 0 && interfaces.length > 0);
   const formReady = Boolean(clientInterface && uplinkInterface && clientSubnet && bandwidth && dashboardPort && sshPort && dnsServers.trim());
-  const setupApplied = Boolean(applyResultAppliedPlaceholder());
 
   const apply = useMutation({
     mutationFn: () => setupApi.apply({
@@ -228,10 +227,6 @@ function SetupPage() {
       </main>
     </div>
   );
-}
-
-function applyResultAppliedPlaceholder(): boolean {
-  return false;
 }
 
 export default SetupPage;
