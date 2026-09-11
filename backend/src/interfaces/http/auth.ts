@@ -1,4 +1,5 @@
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
+import { promises as fs } from "node:fs";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { prisma } from "../../infrastructure/database/prisma.js";
 
@@ -63,6 +64,16 @@ function tokenFrom(request: FastifyRequest): string | null {
   return cookieTokenFrom(request);
 }
 
+async function isSetupComplete(): Promise<boolean> {
+  const configPath = process.env.SYSTEM_CONFIG_PATH ?? "/etc/network-control-system/config.env";
+  try {
+    const content = await fs.readFile(configPath, "utf8");
+    return content.split(/\r?\n/).some((line) => line.trim() === "SETUP_COMPLETED=true");
+  } catch {
+    return false;
+  }
+}
+
 export async function validateSessionToken(token: string | null): Promise<boolean> {
   if (!token) return false;
   const session = await prisma.authSession.findUnique({
@@ -84,10 +95,14 @@ export function registerAuthentication(app: FastifyInstance): void {
     // /login and /setup must remain reachable so the SPA can render.
     if (!pathname.startsWith("/api/")) return;
 
-    // These API endpoints are intentionally public before authentication.
+    // Login, health, and setup status are always public.
     if (pathname === "/api/auth/login" ||
         pathname === "/api/health" ||
-        pathname.startsWith("/api/setup/")) return;
+        pathname === "/api/setup/status") return;
+
+    // The setup API is public only until the initial configuration is applied.
+    // After that, setup changes require an authenticated administrator session.
+    if (pathname.startsWith("/api/setup/") && !(await isSetupComplete())) return;
 
     if (!(await validateSessionToken(tokenFrom(request)))) {
       return reply.code(401).send({ error: "Authentication required" });
