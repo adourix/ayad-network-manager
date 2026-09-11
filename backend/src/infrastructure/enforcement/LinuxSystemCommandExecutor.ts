@@ -11,6 +11,7 @@ const execFileAsync = promisify(execFile);
 
 const COMMAND_TIMEOUT_MS = 5_000;
 const REMOTE_RESPONSE_TIMEOUT_MS = 7_000;
+const COMMAND_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
 
 export class LinuxSystemCommandExecutor implements SystemCommandExecutor {
   constructor(
@@ -46,6 +47,10 @@ export class LinuxSystemCommandExecutor implements SystemCommandExecutor {
     const { stdout, stderr } = await execFileAsync(executable, args, {
       timeout: this.timeoutMs,
       killSignal: "SIGKILL",
+      // Network-state inspection commands can legitimately return large JSON
+      // documents. The previous Node default (1 MiB) could kill the entire
+      // enforcement agent when a populated nftables state exceeded it.
+      maxBuffer: COMMAND_MAX_BUFFER_BYTES,
     });
 
     return { stdout, stderr };
