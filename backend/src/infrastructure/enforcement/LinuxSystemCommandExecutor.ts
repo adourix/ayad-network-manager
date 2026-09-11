@@ -11,6 +11,8 @@ const execFileAsync = promisify(execFile);
 
 const COMMAND_TIMEOUT_MS = 5_000;
 const REMOTE_RESPONSE_TIMEOUT_MS = 7_000;
+const REMOTE_CONNECT_RETRIES = 12;
+const REMOTE_CONNECT_RETRY_DELAY_MS = 250;
 const COMMAND_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
 
 export class LinuxSystemCommandExecutor implements SystemCommandExecutor {
@@ -56,13 +58,45 @@ export class LinuxSystemCommandExecutor implements SystemCommandExecutor {
     return { stdout, stderr };
   }
 
-  private executeRemote(
+  private async executeRemote(
+    socketPath: string,
+    command: string,
+    args: string[],
+  ): Promise<SystemCommandResult> {
+    let lastError: Error | undefined;
+
+    for (let attempt = 0; attempt < REMOTE_CONNECT_RETRIES; attempt += 1) {
+      try {
+        return await this.executeRemoteOnce(socketPath, command, args);
+      } catch (error) {
+        const failure = error instanceof Error ? error : new Error(String(error));
+        lastError = failure;
+
+        if (!this.isTransientSocketError(failure) || attempt === REMOTE_CONNECT_RETRIES - 1) {
+          throw failure;
+        }
+
+        await this.delay(REMOTE_CONNECT_RETRY_DELAY_MS);
+      }
+    }
+
+    throw lastError ?? new Error("failed to execute enforcement command");
+  }
+
+  private executeRemoteOnce(
     socketPath: string,
     command: string,
     args: string[],
   ): Promise<SystemCommandResult> {
     return new Promise((resolve, reject) => {
-      const socket = createConnection(socketPath);
+      let socket: ReturnType<typeof createConnection>;
+      try {
+        socket = createConnection(socketPath);
+      } catch (error) {
+        reject(error instanceof Error ? error : new Error(String(error)));
+        return;
+      }
+
       let data = "";
       let settled = false;
       let deadline: NodeJS.Timeout;
@@ -156,5 +190,15 @@ export class LinuxSystemCommandExecutor implements SystemCommandExecutor {
         );
       });
     });
+  }
+
+  private isTransientSocketError(error: Error): boolean {
+    const code = (error as NodeJS.ErrnoException).code;
+    return code === "ENOENT" || code === "ECONNREFUSED" || code === "EPIPE" ||
+      /enforcement socket closed before a response/i.test(error.message);
+  }
+
+  private delay(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 }
