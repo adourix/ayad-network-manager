@@ -26,12 +26,21 @@ function networkModeFromEnv(): "dual-interface" | "single-interface-ifb" {
 const dnsServers = (process.env.DNS_SERVERS ?? "1.1.1.1,8.8.8.8").split(",").map((value) => value.trim()).filter(Boolean);
 if (dnsServers.length === 0) throw new Error("DNS_SERVERS must contain at least one server");
 
-export const setupComplete = [
+// Setup completion is an explicit persisted state, not merely the presence of
+// optional runtime variables. The setup wizard writes SETUP_COMPLETED=true
+// only after the configuration and health checks succeed. Database settings
+// remain installer-owned and must also be present before the full control plane
+// can start.
+const gatewaySetupComplete = process.env.SETUP_COMPLETED?.toLowerCase() === "true";
+const databaseReady = ["DATABASE_URL", "DATABASE_USER", "DATABASE_PASSWORD", "DATABASE_NAME", "DATABASE_HOST"]
+  .every((name) => Boolean(process.env[name]));
+const networkSetupReady = [
   "CLIENT_INTERFACE", "UPLINK_INTERFACE", "CLIENT_GATEWAY_IP", "CLIENT_SUBNET",
   "UPLINK_BANDWIDTH_MBPS", "VPN_TUN_INTERFACE", "SING_BOX_CONFIG_PATH", "VPN_TUN_ADDRESS",
-  "DHCP_RESERVATIONS_PATH", "DHCP_LEASES_PATH", "DATABASE_URL", "DATABASE_USER", "DATABASE_PASSWORD",
-  "DATABASE_NAME", "DATABASE_HOST",
+  "DHCP_RESERVATIONS_PATH", "DHCP_LEASES_PATH",
 ].every((name) => Boolean(process.env[name]));
+
+export const setupComplete = gatewaySetupComplete && databaseReady && networkSetupReady;
 
 export const config = {
   nodeEnv: process.env.NODE_ENV ?? "development",
@@ -56,6 +65,7 @@ export const config = {
     quotaThrottleMbps: numberFromEnv("QUOTA_THROTTLE_MBPS", 0.5),
     vpnTunnelInterface: optional("VPN_TUN_INTERFACE"),
     vpnConfigPath: optional("SING_BOX_CONFIG_PATH"),
+    vpnTunAddress: optional("VPN_TUN_ADDRESS"),
     vpnTunAddress: optional("VPN_TUN_ADDRESS"),
     sshPort: numberFromEnv("SSH_PORT", 22),
     dnsServers,
