@@ -23,14 +23,18 @@ function validInterface(value: string): boolean { return /^[a-zA-Z0-9_.:-]{1,32}
 function validSnapshotPath(value: string): boolean { const path = resolve(value); return path.startsWith(`${setupSnapshotDir}/`) && path.endsWith("/nftables.bak"); }
 function validNftablesConfigPath(value: string): boolean { return resolve(value) === nftablesConfigPath; }
 function validIpv4(value: string): boolean { const parts = value.split("."); return parts.length === 4 && parts.every((part) => /^(0|[1-9][0-9]{0,2})$/.test(part) && Number(part) <= 255); }
+function validSubnetCidr(value: string): boolean { const match = value.match(/^(\d{1,3}(?:\.\d{1,3}){3})\/(\d{1,2})$/); if (!match) return false; return validIpv4(match[1]!) && Number(match[2]) <= 32; }
+function validPort(value: string): boolean { return /^[1-9][0-9]{0,4}$/.test(value) && Number(value) <= 65535; }
+function validRuleHandle(value: string): boolean { return /^[1-9][0-9]*$/.test(value); }
+function validComment(value: string): boolean { return ["ayad_nm_allow_ssh_management", "ayad_nm_allow_dashboard_management", "ayad_nm_blocked_macs", "ayad_nm_blocked_ips", "ayad_nm_single_interface_nat"].includes(value); }
 function validAccountingCounterName(value: string): boolean { return /^dev_(download|upload)_[0-9a-f]{12}$/.test(value); }
 function validAccountingRule(args: string[]): boolean {
   if (args[2] !== "inet" || args[3] !== "ayad_nm" || args[4] !== "accounting") return false;
-  if (args[0] === "delete") return args.length === 7 && args[1] === "rule" && args[5] === "handle" && /^[1-9][0-9]*$/.test(args[6]!);
+  if (args[0] === "delete") return args.length === 7 && args[1] === "rule" && args[5] === "handle" && validRuleHandle(args[6]!);
   if (args[0] !== "add" && args[0] !== "replace") return false;
   const offset = args[0] === "replace" ? 7 : 5;
   if (args[1] !== "rule") return false;
-  if (args[0] === "replace" && (args.length < 8 || args[5] !== "handle" || !/^[1-9][0-9]*$/.test(args[6]!))) return false;
+  if (args[0] === "replace" && (args.length < 8 || args[5] !== "handle" || !validRuleHandle(args[6]!))) return false;
   const expression = args.slice(offset);
   const counterIndex = expression.indexOf("counter");
   if (counterIndex < 0 || expression.length !== counterIndex + 5) return false;
@@ -50,6 +54,36 @@ function validAccountingRule(args: string[]): boolean {
   if (!validInterface(expression[1]!)) return false;
   if (!validIpv4(expression[4]!)) return false;
   return true;
+}
+function validManagedNftRule(args: string[]): boolean {
+  const op = args[0];
+  if (!["add", "insert", "delete", "replace"].includes(op ?? "") || args[1] !== "rule" || args[2] !== "ip") return false;
+  const table = args[3];
+  const chain = args[4];
+  if (table === "filter" && (chain === "INPUT" || chain === "FORWARD")) {
+    if (op === "delete") return args.length === 7 && args[5] === "handle" && validRuleHandle(args[6]!);
+    if (op === "replace") return args.length >= 8 && args[5] === "handle" && validRuleHandle(args[6]!) && validComment(args.at(-1)!);
+    const positionIndex = args.indexOf("position");
+    if (positionIndex >= 0 && (positionIndex !== 5 || !validRuleHandle(args[6]!))) return false;
+    if (chain === "INPUT") {
+      const start = positionIndex >= 0 ? 7 : 5;
+      return args.length === start + 7 && args[start] === "tcp" && args[start + 1] === "dport" && validPort(args[start + 2]!) && args[start + 3] === "accept" && args[start + 4] === "comment" && ["ayad_nm_allow_ssh_management", "ayad_nm_allow_dashboard_management"].includes(args[start + 5]!);
+    }
+    const start = positionIndex >= 0 ? 7 : 5;
+    if (args.length !== start + 6 || args[start + 4] !== "comment" || !validComment(args[start + 5]!)) return false;
+    if (args[start] === "ether" && args[start + 1] === "saddr" && args[start + 2] === "@blocked_macs" && args[start + 3] === "drop") return args[start + 5] === "ayad_nm_blocked_macs";
+    if (args[start] === "ip" && args[start + 1] === "saddr" && args[start + 2] === "@blocked_ips" && args[start + 3] === "drop") return args[start + 5] === "ayad_nm_blocked_ips";
+    return false;
+  }
+  if (table === "nat" && chain === "POSTROUTING") {
+    if (op === "delete") return args.length === 7 && args[5] === "handle" && validRuleHandle(args[6]!);
+    const start = args.indexOf("position") >= 0 ? 7 : 5;
+    const positionIndex = args.indexOf("position");
+    if (positionIndex >= 0 && (positionIndex !== 5 || !validRuleHandle(args[6]!))) return false;
+    if (op === "replace") return false;
+    return args.length === start + 10 && args[start] === "ip" && args[start + 1] === "saddr" && validSubnetCidr(args[start + 2]!) && args[start + 3] === "oifname" && validInterface(args[start + 4]!) && args[start + 5] === "masquerade" && args[start + 6] === "comment" && args[start + 7] === "ayad_nm_single_interface_nat";
+  }
+  return false;
 }
 function isNftMutation(args: string[]): boolean { return args[0] !== "-c" && args[0] !== "-j" && args[0] !== "-a" && ["add", "insert", "delete", "replace", "flush", "reset", "-f"].includes(args[0] ?? ""); }
 function valid(command: string, args: string[]): boolean {
@@ -101,6 +135,7 @@ function valid(command: string, args: string[]): boolean {
       return false;
     }
     if (!["set", "element", "rule"].includes(target ?? "")) return false;
+    if (target === "rule" && args[2] === "ip" && (args[3] === "filter" || args[3] === "nat")) return validManagedNftRule(args);
     if (target === "rule" && args[3] === "ayad_nm" && args[4] === "blocked_devices_prerouting") {
       if (args[0] !== "add" || args.length !== 12) return false;
       return args[2] === "ip" && args[5] === "ip" && args[6] === "saddr" && args[7] === "@vpn_blocked_ips" && args[8] === "counter" && args[9] === "drop" && args[10] === "comment" && args[11] === "ayad_nm_vpn_blocked_ips";
