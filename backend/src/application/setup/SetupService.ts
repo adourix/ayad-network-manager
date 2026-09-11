@@ -118,7 +118,8 @@ export class SetupService {
     const uplinkRanges = network.uplinkSubnets[input.uplinkInterface] ?? [];
     if (!uplinkRanges.length) selectionErrors.push("selected uplink interface has no IPv4 subnet");
     else if (!uplinkRanges.some((range) => networkOf(range) === networkOf(input.clientSubnet))) selectionErrors.push("client subnet must be the existing uplink subnet in Single-Interface + IFB mode");
-    const gateway = input.clientGatewayIp ?? deriveGateway(network.uplinkSubnets[input.uplinkInterface] ?? [], input.clientSubnet);
+    const selectedInterface = network.interfaces.find((item) => item.name === input.uplinkInterface);
+    const gateway = input.clientGatewayIp ?? deriveGateway(selectedInterface?.addresses ?? [], input.clientSubnet);
     if (!gateway) selectionErrors.push("unable to derive CLIENT_GATEWAY_IP from CLIENT_SUBNET");
     else if (!sameNetwork(gateway, input.clientSubnet)) selectionErrors.push("CLIENT_GATEWAY_IP must belong to CLIENT_SUBNET");
     if (selectionErrors.length) return this.failed(selectionErrors);
