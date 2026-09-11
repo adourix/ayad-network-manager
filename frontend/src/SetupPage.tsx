@@ -56,6 +56,7 @@ function SetupPage() {
   const preflightOk = Boolean(preflight.data && preflight.data.errors.length === 0);
   const networkOk = Boolean(network.data && network.data.errors.length === 0 && interfaces.length > 0);
   const formReady = Boolean(clientInterface && uplinkInterface && clientSubnet && bandwidth && dashboardPort && sshPort && dnsServers.trim());
+  const setupApplied = Boolean(applyResultAppliedPlaceholder());
 
   const apply = useMutation({
     mutationFn: () => setupApi.apply({
@@ -72,7 +73,7 @@ function SetupPage() {
     onMutate: () => setError(""),
     onSuccess: (result) => {
       if (result.applied && !result.rolledBack && result.health.errors.length === 0) {
-        setStep(3);
+        setError("");
       } else {
         setError(result.errors.join("; ") || result.health.errors.join("; ") || "Setup did not complete successfully");
       }
@@ -90,9 +91,11 @@ function SetupPage() {
     setGateway(address.split("/")[0] ?? "");
   };
 
+  const applied = Boolean(apply.data?.applied && !apply.data?.rolledBack && apply.data?.health.errors.length === 0);
+
   const stepStatus = useMemo(
-    () => [preflightOk, networkOk, formReady, apply.isSuccess],
-    [preflightOk, networkOk, formReady, apply.isSuccess],
+    () => [preflightOk, networkOk, formReady, applied],
+    [preflightOk, networkOk, formReady, applied],
   );
 
   const title = reconfigure ? "Gateway settings" : "Configure your gateway";
@@ -185,8 +188,8 @@ function SetupPage() {
             <div className="setup-card-head">
               <div>
                 <span className="setup-eyebrow">STEP 04</span>
-                <h2>{apply.isSuccess ? "Setup applied" : "Apply configuration"}</h2>
-                <p>{apply.isSuccess ? "The gateway configuration has been applied and persisted. The backend will reload after this response is delivered." : "The backend will render the OS configuration, persist runtime values to /etc/network-control-system/config.env, activate services, and run the setup health checks."}</p>
+                <h2>{applied ? "Setup applied" : "Apply configuration"}</h2>
+                <p>{applied ? "The gateway configuration has been applied and persisted. The backend will reload after this response is delivered." : "The backend will render the OS configuration, persist runtime values to /etc/network-control-system/config.env, activate services, and run the setup health checks."}</p>
               </div>
               {apply.isPending && <span className="setup-loading">Applying…</span>}
             </div>
@@ -202,7 +205,7 @@ function SetupPage() {
               <label>DNS servers<input value={dnsServers} readOnly/></label>
             </div>
 
-            {apply.isSuccess && apply.data && (
+            {apply.data && (
               <div className="setup-check-grid">
                 <div className="setup-check-row"><Check ok={apply.data.health.clientInterface}/><span>Client interface</span><small>{apply.data.health.clientInterface ? "Ready" : "Failed"}</small></div>
                 <div className="setup-check-row"><Check ok={apply.data.health.gatewayReachable}/><span>Gateway address and route</span><small>{apply.data.health.gatewayReachable ? "Ready" : "Failed"}</small></div>
@@ -214,9 +217,9 @@ function SetupPage() {
             {error && <div className="setup-error">{error}</div>}
 
             <div className="setup-actions">
-              {!apply.isSuccess && <button className="setup-secondary" disabled={apply.isPending} onClick={() => setStep(2)}>Back</button>}
-              {!apply.isSuccess && <button className="setup-primary" disabled={apply.isPending} onClick={() => apply.mutate()}>{apply.isPending ? "Applying…" : "Apply configuration"}</button>}
-              {apply.isSuccess && <button className="setup-primary" onClick={finish}>{reconfigure ? "Return to dashboard" : "Continue to login"}</button>}
+              {!applied && <button className="setup-secondary" disabled={apply.isPending} onClick={() => setStep(2)}>Back</button>}
+              {!applied && <button className="setup-primary" disabled={apply.isPending} onClick={() => apply.mutate()}>{apply.isPending ? "Applying…" : "Apply configuration"}</button>}
+              {applied && <button className="setup-primary" onClick={finish}>{reconfigure ? "Return to dashboard" : "Continue to login"}</button>}
             </div>
           </section>
         )}
@@ -225,6 +228,10 @@ function SetupPage() {
       </main>
     </div>
   );
+}
+
+function applyResultAppliedPlaceholder(): boolean {
+  return false;
 }
 
 export default SetupPage;
