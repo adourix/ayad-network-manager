@@ -23,9 +23,10 @@ function validInterface(value: string): boolean { return /^[a-zA-Z0-9_.:-]{1,32}
 function validSnapshotPath(value: string): boolean { const path = resolve(value); return path.startsWith(`${setupSnapshotDir}/`) && path.endsWith("/nftables.bak"); }
 function validNftablesConfigPath(value: string): boolean { return resolve(value) === nftablesConfigPath; }
 function validIpv4(value: string): boolean { const parts = value.split("."); return parts.length === 4 && parts.every((part) => /^(0|[1-9][0-9]{0,2})$/.test(part) && Number(part) <= 255); }
-function validSubnetCidr(value: string): boolean { const match = value.match(/^(\d{1,3}(?:\.\d{1,3}){3})\/(\d{1,2})$/); if (!match) return false; return validIpv4(match[1]!) && Number(match[2]) <= 32; }
+function validSubnetCidr(value: string): boolean { const match = value.match(/^(\d{1,3}(?:\.\d{1,3}){3})\/(\d{1,2})$/); return !!match && validIpv4(match[1]!) && Number(match[2]) <= 32; }
 function validPort(value: string): boolean { return /^[1-9][0-9]{0,4}$/.test(value) && Number(value) <= 65535; }
 function validRuleHandle(value: string): boolean { return /^[1-9][0-9]*$/.test(value); }
+function validRulePosition(value: string): boolean { return /^[0-9]+$/.test(value); }
 function validComment(value: string): boolean { return ["ayad_nm_allow_ssh_management", "ayad_nm_allow_dashboard_management", "ayad_nm_blocked_macs", "ayad_nm_blocked_ips", "ayad_nm_single_interface_nat"].includes(value); }
 function validAccountingCounterName(value: string): boolean { return /^dev_(download|upload)_[0-9a-f]{12}$/.test(value); }
 function validAccountingRule(args: string[]): boolean {
@@ -38,8 +39,7 @@ function validAccountingRule(args: string[]): boolean {
   const expression = args.slice(offset);
   const counterIndex = expression.indexOf("counter");
   if (counterIndex < 0 || expression.length !== counterIndex + 5) return false;
-  if (expression[counterIndex + 1] !== "name") return false;
-  if (expression[counterIndex + 3] !== "comment") return false;
+  if (expression[counterIndex + 1] !== "name" || expression[counterIndex + 3] !== "comment") return false;
   const counterName = expression[counterIndex + 2];
   const comment = expression[counterIndex + 4];
   if (!counterName || !comment || !validAccountingCounterName(counterName)) return false;
@@ -51,9 +51,7 @@ function validAccountingRule(args: string[]): boolean {
     ? expression.length === counterIndex + 5 && expression[0] === "oifname" && expression[2] === "ip" && expression[3] === "daddr"
     : expression.length === counterIndex + 5 && expression[0] === "iifname" && expression[2] === "ip" && expression[3] === "saddr";
   if (!match) return false;
-  if (!validInterface(expression[1]!)) return false;
-  if (!validIpv4(expression[4]!)) return false;
-  return true;
+  return validInterface(expression[1]!) && validIpv4(expression[4]!);
 }
 function validManagedNftRule(args: string[]): boolean {
   const op = args[0];
@@ -64,24 +62,24 @@ function validManagedNftRule(args: string[]): boolean {
     if (op === "delete") return args.length === 7 && args[5] === "handle" && validRuleHandle(args[6]!);
     if (op === "replace") return args.length >= 8 && args[5] === "handle" && validRuleHandle(args[6]!) && validComment(args.at(-1)!);
     const positionIndex = args.indexOf("position");
-    if (positionIndex >= 0 && (positionIndex !== 5 || !validRuleHandle(args[6]!))) return false;
-    if (chain === "INPUT") {
-      const start = positionIndex >= 0 ? 7 : 5;
-      return args.length === start + 7 && args[start] === "tcp" && args[start + 1] === "dport" && validPort(args[start + 2]!) && args[start + 3] === "accept" && args[start + 4] === "comment" && ["ayad_nm_allow_ssh_management", "ayad_nm_allow_dashboard_management"].includes(args[start + 5]!);
-    }
+    if (positionIndex >= 0 && (positionIndex !== 5 || !validRulePosition(args[6]!))) return false;
     const start = positionIndex >= 0 ? 7 : 5;
-    if (args.length !== start + 6 || args[start + 4] !== "comment" || !validComment(args[start + 5]!)) return false;
+    if (chain === "INPUT") {
+      return (op === "add" || op === "insert") && args.length === start + 6 && args[start] === "tcp" && args[start + 1] === "dport" && validPort(args[start + 2]!) && args[start + 3] === "accept" && args[start + 4] === "comment" && ["ayad_nm_allow_ssh_management", "ayad_nm_allow_dashboard_management"].includes(args[start + 5]!);
+    }
+    if (op !== "add" && op !== "insert") return false;
+    if (args.length !== start + 6 || args[start + 4] !== "comment") return false;
     if (args[start] === "ether" && args[start + 1] === "saddr" && args[start + 2] === "@blocked_macs" && args[start + 3] === "drop") return args[start + 5] === "ayad_nm_blocked_macs";
     if (args[start] === "ip" && args[start + 1] === "saddr" && args[start + 2] === "@blocked_ips" && args[start + 3] === "drop") return args[start + 5] === "ayad_nm_blocked_ips";
     return false;
   }
   if (table === "nat" && chain === "POSTROUTING") {
     if (op === "delete") return args.length === 7 && args[5] === "handle" && validRuleHandle(args[6]!);
-    const start = args.indexOf("position") >= 0 ? 7 : 5;
+    if (op !== "add" && op !== "insert") return false;
     const positionIndex = args.indexOf("position");
-    if (positionIndex >= 0 && (positionIndex !== 5 || !validRuleHandle(args[6]!))) return false;
-    if (op === "replace") return false;
-    return args.length === start + 10 && args[start] === "ip" && args[start + 1] === "saddr" && validSubnetCidr(args[start + 2]!) && args[start + 3] === "oifname" && validInterface(args[start + 4]!) && args[start + 5] === "masquerade" && args[start + 6] === "comment" && args[start + 7] === "ayad_nm_single_interface_nat";
+    if (positionIndex >= 0 && (positionIndex !== 5 || !validRulePosition(args[6]!))) return false;
+    const start = positionIndex >= 0 ? 7 : 5;
+    return args.length === start + 8 && args[start] === "ip" && args[start + 1] === "saddr" && validSubnetCidr(args[start + 2]!) && args[start + 3] === "oifname" && validInterface(args[start + 4]!) && args[start + 5] === "masquerade" && args[start + 6] === "comment" && args[start + 7] === "ayad_nm_single_interface_nat";
   }
   return false;
 }
