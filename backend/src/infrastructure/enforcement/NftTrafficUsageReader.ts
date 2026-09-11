@@ -87,13 +87,12 @@ export class NftTrafficUsageReader implements TrafficUsageReader {
         this.counterName(mac, "download"),
         [],
       );
-      const rules = await this.readRules();
       await this.ensureRuleWithState(
         "upload",
         mac,
         ip,
         this.counterName(mac, "upload"),
-        rules,
+        [],
       );
     }
   }
