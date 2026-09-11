@@ -89,7 +89,7 @@ export async function validateSessionToken(token: string | null): Promise<boolea
 
 export function registerAuthentication(app: FastifyInstance): void {
   app.addHook("preHandler", async (request, reply) => {
-    const pathname = request.url.split("?")[0];
+    const pathname = request.url?.split("?")[0] ?? "";
 
     // Authentication is an API concern. Static frontend routes such as
     // /login and /setup must remain reachable so the SPA can render.
