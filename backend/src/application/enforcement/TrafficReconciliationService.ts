@@ -18,7 +18,11 @@ export class TrafficReconciliationService {
   async start(): Promise<void> {
     if (this.timer) return;
     await this.reconcile();
-    this.timer = setInterval(() => void this.reconcile(), this.intervalMs);
+    this.timer = setInterval(() => {
+      void this.reconcile().catch((error) => {
+        console.error("Traffic policy reconciliation cycle failed:", error);
+      });
+    }, this.intervalMs);
   }
 
   stop(): void {
@@ -132,9 +136,13 @@ export class TrafficReconciliationService {
       }
 
       if (failures.length > 0) {
-        throw new AggregateError(
+        // Reconciliation is a background repair loop. A transient tc failure
+        // must be observable and retried on the next cycle, but must never
+        // terminate the backend or take the setup/API process down with an
+        // unhandled AggregateError.
+        console.error(
+          `Traffic policy reconciliation failed for ${failures.length} operation(s):`,
           failures,
-          `Traffic policy reconciliation failed for ${failures.length} operation(s)`,
         );
       }
     } finally {
