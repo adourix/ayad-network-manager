@@ -14,8 +14,11 @@ Environment=ENFORCEMENT_SOCKET_PATH=/run/network-control/enforcement.sock
 ExecStart=/usr/bin/node @APP_ROOT@/dist/bootstrap.js
 Restart=on-failure
 RestartSec=5
-CapabilityBoundingSet=CAP_NET_RAW
-AmbientCapabilities=CAP_NET_RAW
+# Setup mode needs to inspect and modify the host networking stack and load
+# the IFB kernel module. Keep the capability set explicit rather than relying
+# on an unrestricted root bounding set.
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_SYS_MODULE
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW CAP_SYS_MODULE
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
