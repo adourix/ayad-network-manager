@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { setupApi } from "./services/api";
 import "./SetupPage.css";
@@ -10,7 +10,9 @@ function Check({ ok }: { ok: boolean }) {
 }
 
 function SetupPage() {
-  const [step, setStep] = useState<Step>(0);
+  const reconfigure = new URLSearchParams(window.location.search).get("mode") === "settings";
+  const [step, setStep] = useState<Step>(reconfigure ? 2 : 0);
+  const [initialized, setInitialized] = useState(false);
   const [clientInterface, setClientInterface] = useState("");
   const [uplinkInterface, setUplinkInterface] = useState("");
   const [clientSubnet, setClientSubnet] = useState("");
@@ -21,6 +23,7 @@ function SetupPage() {
   const [gateway, setGateway] = useState("");
   const [error, setError] = useState("");
 
+  const config = useQuery({ queryKey: ["setup", "config"], queryFn: setupApi.config, retry: 1 });
   const preflight = useQuery({ queryKey: ["setup", "preflight"], queryFn: setupApi.preflight, retry: 1 });
   const network = useQuery({ queryKey: ["setup", "network"], queryFn: setupApi.network, retry: 1 });
   const diagnostics = useQuery({
@@ -29,6 +32,21 @@ function SetupPage() {
     enabled: Boolean(uplinkInterface),
     retry: 1,
   });
+
+  useEffect(() => {
+    if (initialized || !config.data) return;
+    const current = config.data;
+    if (current.clientInterface) setClientInterface(current.clientInterface);
+    if (current.uplinkInterface) setUplinkInterface(current.uplinkInterface);
+    if (current.clientSubnet) setClientSubnet(current.clientSubnet);
+    if (current.clientGatewayIp) setGateway(current.clientGatewayIp);
+    if (current.uplinkBandwidthMbps) setBandwidth(current.uplinkBandwidthMbps);
+    if (current.dashboardPort) setDashboardPort(current.dashboardPort);
+    if (current.sshPort) setSshPort(current.sshPort);
+    if (current.dnsServers.length) setDnsServers(current.dnsServers.join(","));
+    if (reconfigure && current.setupComplete) setStep(2);
+    setInitialized(true);
+  }, [config.data, initialized, reconfigure]);
 
   const interfaces = network.data?.interfaces ?? [];
   const selected = interfaces.find((item) => item.name === uplinkInterface);
@@ -76,18 +94,23 @@ function SetupPage() {
     [preflightOk, networkOk, formReady, apply.isSuccess],
   );
 
+  const title = reconfigure ? "Gateway settings" : "Configure your gateway";
+  const subtitle = reconfigure
+    ? "Review the current gateway configuration, change what you need, then apply the same validated setup path."
+    : "Detect the gateway network, validate prerequisites, review the configuration, then apply the Single-Interface + IFB setup.";
+
   return (
     <div className="setup-page">
       <div className="setup-topbar">
         <div className="setup-brand"><span className="setup-brand-mark">A</span><div><strong>Ayad</strong><small>Network Manager</small></div></div>
-        <span className="setup-mode">First-time gateway setup</span>
+        <span className="setup-mode">{reconfigure ? "Gateway settings" : "First-time gateway setup"}</span>
       </div>
 
       <main className="setup-container">
         <div className="setup-heading">
-          <span className="setup-eyebrow">AYAD NM / SETUP</span>
-          <h1>Configure your gateway</h1>
-          <p>Detect the gateway network, validate prerequisites, review the configuration, then apply the Single-Interface + IFB setup.</p>
+          <span className="setup-eyebrow">AYAD NM / {reconfigure ? "SETTINGS" : "SETUP"}</span>
+          <h1>{title}</h1>
+          <p>{subtitle}</p>
         </div>
 
         <div className="setup-steps">
@@ -135,11 +158,11 @@ function SetupPage() {
 
         {step === 2 && (
           <section className="setup-card">
-            <div className="setup-card-head"><div><span className="setup-eyebrow">STEP 03</span><h2>Gateway configuration</h2><p>Review the values before moving to the final apply step.</p></div></div>
+            <div className="setup-card-head"><div><span className="setup-eyebrow">STEP 03</span><h2>Gateway configuration</h2><p>These values are loaded from the persisted runtime configuration when available.</p></div></div>
             <div className="setup-form-grid">
               <label>Client interface<input value={clientInterface} readOnly/></label>
               <label>Uplink interface<input value={uplinkInterface} readOnly/></label>
-              <label>Client subnet<select value={clientSubnet} onChange={(event) => setClientSubnet(event.target.value)}>{suggestedSubnets.map((subnet) => <option key={subnet} value={subnet}>{subnet}</option>)}{detectedSubnet && !suggestedSubnets.includes(detectedSubnet) && <option value={detectedSubnet}>{detectedSubnet}</option>}</select></label>
+              <label>Client subnet<select value={clientSubnet} onChange={(event) => setClientSubnet(event.target.value)}>{suggestedSubnets.map((subnet) => <option key={subnet} value={subnet}>{subnet}</option>)}{clientSubnet && !suggestedSubnets.includes(clientSubnet) && <option value={clientSubnet}>{clientSubnet}</option>}{detectedSubnet && !suggestedSubnets.includes(detectedSubnet) && detectedSubnet !== clientSubnet && <option value={detectedSubnet}>{detectedSubnet}</option>}</select></label>
               <label>Gateway IP<input value={gateway} onChange={(event) => setGateway(event.target.value)} placeholder="Auto-detected"/></label>
               <label>Uplink bandwidth (Mbps)<input type="number" min="1" step="1" value={bandwidth} onChange={(event) => setBandwidth(event.target.value)}/></label>
               <label>Dashboard port<input type="number" min="1" max="65535" value={dashboardPort} onChange={(event) => setDashboardPort(event.target.value)}/></label>
@@ -158,7 +181,7 @@ function SetupPage() {
               <div>
                 <span className="setup-eyebrow">STEP 04</span>
                 <h2>{apply.isSuccess ? "Setup applied" : "Apply configuration"}</h2>
-                <p>{apply.isSuccess ? "The gateway configuration has been applied and persisted. Use the button below to continue to login." : "The backend will render the OS configuration, persist runtime values to /etc/network-control-system/config.env, activate services, and run the setup health checks."}</p>
+                <p>{apply.isSuccess ? "The gateway configuration has been applied and persisted." : "The backend will render the OS configuration, persist runtime values to /etc/network-control-system/config.env, activate services, and run the setup health checks."}</p>
               </div>
               {apply.isPending && <span className="setup-loading">Applying…</span>}
             </div>
@@ -188,7 +211,7 @@ function SetupPage() {
             <div className="setup-actions">
               {!apply.isSuccess && <button className="setup-secondary" disabled={apply.isPending} onClick={() => setStep(2)}>Back</button>}
               {!apply.isSuccess && <button className="setup-primary" disabled={apply.isPending} onClick={() => apply.mutate()}>{apply.isPending ? "Applying…" : "Apply configuration"}</button>}
-              {apply.isSuccess && <button className="setup-primary" onClick={() => window.location.assign("/login")}>Continue to login</button>}
+              {apply.isSuccess && <button className="setup-primary" onClick={() => window.location.assign(reconfigure ? "/" : "/login")}>{reconfigure ? "Return to dashboard" : "Continue to login"}</button>}
             </div>
           </section>
         )}
