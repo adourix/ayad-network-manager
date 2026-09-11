@@ -5,7 +5,7 @@ import { DevicePolicyService } from "../src/application/policies/DevicePolicySer
 
 test("schedule enforcement applies active values and restores base values outside the window", async () => {
   const calls:string[]=[];
-  const device={mac:{toString:()=>"aa:bb:cc:dd:ee:ff"},ip:{toString:()=>"192.168.1.42"}} as any;
+  const device={mac:{toString:()=>"aa:bb:cc:dd:ee:ff"},ip:{toString:()=>"192.168.1.42"},l2Visible:true} as any;
   const policy={scheduleId:1,blocked:false,downloadLimit:5n,uploadLimit:2n} as any;
   const devices={findAll:async()=>[device]};
   const policies={findByDeviceId:async()=>policy};
