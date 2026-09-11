@@ -5,6 +5,7 @@ APP_ROOT="${APP_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 REPO_ROOT="$(cd "${APP_ROOT}/.." && pwd)"
 ENV_FILE="${APP_ROOT}/.env"
 CONFIG_DIR="/etc/network-control-system"
+CONFIG_FILE="${CONFIG_DIR}/config.env"
 TLS_DIR="${CONFIG_DIR}/tls"
 SYSCTL_FILE="/etc/sysctl.d/99-ayad-network-manager.conf"
 MODULES_FILE="/etc/modules-load.d/ayad-network-manager.conf"
@@ -134,7 +135,6 @@ log "Creating persistent first-boot configuration"
 cat > "$ENV_FILE" <<EOF
 NODE_ENV=production
 HOST=0.0.0.0
-DASHBOARD_PORT=5000
 FRONTEND_DIST_PATH=../frontend/dist
 TLS_CERT_PATH=${TLS_DIR}/server.crt
 TLS_KEY_PATH=${TLS_DIR}/server.key
@@ -147,30 +147,14 @@ DATABASE_PASSWORD=${DB_PASSWORD}
 DATABASE_NAME=${DB_NAME}
 DATABASE_HOST=127.0.0.1
 DATABASE_PORT=5432
-CLIENT_INTERFACE=
-UPLINK_INTERFACE=
-CLIENT_GATEWAY_IP=
-CLIENT_SUBNET=
-DHCP_RANGE_START=
-DHCP_RANGE_END=
-DNS_SERVERS=1.1.1.1,8.8.8.8
-SSH_PORT=22
-UPLINK_BANDWIDTH_MBPS=100
-NETWORK_MODE=single-interface-ifb
-VPN_TUN_INTERFACE=tun0
-VPN_TUN_ADDRESS=172.19.0.1/30
-SING_BOX_CONFIG_PATH=/etc/sing-box/config.json
-SING_BOX_STAGE_PATH=/run/network-control/sing-box-config.json
-SING_BOX_CONFIG_INSTALL_UNIT=network-control-sing-box-config.service
-DHCP_RESERVATIONS_PATH=/var/lib/misc/network-control-reservations.conf
-DHCP_LEASES_PATH=/var/lib/misc/dnsmasq.leases
-QUOTA_THROTTLE_MBPS=0.5
-SYSTEM_CONFIG_PATH=/etc/network-control-system/config.env
-DNSMASQ_CONFIG_PATH=/etc/dnsmasq.d/network-control-clients.conf
-NFTABLES_CONFIG_PATH=/etc/nftables.d/network-control-system.nft
-SETUP_SNAPSHOT_DIR=/var/lib/network-control/backups
+SYSTEM_CONFIG_PATH=${CONFIG_FILE}
 EOF
 chmod 0600 "$ENV_FILE"
+
+# Setup owns all environment-specific network/runtime values. Start with an
+# empty file so systemd can install the services before the first setup run;
+# SetupService will populate this file with the selected configuration.
+install -m 0600 /dev/null "$CONFIG_FILE"
 
 log "Installing database schema"
 cd "$APP_ROOT"
@@ -186,7 +170,7 @@ npm run build
 log "Building backend and installing systemd units"
 cd "$APP_ROOT"
 npm run build
-APP_ROOT="$APP_ROOT" CONFIG_FILE="$ENV_FILE" bash "$APP_ROOT/deploy/systemd/install.sh"
+APP_ROOT="$APP_ROOT" CONFIG_FILE="$CONFIG_FILE" bash "$APP_ROOT/deploy/systemd/install.sh"
 
 log "Starting Ayad Network Manager"
 systemctl enable network-control-enforcement.service network-control-backend.service
