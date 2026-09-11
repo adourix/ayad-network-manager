@@ -56,46 +56,28 @@ export class NftTrafficUsageReader implements TrafficUsageReader {
 
     await this.ensureTable();
     const counters = await this.readCounters();
-    let rules = await this.readRules();
+    const rules = await this.readRules();
     await this.ensureDeviceCounters(normalizedMac, counters);
-    rules = await this.dedupeAccountingRules(rules);
-    await this.ensureRuleWithState(
-      "download",
-      normalizedMac,
-      normalizedIp,
-      this.counterName(normalizedMac, "download"),
-      rules,
-    );
-    rules = await this.readRules();
-    await this.ensureRuleWithState(
-      "upload",
-      normalizedMac,
-      normalizedIp,
-      this.counterName(normalizedMac, "upload"),
-      rules,
-    );
+    await this.ensureRuleWithState("download", normalizedMac, normalizedIp, this.counterName(normalizedMac, "download"), rules);
+
+    const refreshedRules = await this.readRules();
+    await this.ensureRuleWithState("upload", normalizedMac, normalizedIp, this.counterName(normalizedMac, "upload"), refreshedRules);
   }
 
   async reconcileDeviceAccounting(devices: TrafficUsageDevice[]): Promise<void> {
     await this.ensureTable();
 
+    // The accounting chain is exclusively owned by this reader. Rebuild its
+    // rules from desired state instead of trying to repair an arbitrarily large
+    // legacy chain one handle at a time. Named counters are intentionally kept.
+    await this.execNftMutation(["flush", "chain", TABLE_FAMILY, TABLE_NAME, CHAIN_NAME]);
+
     const counters = await this.readCounters();
-    let rules = await this.readRules();
-
-    // Repair the live accounting chain before applying desired state. Older
-    // versions appended the same named rule repeatedly, producing hundreds of
-    // duplicate rules. Keep exactly one rule per managed accounting comment.
-    rules = await this.dedupeAccountingRules(rules);
-
-    const activeComments = new Set<string>();
 
     for (const device of devices) {
       const mac = validateMac(device.mac);
       if (!device.ip) continue;
       const ip = validateIp(device.ip);
-
-      activeComments.add(this.ruleComment(mac, "download"));
-      activeComments.add(this.ruleComment(mac, "upload"));
 
       await this.ensureDeviceCounters(mac, counters);
       await this.ensureRuleWithState(
@@ -103,9 +85,9 @@ export class NftTrafficUsageReader implements TrafficUsageReader {
         mac,
         ip,
         this.counterName(mac, "download"),
-        rules,
+        [],
       );
-      rules = await this.readRules();
+      const rules = await this.readRules();
       await this.ensureRuleWithState(
         "upload",
         mac,
@@ -113,37 +95,7 @@ export class NftTrafficUsageReader implements TrafficUsageReader {
         this.counterName(mac, "upload"),
         rules,
       );
-      rules = await this.readRules();
     }
-
-    // Remove accounting rules for devices that are no longer discovered.
-    // Keep counters themselves: named nft counters retain their accumulated
-    // values and can be reused if the device returns.
-    for (const rule of rules) {
-      if (!rule.comment.startsWith("ayad_nm_")) continue;
-      if (activeComments.has(rule.comment)) continue;
-      await this.deleteRule(rule.handle);
-    }
-  }
-
-  private async dedupeAccountingRules(rules: NftRule[]): Promise<NftRule[]> {
-    const kept = new Map<string, NftRule>();
-
-    for (const rule of rules) {
-      if (!rule.comment.startsWith("ayad_nm_")) continue;
-
-      const existing = kept.get(rule.comment);
-      if (!existing) {
-        kept.set(rule.comment, rule);
-        continue;
-      }
-
-      // Delete only the duplicate rule. The named counter is not deleted, so
-      // accumulated traffic totals remain intact.
-      await this.deleteRule(rule.handle);
-    }
-
-    return [...kept.values()];
   }
 
   private async ensureDeviceCounters(mac: string, counters: Map<string, bigint>): Promise<void> {
@@ -224,33 +176,6 @@ export class NftTrafficUsageReader implements TrafficUsageReader {
       "handle", String(handle), ...expressions,
       "counter", "name", counterName, "comment", comment,
     ]);
-  }
-
-  private async deleteRule(handle: number): Promise<void> {
-    await this.execNftMutation(["delete", "rule", TABLE_FAMILY, TABLE_NAME, CHAIN_NAME, "handle", String(handle)]);
-  }
-
-  private buildRuleExpressions(direction: "download" | "upload", mac: string, ip: string): string[] {
-    const { mode, clientInterface, uplinkInterface, clientSubnet } = this.topology;
-
-    if (mode === "single-interface-ifb") {
-      if (direction === "download") {
-        // In the single-interface topology, download reaches the client on
-        // physical-interface egress. Do not classify it as client-side ingress.
-        return ["oifname", clientInterface, "ip", "daddr", ip];
-      }
-      // Upload enters the physical interface from the client side. The L2
-      // source can be an AP/proxy MAC, so the stable client IP is authoritative.
-      return ["iifname", clientInterface, "ip", "saddr", ip];
-    }
-
-    if (!uplinkInterface) throw new Error("Dual-interface accounting requires an uplink interface");
-
-    if (direction === "download") {
-      return ["iifname", uplinkInterface, "oifname", clientInterface, "ip", "daddr", ip];
-    }
-
-    return ["iifname", clientInterface, "oifname", uplinkInterface, "ip", "saddr", clientSubnet, "ether", "saddr", mac];
   }
 
   private async readRules(): Promise<NftRule[]> {
