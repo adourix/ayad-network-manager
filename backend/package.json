@@ -5,10 +5,10 @@
   "type": "module",
   "main": "index.js",
   "scripts": {
-    "dev": "tsx src/bootstrap.ts",
-    "build": "tsc",
+    "dev": "prisma generate && tsx src/bootstrap.ts",
+    "build": "prisma generate && tsc",
     "start": "node dist/bootstrap.js",
-    "test": "tsx --test test/*.test.ts"
+    "test": "prisma generate && tsx --test test/*.test.ts"
   },
   "keywords": [],
   "author": "",
