@@ -117,10 +117,12 @@ export class SetupService {
     if (!uplinkRanges.length) selectionErrors.push("selected uplink interface has no IPv4 subnet");
     else if (!uplinkRanges.some((range) => networkOf(range) === networkOf(input.clientSubnet))) selectionErrors.push("client subnet must be the existing uplink subnet in Single-Interface + IFB mode");
     const selectedInterface = network.interfaces.find((item) => item.name === input.uplinkInterface);
-    const gateway = input.clientGatewayIp ?? deriveGateway(selectedInterface?.addresses ?? [], input.clientSubnet);
-    if (!gateway) selectionErrors.push("unable to derive CLIENT_GATEWAY_IP from the selected uplink interface");
-    else if (!sameNetwork(gateway, input.clientSubnet)) selectionErrors.push("CLIENT_GATEWAY_IP must belong to CLIENT_SUBNET");
-    else if (selectedInterface && !selectedInterface.addresses.some((address) => address.split("/")[0] === gateway)) selectionErrors.push("CLIENT_GATEWAY_IP must be an existing IP address on the selected interface in Single-Interface + IFB mode");
+    // In Single-Interface + IFB mode the gateway is always this machine's
+    // existing IPv4 address on the selected interface. Never accept the
+    // upstream router address as CLIENT_GATEWAY_IP.
+    const gateway = deriveGateway(selectedInterface?.addresses ?? [], input.clientSubnet);
+    if (!gateway) selectionErrors.push("unable to derive CLIENT_GATEWAY_IP from the selected interface");
+    else if (!sameNetwork(gateway, input.clientSubnet)) selectionErrors.push("derived CLIENT_GATEWAY_IP must belong to CLIENT_SUBNET");
     if (selectionErrors.length) return this.failed(selectionErrors);
     const preflight = await this.preflight();
     if (preflight.errors.length) return this.failed(preflight.errors);
@@ -219,18 +221,26 @@ export class SetupService {
     const errors: string[] = [];
     const link = await this.safe("ip", ["-j", "-4", "addr", "show", "dev", client]);
     let clientInterface = false;
+    let localAddresses: string[] = [];
     try {
       const rows = JSON.parse(link.stdout) as Array<{ ifname?: string; addr_info?: Array<{ family?: string; local?: string }> }>;
-      clientInterface = link.ok && rows.some((row) => row.ifname === client && Array.isArray(row.addr_info) && row.addr_info.some((addr) => addr.family === "inet"));
+      for (const row of rows) {
+        if (row.ifname !== client || !Array.isArray(row.addr_info)) continue;
+        localAddresses = row.addr_info
+          .filter((addr) => addr.family === "inet" && typeof addr.local === "string")
+          .map((addr) => addr.local!);
+      }
+      clientInterface = link.ok && localAddresses.length > 0;
     } catch {}
-    const gatewayConfigured = clientInterface && (await this.safe("ip", ["-4", "addr", "show", "dev", client])).stdout.includes(gateway);
-    const gatewayRoute = gatewayConfigured && (await this.safe("ip", ["route", "get", gateway])).ok;
+    const gatewayConfigured = clientInterface && localAddresses.includes(gateway);
+    const gatewayRouteResult = gatewayConfigured ? await this.safe("ip", ["route", "get", gateway]) : null;
+    const gatewayRoute = Boolean(gatewayRouteResult?.ok);
     const gatewayReachable = Boolean(gatewayConfigured && gatewayRoute);
     const lease = await this.safe("cat", [this.paths.leasePath ?? "/var/lib/misc/dnsmasq.leases"]);
     const dhcpLeaseFile = lease.ok;
     const outboundConnectivity = (await this.safe("ping", ["-c", "1", "-W", "2", "-I", client, "1.1.1.1"])).ok;
     if (!clientInterface) errors.push("client interface is not configured");
-    if (!gatewayReachable) errors.push("client gateway address or route is not configured");
+    if (!gatewayReachable) errors.push(`client gateway ${gateway} is not configured on ${client}`);
     if (!dhcpLeaseFile) errors.push("dnsmasq lease file is not readable");
     if (!outboundConnectivity) errors.push("gateway outbound connectivity test failed");
     return { clientInterface, gatewayReachable, dhcpLeaseFile, outboundConnectivity, errors };
@@ -296,7 +306,6 @@ export class SetupService {
       "    type nat hook postrouting priority 100; policy accept;",
       `    ip saddr ${input.clientSubnet} oifname \"${input.uplinkInterface}\" masquerade comment \"ayad_nm_single_interface_nat\"`,
       "  }",
-      "  ",
       "}",
       "",
     ].join("\n");
@@ -308,7 +317,6 @@ export class SetupService {
     if (!iface.test(input.clientInterface) || !iface.test(input.uplinkInterface)) errors.push("interface selections are invalid");
     const network = cidr.exec(input.clientSubnet);
     if (!network || prefix(input.clientSubnet) > 30 || network[1]!.split(".").some((part) => Number(part) > 255)) errors.push("clientSubnet must be a valid IPv4 network with prefix <= 30");
-    if (input.clientGatewayIp && (!ipv4.test(input.clientGatewayIp) || input.clientGatewayIp.split(".").some((part) => Number(part) > 255))) errors.push("clientGatewayIp must be a valid IPv4 address");
     if (input.vpnTunnelInterface && !iface.test(input.vpnTunnelInterface)) errors.push("VPN tunnel interface is invalid");
     for (const value of [input.vpnTunAddress, input.singBoxConfigPath, input.dhcpReservationsPath]) {
       if (value !== undefined && (!value.trim() || /[\r\n]/.test(value))) errors.push("setup path/address values must not be empty or contain newlines");
