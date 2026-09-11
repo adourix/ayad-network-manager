@@ -1,5 +1,5 @@
 import { promises as fs } from "node:fs";
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply } from "fastify";
 import type { SetupApplyInput, SetupService } from "../../../application/setup/SetupService.js";
 
 const setupFlag = "SETUP_COMPLETED";
@@ -72,6 +72,16 @@ async function markSetupComplete(value: boolean): Promise<void> {
   await fs.writeFile(path, `${withoutFlag}\n${setupFlag}=${value ? "true" : "false"}\n`, "utf8");
 }
 
+function restartAfterResponse(reply: FastifyReply, service: SetupService): void {
+  reply.raw.once("finish", () => {
+    void service.restartBackend().catch((error) => {
+      // The response is already committed. Keep the failure in the server log
+      // instead of turning a successful setup response into a fetch error.
+      reply.log.error({ error }, "Failed to restart backend after setup response");
+    });
+  });
+}
+
 export async function setupRoutes(app: FastifyInstance, service: SetupService) {
   app.get("/api/setup/status", async () => ({ setupComplete: await readSetupComplete() }));
   app.get("/api/setup/config", async () => readRuntimeConfig());
@@ -79,17 +89,21 @@ export async function setupRoutes(app: FastifyInstance, service: SetupService) {
   app.get("/api/setup/network", async () => service.inspectNetwork());
   app.get<{ Querystring: { interface?: string } }>("/api/setup/diagnostics", async (request) => service.diagnostics(request.query.interface));
 
-  const apply = async (request: { body: SetupApplyInput }) => {
+  const apply = async (request: { body: SetupApplyInput }, reply: FastifyReply) => {
     const result = await service.apply(request.body);
-    if (result.applied) await markSetupComplete(true);
-    return result;
+    if (result.applied) {
+      await markSetupComplete(true);
+      if (request.body.activate !== false) restartAfterResponse(reply, service);
+    }
+    return reply.send(result);
   };
 
-  app.post<{ Body: SetupApplyInput }>("/api/setup", async (request) => apply(request));
-  app.post<{ Body: SetupApplyInput }>("/api/setup/apply", async (request) => apply(request));
-  app.post("/api/setup/rollback", async () => {
+  app.post<{ Body: SetupApplyInput }>("/api/setup", apply);
+  app.post<{ Body: SetupApplyInput }>("/api/setup/apply", apply);
+
+  app.post("/api/setup/rollback", async (_request, reply) => {
     await service.rollbackLatest();
     await markSetupComplete(false);
-    return { rolledBack: true };
+    return reply.send({ rolledBack: true });
   });
 }
