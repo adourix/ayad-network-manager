@@ -219,7 +219,7 @@ export class NftTrafficUsageReader implements TrafficUsageReader {
   }
 
   private async readCounters(): Promise<Map<string, bigint>> {
-    const { stdout } = await this.execNft(["-j", "list", "counters", TABLE_FAMILY, TABLE_NAME]);
+    const { stdout } = await this.execNft(["-j", "list", "counters", "table", TABLE_FAMILY, TABLE_NAME]);
     let document: { nftables?: unknown[] };
     try {
       document = JSON.parse(stdout) as { nftables?: unknown[] };
