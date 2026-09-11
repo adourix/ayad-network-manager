@@ -19,7 +19,6 @@ const local = new LinuxSystemCommandExecutor(true);
 const backgroundRead = new LinuxSystemCommandExecutor(true, 1_000);
 type Request = { command: string; args: string[] };
 type Job = () => Promise<void>;
-
 function ifaceAllowed(value: string): boolean { return value === "ifb0" || value === clientInterface || value === uplinkInterface || value === vpnTunInterface; }
 function validInterface(value: string): boolean { return /^[a-zA-Z0-9_.:-]{1,32}$/.test(value) && ifaceAllowed(value); }
 function validSnapshotPath(value: string): boolean { const path = resolve(value); return path.startsWith(`${setupSnapshotDir}/`) && path.endsWith("/nftables.bak"); }
@@ -31,7 +30,6 @@ function validRuleHandle(value: string): boolean { return /^[1-9][0-9]*$/.test(v
 function validRulePosition(value: string): boolean { return /^[0-9]+$/.test(value); }
 function validComment(value: string): boolean { return ["ayad_nm_allow_ssh_management", "ayad_nm_allow_dashboard_management", "ayad_nm_blocked_macs", "ayad_nm_blocked_ips", "ayad_nm_single_interface_nat", "ayad_nm_vpn_nat", "ayad_nm_vpn_fail_closed"].includes(value); }
 function validAccountingCounterName(value: string): boolean { return /^dev_(download|upload)_[0-9a-f]{12}$/.test(value); }
-
 function validAccountingRule(args: string[]): boolean {
   if (args[2] !== "inet" || args[3] !== "ayad_nm" || args[4] !== "accounting") return false;
   if (args[0] === "delete") return args.length === 7 && args[1] === "rule" && args[5] === "handle" && validRuleHandle(args[6]!);
@@ -56,7 +54,6 @@ function validAccountingRule(args: string[]): boolean {
   if (!match) return false;
   return validInterface(expression[1]!) && validIpv4(expression[4]!);
 }
-
 function validManagedNftRule(args: string[]): boolean {
   const op = args[0];
   if (!["add", "insert", "delete", "replace"].includes(op ?? "") || args[1] !== "rule" || args[2] !== "ip") return false;
@@ -92,9 +89,7 @@ function validManagedNftRule(args: string[]): boolean {
   }
   return false;
 }
-
 function isNftMutation(args: string[]): boolean { return args[0] !== "-c" && args[0] !== "-j" && args[0] !== "-a" && ["add", "insert", "delete", "replace", "flush", "reset", "-f"].includes(args[0] ?? ""); }
-
 function valid(command: string, args: string[]): boolean {
   if (!allowed.has(command) || args.length > 64 || args.some((arg) => typeof arg !== "string" || arg.length > 512 || /\0/.test(arg))) return false;
   if (command !== "write-sing-box-config" && args.some((arg) => /[\r\n]/.test(arg))) return false;
@@ -156,7 +151,9 @@ function valid(command: string, args: string[]): boolean {
     if (target === "rule" && args[2] === "inet" && args[3] === "ayad_nm" && args[4] === "accounting") return validAccountingRule(args);
     if (target === "set") {
       if (args[0] !== "add" || args.length !== 10) return false;
-      return args[2] === "ip" && args[3] === "filter" && (args[4] === "blocked_macs" || args[4] === "blocked_ips") && args[5] === "{" && args[6] === "type" && (args[7] === "ether_addr" || args[7] === "ipv4_addr") && args[8] === ";" && args[9] === "}";
+      if (args[2] === "ip" && args[3] === "filter" && (args[4] === "blocked_macs" || args[4] === "blocked_ips")) return args[5] === "{" && args[6] === "type" && (args[7] === "ether_addr" || args[7] === "ipv4_addr") && args[8] === ";" && args[9] === "}";
+      if (args[2] === "ip" && args[3] === "ayad_nm" && args[4] === "vpn_blocked_ips") return args[5] === "{" && args[6] === "type" && args[7] === "ipv4_addr" && args[8] === ";" && args[9] === "}";
+      return false;
     }
     if (target === "element") {
       if (args.length !== 7 || args[2] !== "ip" || args[3] !== "filter" || !["blocked_macs", "blocked_ips"].includes(args[4]!)) return false;
@@ -167,21 +164,17 @@ function valid(command: string, args: string[]): boolean {
   }
   return false;
 }
-
 function isBackgroundRead(command: string, args: string[]): boolean {
   if (command === "tc") return args[1] === "show";
   if (command === "ip") return args[0] === "-j" || args[0] === "neigh";
   if (command === "nft") return args.includes("list") && !isNftMutation(args);
   return false;
 }
-
 function send(socket: import("node:net").Socket, payload: unknown): void { socket.write(`${JSON.stringify(payload)}\n`); }
-
 const priority: Job[] = [];
 const background: Job[] = [];
 let running = false;
 const maxBackgroundQueue = 8;
-
 function schedule(job: Job, isBackground: boolean): void {
   if (isBackground) {
     if (background.length >= maxBackgroundQueue) throw new Error("background enforcement queue overloaded");
@@ -189,7 +182,6 @@ function schedule(job: Job, isBackground: boolean): void {
   } else priority.push(job);
   void drain();
 }
-
 async function drain(): Promise<void> {
   if (running) return;
   running = true;
@@ -200,7 +192,6 @@ async function drain(): Promise<void> {
     }
   } finally { running = false; }
 }
-
 async function executeRequest(socket: import("node:net").Socket, request: Request): Promise<void> {
   const executor = isBackgroundRead(request.command, request.args) ? backgroundRead : local;
   try {
@@ -210,7 +201,6 @@ async function executeRequest(socket: import("node:net").Socket, request: Reques
     send(socket, { ok: false, error: error instanceof Error ? error.message : String(error) });
   }
 }
-
 const server = createServer((socket) => {
   let buffer = "";
   socket.setEncoding("utf8");
@@ -231,7 +221,6 @@ const server = createServer((socket) => {
   });
   socket.on("error", () => undefined);
 });
-
 await fs.mkdir(resolve(socketPath, ".."), { recursive: true });
 try { unlinkSync(socketPath); } catch { /* socket absent */ }
 server.listen(socketPath, () => undefined);
