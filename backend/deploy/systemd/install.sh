@@ -112,6 +112,10 @@ fi
 
 systemctl daemon-reload
 systemctl enable network-control-enforcement.service network-control-backend.service
-systemctl start network-control-backend.service
+# Both services execute dist/ artifacts. Restart both after the build so an
+# installation cannot leave the enforcement agent on an older executor while
+# the backend has already moved to the new build.
+systemctl restart network-control-enforcement.service
+systemctl restart network-control-backend.service
 
-echo "Built backend, installed network-control services, provisioned setup storage, and started backend"
+echo "Built backend, installed network-control services, provisioned setup storage, and restarted backend/enforcement"
