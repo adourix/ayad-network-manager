@@ -9,9 +9,13 @@ import type {
 
 const execFileAsync = promisify(execFile);
 
-const COMMAND_TIMEOUT_MS = 5_000;
-const REMOTE_RESPONSE_TIMEOUT_MS = 7_000;
-const REMOTE_CONNECT_RETRIES = 12;
+// Enforcement commands can legitimately wait behind a tc/nft reconciliation.
+// Keep the default bounded, but long enough that a slow kernel operation or
+// a short enforcement restart does not kill the backend request.
+const COMMAND_TIMEOUT_MS = 30_000;
+const SYSTEMCTL_TIMEOUT_MS = 20_000;
+const REMOTE_RESPONSE_GRACE_MS = 5_000;
+const REMOTE_CONNECT_RETRIES = 20;
 const REMOTE_CONNECT_RETRY_DELAY_MS = 250;
 const COMMAND_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
 
@@ -46,12 +50,13 @@ export class LinuxSystemCommandExecutor implements SystemCommandExecutor {
           ? "/usr/sbin/nft"
           : command;
 
+    const timeout = command === "systemctl"
+      ? Math.max(this.timeoutMs, SYSTEMCTL_TIMEOUT_MS)
+      : this.timeoutMs;
+
     const { stdout, stderr } = await execFileAsync(executable, args, {
-      timeout: this.timeoutMs,
+      timeout,
       killSignal: "SIGKILL",
-      // Network-state inspection commands can legitimately return large JSON
-      // documents. The previous Node default (1 MiB) could kill the entire
-      // enforcement agent when a populated nftables state exceeded it.
       maxBuffer: COMMAND_MAX_BUFFER_BYTES,
     });
 
@@ -119,16 +124,14 @@ export class LinuxSystemCommandExecutor implements SystemCommandExecutor {
         else resolve(result!);
       };
 
-      // The agent owns the 5s command deadline. The backend needs a small
-      // response grace period so a command completing at that boundary can
-      // still deliver its response through the Unix socket.
+      const responseTimeout = this.timeoutMs + REMOTE_RESPONSE_GRACE_MS;
       deadline = setTimeout(() => {
         finish(
           new Error(
             `enforcement command timed out after ${this.timeoutMs}ms`,
           ),
         );
-      }, REMOTE_RESPONSE_TIMEOUT_MS);
+      }, responseTimeout);
 
       socket.once("error", (error) => finish(error));
 
@@ -155,8 +158,7 @@ export class LinuxSystemCommandExecutor implements SystemCommandExecutor {
           if (!result.ok) {
             finish(
               new Error(
-                result.error ??
-                  "privileged enforcement command failed",
+                result.error ?? "privileged enforcement command failed",
               ),
             );
             return;
@@ -185,16 +187,17 @@ export class LinuxSystemCommandExecutor implements SystemCommandExecutor {
       });
 
       socket.once("connect", () => {
-        socket.write(
-          `${JSON.stringify({ command, args })}\n`,
-        );
+        socket.write(`${JSON.stringify({ command, args })}\n`);
       });
     });
   }
 
   private isTransientSocketError(error: Error): boolean {
     const code = (error as NodeJS.ErrnoException).code;
-    return code === "ENOENT" || code === "ECONNREFUSED" || code === "EPIPE" ||
+    return code === "ENOENT" ||
+      code === "ECONNREFUSED" ||
+      code === "ECONNRESET" ||
+      code === "EPIPE" ||
       /enforcement socket closed before a response/i.test(error.message);
   }
 
