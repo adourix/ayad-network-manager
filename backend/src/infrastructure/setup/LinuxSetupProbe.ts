@@ -5,12 +5,12 @@ import type { SystemCommandExecutor, SystemCommandResult } from "../enforcement/
 import { LinuxSystemCommandExecutor } from "../enforcement/LinuxSystemCommandExecutor.js";
 
 const execFileAsync = promisify(execFile);
-const PRIVILEGED_COMMANDS = new Set(["nft", "tc", "ip", "systemctl"]);
+const PRIVILEGED_COMMANDS = new Set(["nft", "tc", "ip"]);
 
 /**
- * Setup may inspect ordinary host state directly, but commands capable of
- * changing or interrogating kernel/network enforcement state must use the
- * enforcement boundary.
+ * Setup may inspect ordinary host state directly. nft/tc/ip remain behind the
+ * enforcement boundary, while systemctl and diagnostics stay local so stderr
+ * from the host service is preserved for setup error reporting.
  */
 export class LinuxSetupProbe implements SetupProbe {
   constructor(
@@ -22,8 +22,14 @@ export class LinuxSetupProbe implements SetupProbe {
       return this.enforcement.execute(command, args);
     }
 
-    const result = await execFileAsync(command, args);
-    return { stdout: result.stdout, stderr: result.stderr };
+    try {
+      const result = await execFileAsync(command, args);
+      return { stdout: result.stdout, stderr: result.stderr };
+    } catch (error) {
+      const failure = error as { message?: string; stdout?: string; stderr?: string };
+      const detail = failure.stderr?.trim() || failure.stdout?.trim() || failure.message || "command failed";
+      throw new Error(`${command} ${args.join(" ")} failed: ${detail}`);
+    }
   }
 
   async snapshotNft(): Promise<string> {
