@@ -19,41 +19,23 @@ process.env.DATABASE_HOST ??= "localhost";
 
 const { NftPortRuleEnforcer } = await import("../src/infrastructure/enforcement/NftPortRuleEnforcer.js");
 
-test("port rules install upload and return-direction nft rules", async () => {
+test("port rules install upload and return-direction nft rules after mandatory forward drops", async () => {
   const calls: string[][] = [];
-  const executor = {
-    execute: async (_command: string, args: string[]) => {
-      calls.push(args);
-      return { stdout: "", stderr: "" };
-    },
-  };
+  const executor = { execute: async (_command: string, args: string[]) => { calls.push(args); return { stdout: "", stderr: "" }; } };
   const enforcer = new NftPortRuleEnforcer(executor);
-  await enforcer.apply(
-    { mac: "aa:bb:cc:dd:ee:ff", ip: "192.168.1.42" },
-    { id: 7, deviceId: 3, name: "HTTPS", protocol: "tcp", port: 443, action: "allow", enabled: true },
-  );
+  await enforcer.apply({ mac: "aa:bb:cc:dd:ee:ff", ip: "192.168.1.42" }, { id: 7, deviceId: 3, name: "HTTPS", protocol: "tcp", port: 443, action: "allow", enabled: true });
   assert.equal(calls.length, 4);
-  assert.deepEqual(calls[0].slice(0, 2), ["-c", "insert"]);
+  assert.deepEqual(calls[0].slice(0, 7), ["-c", "insert", "rule", "ip", "filter", "ayad_nm_forward", "position"]);
+  assert.equal(calls[0][7], "4");
   assert.ok(calls[2].includes("dport"));
   assert.ok(calls[3].includes("sport"));
   assert.ok(calls[2].includes("accept"));
-  assert.ok(calls[2].includes("2"));
 });
 
 test("disabled port rules are not applied by the catalog service", async () => {
   const calls: unknown[] = [];
-  const repository = {
-    createPortRule: async (data: any) => ({ id: 1, ...data }),
-    deletePortRule: async () => {},
-    portRule: async () => null,
-  } as any;
-  const devices = {
-    findById: async () => ({
-      id: 3,
-      mac: { toString: () => "aa:bb:cc:dd:ee:ff" },
-      ip: { toString: () => "192.168.1.42" },
-    }),
-  } as any;
+  const repository = { createPortRule: async (data: any) => ({ id: 1, ...data }), deletePortRule: async () => {}, portRule: async () => null } as any;
+  const devices = { findById: async () => ({ id: 3, mac: { toString: () => "aa:bb:cc:dd:ee:ff" }, ip: { toString: () => "192.168.1.42" } }) } as any;
   const enforcer = { apply: async () => calls.push(true) };
   const { PolicyCatalogService } = await import("../src/application/policies/PolicyCatalogService.js");
   const service = new PolicyCatalogService(repository, devices, enforcer);
