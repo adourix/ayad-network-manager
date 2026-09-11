@@ -12,11 +12,11 @@ test("schedule enforcement applies active values and restores base values outsid
   const catalog={schedules:async()=>[{id:1,name:"work",description:null,rules:[{id:1,dayOfWeek:1,startTime:"09:00",endTime:"10:00",downloadLimit:1n,uploadLimit:1n,blocked:true}]}]};
   const traffic={limitDownload:async(_m:string,v:any)=>calls.push(`down:${v.rateMbps}`),limitUpload:async(_m:string,v:any)=>calls.push(`up:${v.rateMbps}`),clearDownload:async()=>calls.push("down:clear"),clearUpload:async()=>calls.push("up:clear")};
   const firewall={blockDevice:async()=>calls.push("block"),unblockDevice:async()=>calls.push("unblock")};
-  const service=new ScheduleEnforcementService(devices as any,policies as any,catalog as any,traffic as any,firewall as any,30_000,()=>new Date(2026,7,31,9,30));
+  const service=new ScheduleEnforcementService(devices as any,policies as any,catalog as any,traffic as any,firewall as any,undefined,30_000,()=>new Date(2026,7,31,9,30));
   await service.reconcile();
   assert.deepEqual(calls,["block","down:1","up:1"]);
   calls.length=0;
-  const outside=new ScheduleEnforcementService(devices as any,policies as any,catalog as any,traffic as any,firewall as any,30_000,()=>new Date(2026,7,31,11,0));
+  const outside=new ScheduleEnforcementService(devices as any,policies as any,catalog as any,traffic as any,firewall as any,undefined,30_000,()=>new Date(2026,7,31,11,0));
   await outside.reconcile();
   assert.deepEqual(calls,["down:5","up:2"]);
 });
