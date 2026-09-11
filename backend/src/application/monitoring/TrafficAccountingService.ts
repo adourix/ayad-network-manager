@@ -83,10 +83,9 @@ export class TrafficAccountingService {
       const now = new Date();
       const nowMs = now.getTime();
 
-      // Accounting rules do not need to be rebuilt on every live sample.
-      // Reconcile periodically while keeping the actual traffic samples at
-      // 1-2 seconds. This prevents nft/tc work from starving policy/setup
-      // operations while still repairing accounting state promptly.
+      // Accounting rules are rebuilt periodically, while live samples remain
+      // at 1-2 seconds. Rule creation/repair is deliberately kept out of the
+      // per-device sampling path to avoid repeated nft reads and mutations.
       if (
         this.lastAccountingReconcileAt === 0 ||
         nowMs - this.lastAccountingReconcileAt >= ACCOUNTING_RECONCILE_INTERVAL_MS
@@ -132,10 +131,11 @@ export class TrafficAccountingService {
     }
   }
 
-  private async collectDevice(device: Device, currentIp: string, timestamp: Date): Promise<void> {
+  private async collectDevice(device: Device, _currentIp: string, timestamp: Date): Promise<void> {
     const mac = device.mac.toString();
 
-    await this.trafficUsageReader.ensureDeviceAccounting({ mac, ip: currentIp });
+    // reconcileDeviceAccounting() is the single writer of accounting rules.
+    // Sampling only reads the already-installed named counters.
     const current = await this.trafficUsageReader.readDeviceUsage(mac);
     const previous = this.previous.get(device.id);
 
