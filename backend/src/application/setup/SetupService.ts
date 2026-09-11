@@ -233,7 +233,7 @@ export class SetupService {
       clientInterface = link.ok && localAddresses.length > 0;
     } catch {}
 
-    const normalizedGateway = gateway.trim().split("/")[0];
+    const normalizedGateway = gateway.trim().replace(/\/.*$/, "");
     const gatewayConfigured = clientInterface && localAddresses.some((address) => address === normalizedGateway);
     const gatewayRouteResult = gatewayConfigured ? await this.safe("ip", ["route", "get", normalizedGateway]) : null;
     const gatewayRoute = Boolean(gatewayRouteResult?.ok);
