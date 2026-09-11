@@ -99,6 +99,15 @@ function SetupPage() {
     ? "Review the current gateway configuration, change what you need, then apply the same validated setup path."
     : "Detect the gateway network, validate prerequisites, review the configuration, then apply the Single-Interface + IFB setup.";
 
+  const finish = () => {
+    const target = new URL(window.location.href);
+    if (dashboardPort) target.port = dashboardPort;
+    target.pathname = reconfigure ? "/" : "/login";
+    target.search = "";
+    target.hash = "";
+    window.location.assign(target.toString());
+  };
+
   return (
     <div className="setup-page">
       <div className="setup-topbar">
@@ -211,7 +220,7 @@ function SetupPage() {
             <div className="setup-actions">
               {!apply.isSuccess && <button className="setup-secondary" disabled={apply.isPending} onClick={() => setStep(2)}>Back</button>}
               {!apply.isSuccess && <button className="setup-primary" disabled={apply.isPending} onClick={() => apply.mutate()}>{apply.isPending ? "Applying…" : "Apply configuration"}</button>}
-              {apply.isSuccess && <button className="setup-primary" onClick={() => window.location.assign(reconfigure ? "/" : "/login")}>{reconfigure ? "Return to dashboard" : "Continue to login"}</button>}
+              {apply.isSuccess && <button className="setup-primary" onClick={finish}>{reconfigure ? "Return to dashboard" : "Continue to login"}</button>}
             </div>
           </section>
         )}
