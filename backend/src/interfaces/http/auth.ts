@@ -78,8 +78,16 @@ export async function validateSessionToken(token: string | null): Promise<boolea
 
 export function registerAuthentication(app: FastifyInstance): void {
   app.addHook("preHandler", async (request, reply) => {
-    if (request.url.split("?")[0] === "/api/auth/login" ||
-        request.url.split("?")[0] === "/api/health") return;
+    const pathname = request.url.split("?")[0];
+
+    // Authentication is an API concern. Static frontend routes such as
+    // /login and /setup must remain reachable so the SPA can render.
+    if (!pathname.startsWith("/api/")) return;
+
+    // These API endpoints are intentionally public before authentication.
+    if (pathname === "/api/auth/login" ||
+        pathname === "/api/health" ||
+        pathname.startsWith("/api/setup/")) return;
 
     if (!(await validateSessionToken(tokenFrom(request)))) {
       return reply.code(401).send({ error: "Authentication required" });
