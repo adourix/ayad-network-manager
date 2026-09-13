@@ -1,0 +1,15 @@
+.git
+.github
+node_modules
+**/node_modules
+**/dist
+frontend/release
+frontend/.vite
+backend/.agents
+.env
+.env.*
+!.env.example
+certs
+*.log
+coverage
+.DS_Store
