@@ -14,14 +14,18 @@ export interface SetupDiagnostics { interface: string | null; linkSpeedMbps: num
 const CIDR_RE = /^(\d{1,3}(?:\.\d{1,3}){3})\/(\d{1,2})$/;
 const IFACE_RE = /^[a-zA-Z0-9_.:-]{1,32}$/;
 const IPV4_RE = /^(?:\d{1,3}\.){3}\d{1,3}$/;
-const PREREQUISITES = ["dnsmasq", "nftables", "iproute2", "ethtool", "tcpdump"];
 const DEFAULT_LEASES = "/var/lib/misc/dnsmasq.leases";
 const DEFAULT_RESERVATIONS = "/var/lib/misc/network-control-reservations.conf";
 const DEFAULT_MODULES = "/etc/modules-load.d/network-control-system.conf";
 const DEFAULT_DNSMASQ_OVERRIDE = "/etc/systemd/system/dnsmasq.service.d/network-control-system.conf";
 const DEFAULT_LEGACY_DNSMASQ = "/etc/dnsmasq.d/network-control-dns.conf";
 
-function ipToNumber(ip: string): number | null { if (!IPV4_RE.test(ip)) return null; const parts = ip.split(".").map(Number); if (parts.some((part) => part < 0 || part > 255)) return null; return (((parts[0]! << 24) >>> 0) | (parts[1]! << 16) | (parts[2]! << 8) | parts[3]!) >>> 0; }
+function ipToNumber(ip: string): number | null {
+  if (!IPV4_RE.test(ip)) return null;
+  const parts = ip.split(".").map(Number);
+  if (parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return null;
+  return (((parts[0]! << 24) >>> 0) | (parts[1]! << 16) | (parts[2]! << 8) | parts[3]!) >>> 0;
+}
 function numberToIp(value: number): string { return `${(value >>> 24) & 255}.${(value >>> 16) & 255}.${(value >>> 8) & 255}.${value & 255}`; }
 function maskForPrefix(prefix: number): number { return prefix === 0 ? 0 : (0xffffffff << (32 - prefix)) >>> 0; }
 function networkOf(cidr: string): string | null { const match = cidr.match(CIDR_RE); if (!match) return null; const ip = ipToNumber(match[1]!); const prefix = Number(match[2]); if (ip === null || prefix < 0 || prefix > 32) return null; return `${numberToIp(ip & maskForPrefix(prefix))}/${prefix}`; }
@@ -29,50 +33,250 @@ function prefixOf(cidr: string): number | null { const match = cidr.match(CIDR_R
 function subnetRange(cidr: string): [number, number] | null { const normalized = networkOf(cidr); if (!normalized) return null; const match = normalized.match(CIDR_RE); if (!match) return null; const base = ipToNumber(match[1]!); const prefix = Number(match[2]); if (base === null) return null; const size = prefix === 32 ? 1 : 2 ** (32 - prefix); return [base, base + size - 1]; }
 function subnetOverlaps(a: string, b: string): boolean { const ar = subnetRange(a); const br = subnetRange(b); return Boolean(ar && br && ar[0] <= br[1] && br[0] <= ar[1]); }
 function subnetOverlapsAny(candidate: string, occupied: Iterable<string>): boolean { for (const subnet of occupied) if (subnetOverlaps(candidate, subnet)) return true; return false; }
-function usableHost(ip: string, subnet: string): boolean { const value = ipToNumber(ip); const range = subnetRange(subnet); if (value === null || !range) return false; const prefix = prefixOf(subnet); if (prefix === null || prefix >= 31) return false; return value > range[0] && value < range[1]; }
-function deriveGateway(addresses: string[], subnet: string, _occupied: Set<string>): string | null { const range = subnetRange(subnet); if (!range) return null; const existing = addresses.map((address) => address.split("/")[0]).filter((ip): ip is string => typeof ip === "string" && usableHost(ip, subnet)).sort((a, b) => (ipToNumber(b) ?? 0) - (ipToNumber(a) ?? 0)); if (existing.length > 0) return existing[0]!; const candidate = numberToIp(range[0] + 1); return usableHost(candidate, subnet) ? candidate : null; }
-function proposeClientSubnets(occupied: Set<string>): string[] { const candidates = ["10.0.0.0/24","10.77.0.0/24","10.200.0.0/24","172.20.0.0/24","172.30.0.0/24","172.31.0.0/24","192.168.50.0/24","192.168.60.0/24","192.168.100.0/24","192.168.200.0/24"]; return candidates.filter((candidate) => !subnetOverlapsAny(candidate, occupied)); }
+function usableHost(ip: string, subnet: string): boolean { const value = ipToNumber(ip); const range = subnetRange(subnet); const prefix = prefixOf(subnet); if (value === null || !range || prefix === null || prefix >= 31) return false; return value > range[0] && value < range[1]; }
+function deriveGateway(addresses: string[], subnet: string): string | null {
+  const range = subnetRange(subnet);
+  if (!range) return null;
+  const existing = addresses.map((address) => address.split("/")[0]).filter((ip): ip is string => typeof ip === "string" && usableHost(ip, subnet)).sort((a, b) => (ipToNumber(b) ?? 0) - (ipToNumber(a) ?? 0));
+  if (existing.length > 0) return existing[0]!;
+  const candidate = numberToIp(range[0] + 1);
+  return usableHost(candidate, subnet) ? candidate : null;
+}
+function proposeClientSubnets(occupied: Set<string>): string[] { const candidates = ["10.0.0.0/24", "10.77.0.0/24", "10.200.0.0/24", "172.20.0.0/24", "172.30.0.0/24", "172.31.0.0/24", "192.168.50.0/24", "192.168.60.0/24", "192.168.100.0/24", "192.168.200.0/24"]; return candidates.filter((candidate) => !subnetOverlapsAny(candidate, occupied)); }
 function shellSafe(value: string, pattern: RegExp): boolean { return pattern.test(value); }
 
 export class SetupService {
   constructor(private readonly probe: SetupProbe, private readonly paths: SetupPaths = { configPath: process.env.SYSTEM_CONFIG_PATH ?? "/etc/network-control-system/config.env", dnsmasqPath: process.env.DNSMASQ_CONFIG_PATH ?? "/etc/dnsmasq.d/network-control-clients.conf", nftablesPath: process.env.NFTABLES_CONFIG_PATH ?? "/etc/nftables.d/network-control-system.nft", snapshotDir: process.env.SETUP_SNAPSHOT_DIR ?? "/var/lib/network-control/backups", leasePath: process.env.DHCP_LEASES_PATH ?? DEFAULT_LEASES, reservationsPath: process.env.DHCP_RESERVATIONS_PATH ?? DEFAULT_RESERVATIONS, modulesLoadPath: process.env.IFB_MODULES_LOAD_PATH ?? DEFAULT_MODULES, dnsmasqOverridePath: process.env.DNSMASQ_SYSTEMD_OVERRIDE_PATH ?? DEFAULT_DNSMASQ_OVERRIDE, legacyDnsmasqPath: process.env.LEGACY_DNSMASQ_PATH ?? DEFAULT_LEGACY_DNSMASQ }, private readonly isRoot: () => boolean = () => typeof process.getuid !== "function" || process.getuid() === 0) {}
 
-  async preflight(): Promise<SetupReport> { const errors: string[]=[]; const warnings: string[]=[]; const root=this.isRoot(); const port=await this.safe("ss",["-H","-lun","sport","=",":53"]); const port53Free=port.ok&&port.stdout.trim()===""; const moduleLoaded=await this.safe("test",["-e","/sys/module/ifb"]); const ifb=moduleLoaded.ok?moduleLoaded:await this.safe("modprobe",["ifb"]); const ufw=await this.safe("ufw",["status"]); const firewallManager=ufw.ok&&/Status:\s+active/i.test(ufw.stdout)?"ufw":null; const timed=await this.safe("timedatectl",["show","-p","NTPSynchronized","--value"]); const timeSynchronized=timed.stdout.trim()==="yes"; if(!root) errors.push("Root privileges are required. Run the setup service with the required privileges."); if(!port.ok) errors.push(`Unable to inspect UDP port 53${port.stderr?`: ${port.stderr.trim()}`:""}`); if(!ifb.ok) errors.push("The IFB kernel module is unavailable or could not be loaded."); if(!port53Free) warnings.push("UDP port 53 is occupied; dnsmasq will use DHCP-only mode with port=0."); if(firewallManager) warnings.push("UFW is active. Review its rules before applying nftables configuration."); if(!timeSynchronized) warnings.push("System clock is not synchronized. Scheduling will require a synchronized clock."); return {root,port53Free,ifbAvailable:ifb.ok,firewallManager,timeSynchronized,errors,warnings}; }
-
-  async inspectNetwork(): Promise<SetupNetworkReport> { const errors:string[]=[]; const links=await this.readJson("ip",["-j","link","show"]); const addresses=await this.readJson("ip",["-j","-4","addr","show"]); const routes=await this.readJson("ip",["-j","route","show","default"]); const addressMap=new Map<string,string[]>(); for(const row of Array.isArray(addresses)?addresses:[]){const name=String(row.ifname??""); const values=Array.isArray(row.addr_info)?row.addr_info.filter((item:any)=>item.family==="inet"&&typeof item.local==="string").map((item:any)=>`${item.local}/${item.prefixlen}`):[]; addressMap.set(name,values);} const interfaces=(Array.isArray(links)?links:[]).map((row:any):SetupInterface=>({name:String(row.ifname??""),mac:typeof row.address==="string"?row.address:null,state:String(row.operstate??"UNKNOWN"),addresses:addressMap.get(String(row.ifname??""))??[],kind:typeof row.link_type==="string"?row.link_type:null})).filter((item)=>item.name&&item.name!=="lo"); const defaultUplink=Array.isArray(routes)?routes.find((row:any)=>typeof row.dev==="string")?.dev??null:null; const uplinkSubnets:Record<string,string[]>={}; for(const item of interfaces) uplinkSubnets[item.name]=item.addresses.map(networkOf).filter((value): value is string => Boolean(value)); const occupied=new Set(Object.values(uplinkSubnets).flat()); const proposedClientSubnets=proposeClientSubnets(occupied); if(!defaultUplink) errors.push("No default-route interface detected"); if(!interfaces.length) errors.push("No usable network interfaces detected"); if(defaultUplink&&!(uplinkSubnets[defaultUplink]??[]).length) errors.push("No IPv4 subnet found on the default uplink interface"); if(!proposedClientSubnets.length) errors.push("Unable to find a non-overlapping private client subnet"); return {interfaces,defaultUplink,uplinkSubnets,proposedClientSubnets,errors}; }
-
-  async diagnostics(interfaceName?: string): Promise<SetupDiagnostics> { const network=await this.inspectNetwork(); const selected=interfaceName??network.defaultUplink; const warnings:string[]=[]; if(!selected) return {interface:null,linkSpeedMbps:null,duplex:null,usbSpeed:null,warnings,errors:["No interface available for diagnostics"]}; if(!shellSafe(selected,IFACE_RE)||!network.interfaces.some((item)=>item.name===selected)) return {interface:selected,linkSpeedMbps:null,duplex:null,usbSpeed:null,warnings,errors:["Interface is not a detected interface"]}; const link=await this.safe("ethtool",[selected]); const speed=link.stdout.match(/Speed:\s*(\d+)Mb\/s/i)?.[1]; const duplex=link.stdout.match(/Duplex:\s*(\S+)/i)?.[1]??null; const usb=await this.safe("lsusb",["-t"]); const usbSpeed=usb.stdout.match(/\b(12M|480M|5000M|10000M)\b/)?.[1]??null; const linkSpeedMbps=speed?Number(speed):null; if(linkSpeedMbps!==null&&linkSpeedMbps<100) warnings.push(`Low negotiated link speed: ${linkSpeedMbps} Mbps`); if(usbSpeed==="12M") warnings.push("USB adapter is operating at 12M Full-Speed and may cap throughput."); return {interface:selected,linkSpeedMbps,duplex,usbSpeed,warnings,errors:link.ok?[]:[`Unable to read ethtool diagnostics for ${selected}`]}; }
-
-  async apply(input: SetupApplyInput): Promise<SetupApplyResult> {
-    const validation=this.validateInput(input); if(validation.length) return this.failed(validation);
-    const network=await this.inspectNetwork(); const available=new Set(network.interfaces.map((item)=>item.name)); const errors:string[]=[];
-    if(!available.has(input.clientInterface)) errors.push(`client interface not found: ${input.clientInterface}`); if(!available.has(input.uplinkInterface)) errors.push(`uplink interface not found: ${input.uplinkInterface}`); if(input.clientInterface!==input.uplinkInterface) errors.push("Single-Interface + IFB requires CLIENT_INTERFACE and UPLINK_INTERFACE to use the same interface");
-    const requestedNetwork=networkOf(input.clientSubnet); const sameInterface=input.clientInterface===input.uplinkInterface; const occupiedElsewhere=new Set(Object.entries(network.uplinkSubnets).filter(([name])=>name!==input.uplinkInterface).flatMap(([,subnets])=>subnets));
-    if(!requestedNetwork) errors.push("client subnet is invalid");
-    else if(!sameInterface&&subnetOverlapsAny(input.clientSubnet,occupiedElsewhere)) errors.push("client subnet overlaps an existing interface subnet; choose a different client subnet");
-    const selected=network.interfaces.find((item)=>item.name===input.uplinkInterface); const gatewayCandidate=input.clientGatewayIp??deriveGateway(selected?.addresses??[],input.clientSubnet,new Set()); if(gatewayCandidate===null){errors.push("unable to derive a usable CLIENT_GATEWAY_IP from CLIENT_SUBNET"); return this.failed(errors);} if(!usableHost(gatewayCandidate,input.clientSubnet)) errors.push("CLIENT_GATEWAY_IP must be a usable host inside CLIENT_SUBNET"); if(errors.length) return this.failed(errors); const gateway=gatewayCandidate;
-    if(input.activate!==false){ const preflight=await this.preflight(); if(preflight.errors.length) return this.failed(preflight.errors); }
-    let snapshot=""; if(input.activate!==false){ try{snapshot=await this.snapshot();}catch(error){return this.failed([error instanceof Error?error.message:String(error)]);} }
-    let gatewayAdded=false; let servicesActivated=false; let health:SetupHealth={clientInterface:false,gatewayReachable:false,dhcpLeaseFile:false,outboundConnectivity:false,errors:[]};
-    try { await this.ensureParentDirectories(); if(input.activate!==false) gatewayAdded=await this.ensureGatewayAddress(input.clientInterface,gateway,input.clientSubnet); const rendered=this.render(input,gateway); await this.writeAtomic(this.paths.configPath,rendered.config); await this.writeAtomic(this.paths.dnsmasqPath,rendered.dnsmasq); await this.writeAtomic(this.paths.nftablesPath,rendered.nftables); await this.writeAtomic(rendered.reservationsPath,"# Generated by network-control-system; do not edit.\n"); await this.writeAtomic(this.paths.modulesLoadPath??DEFAULT_MODULES,"ifb\n"); await this.writeAtomic(this.paths.dnsmasqOverridePath??DEFAULT_DNSMASQ_OVERRIDE,"[Service]\nRestart=on-failure\nRestartSec=5\n");
-      if(input.activate!==false){ await this.migrateLegacyDnsmasqConfig(); const tables=await this.safe("nft",["list","tables","ip"]); if(!tables.ok) throw new Error(`unable to inspect nftables tables: ${tables.stderr.trim()}`); if(!/^table\s+ip\s+filter\s*$/m.test(tables.stdout)){const loaded=await this.safe("nft",["-f",this.paths.nftablesPath]); if(!loaded.ok) throw new Error(`unable to load nftables configuration: ${loaded.stderr.trim()}`);} await this.probe.run("systemctl",["daemon-reload"]); await this.probe.run("systemctl",["enable","dnsmasq","network-control-enforcement.service","network-control-backend.service"]); servicesActivated=true; await this.probe.run("systemctl",["restart","network-control-enforcement.service"]); const dnsTest=await this.safe("dnsmasq",["--test"]); if(!dnsTest.ok) throw new Error(`dnsmasq configuration validation failed: ${dnsTest.stderr.trim()||dnsTest.stdout.trim()}`); await this.probe.run("systemctl",["restart","dnsmasq"]); health=await this.health(input.clientInterface,gateway); if(health.errors.length) throw new Error(health.errors.join("; ")); }
-      return {applied:true,configPath:this.paths.configPath,renderedFiles:[this.paths.configPath,this.paths.dnsmasqPath,this.paths.nftablesPath,rendered.reservationsPath,this.paths.modulesLoadPath??DEFAULT_MODULES,this.paths.dnsmasqOverridePath??DEFAULT_DNSMASQ_OVERRIDE],health,rolledBack:false,errors:[]};
-    } catch(error){ if(gatewayAdded) await this.removeGatewayAddress(input.clientInterface,gateway,input.clientSubnet); if(snapshot) await this.rollback(snapshot,servicesActivated); const message=error instanceof Error?error.message:String(error); return {applied:false,configPath:this.paths.configPath,renderedFiles:[],health:health.errors.length?health:{...health,errors:[message]},rolledBack:Boolean(snapshot),errors:[message]}; }
+  async preflight(): Promise<SetupReport> {
+    const errors: string[] = [], warnings: string[] = [];
+    const root = this.isRoot();
+    const port = await this.safe("ss", ["-H", "-lun", "sport", "=", ":53"]);
+    const port53Free = port.ok && port.stdout.trim() === "";
+    const moduleLoaded = await this.safe("test", ["-e", "/sys/module/ifb"]);
+    const ifb = moduleLoaded.ok ? moduleLoaded : await this.safe("modprobe", ["ifb"]);
+    const ufw = await this.safe("ufw", ["status"]);
+    const firewallManager = ufw.ok && /Status:\s+active/i.test(ufw.stdout) ? "ufw" : null;
+    const timed = await this.safe("timedatectl", ["show", "-p", "NTPSynchronized", "--value"]);
+    const timeSynchronized = timed.stdout.trim() === "yes";
+    if (!root) errors.push("Root privileges are required. Run the setup service with the required privileges.");
+    if (!port.ok) errors.push(`Unable to inspect UDP port 53${port.stderr ? `: ${port.stderr.trim()}` : ""}`);
+    if (!ifb.ok) errors.push("The IFB kernel module is unavailable or could not be loaded.");
+    if (!port53Free) warnings.push("UDP port 53 is occupied; dnsmasq will use DHCP-only mode with port=0.");
+    if (firewallManager) warnings.push("UFW is active. Review its rules before applying nftables configuration.");
+    if (!timeSynchronized) warnings.push("System clock is not synchronized. Scheduling will require a synchronized clock.");
+    return { root, port53Free, ifbAvailable: ifb.ok, firewallManager, timeSynchronized, errors, warnings };
   }
 
-  async rollbackLatest():Promise<void>{const entries=await fs.readdir(this.paths.snapshotDir).catch(()=>[] as string[]);const latest=entries.filter((name)=>name.endsWith(".json")).sort().at(-1);if(!latest)return;const snapshot=await fs.readFile(join(this.paths.snapshotDir,latest),"utf8");await this.rollback(snapshot,true);}
-  private validateInput(input:SetupApplyInput):string[]{const errors:string[]=[];if(!shellSafe(input.clientInterface,IFACE_RE))errors.push("invalid client interface");if(!shellSafe(input.uplinkInterface,IFACE_RE))errors.push("invalid uplink interface");if(!networkOf(input.clientSubnet))errors.push("invalid client subnet");if(!Number.isFinite(input.uplinkBandwidthMbps)||input.uplinkBandwidthMbps<=0)errors.push("uplink bandwidth must be greater than zero");if(!Number.isInteger(input.dashboardPort)||input.dashboardPort<1||input.dashboardPort>65535)errors.push("dashboard port must be between 1 and 65535");if(!Number.isInteger(input.sshPort)||input.sshPort<1||input.sshPort>65535)errors.push("ssh port must be between 1 and 65535");if(!input.dnsServers.length||input.dnsServers.some((server)=>!IPV4_RE.test(server)||ipToNumber(server)===null))errors.push("DNS servers must be valid IPv4 addresses");if(input.clientGatewayIp&&(!IPV4_RE.test(input.clientGatewayIp)||ipToNumber(input.clientGatewayIp)===null))errors.push("invalid client gateway IP");return errors;}
-  private render(input:SetupApplyInput,gateway:string){const prefix=prefixOf(input.clientSubnet);if(prefix===null)throw new Error("invalid client subnet prefix");const range=subnetRange(input.clientSubnet);if(!range)throw new Error("invalid client subnet range");const start=numberToIp(range[0]+Math.max(2,10));const end=numberToIp(range[1]-1);const reservationPath=input.dhcpReservationsPath??this.paths.reservationsPath??DEFAULT_RESERVATIONS;const dns=input.dnsServers.join(",");const config=["# Generated by network-control-system; do not edit.",`CLIENT_INTERFACE=${input.clientInterface}`,`UPLINK_INTERFACE=${input.uplinkInterface}`,`CLIENT_SUBNET=${input.clientSubnet}`,`CLIENT_GATEWAY_IP=${gateway}`,`DHCP_RANGE_START=${start}`,`DHCP_RANGE_END=${end}`,`DNS_SERVERS=${dns}`,`DASHBOARD_PORT=${input.dashboardPort}`,`SSH_PORT=${input.sshPort}`,`UPLINK_BANDWIDTH_MBPS=${input.uplinkBandwidthMbps}`,"NETWORK_MODE=single-interface-ifb","SETUP_COMPLETED=true",""] .join("\n");const dnsmasq=["# Generated by network-control-system; DHCP only.","port=0","bind-interfaces",`interface=${input.clientInterface}`,`dhcp-range=${start},${end},${prefix===24?"255.255.255.0":input.clientSubnet}`,`dhcp-option=3,${gateway}`,`dhcp-option=6,${dns}`,`dhcp-leasefile=${this.paths.leasePath??DEFAULT_LEASES}`,`dhcp-hostsfile=${reservationPath}`,""] .join("\n");const nftables=["# Generated by network-control-system; do not edit.","table ip filter {","  chain ayad_nm_allow_ssh_management {",`    tcp dport ${input.sshPort} accept`,"  }","  chain forward {",`    ip saddr ${input.clientSubnet} accept`,`    ip daddr ${input.clientSubnet} accept`,"  }","}","table ip nat {","  chain postrouting {",`    type nat hook postrouting priority srcnat; ip saddr ${input.clientSubnet} masquerade`,"  }","}",""] .join("\n");return{config,dnsmasq,nftables,reservationsPath:reservationPath};}
-  private async ensureGatewayAddress(iface:string,gateway:string,subnet:string):Promise<boolean>{const prefix=prefixOf(subnet);if(prefix===null)throw new Error("invalid client subnet prefix");const addresses=await this.safe("ip",["-j","-4","addr","show","dev",iface]);if(addresses.ok){try{const rows=JSON.parse(addresses.stdout) as any[];const existing=rows.flatMap((row)=>Array.isArray(row.addr_info)?row.addr_info:[]).some((item)=>item.family==="inet"&&item.local===gateway&&Number(item.prefixlen)===prefix);if(existing)return false;}catch{}}const result=await this.safe("ip",["addr","add",`${gateway}/${prefix}`,"dev",iface]);if(!result.ok&&!/File exists/i.test(result.stderr))throw new Error(`unable to add client gateway address: ${result.stderr.trim()}`);return result.ok;}
-  private async removeGatewayAddress(iface:string,gateway:string,subnet:string):Promise<void>{const prefix=prefixOf(subnet);if(prefix===null)return;await this.safe("ip",["addr","del",`${gateway}/${prefix}`,"dev",iface]);}
-  private async health(iface:string,gateway:string):Promise<SetupHealth>{const errors:string[]=[];const link=await this.safe("ip",["link","show","dev",iface]);const clientInterface=link.ok;if(!clientInterface)errors.push(`Client interface ${iface} is not reachable`);const gatewayPing=await this.safe("ping",["-c","1","-W","1",gateway]);const gatewayReachable=gatewayPing.ok;if(!gatewayReachable)errors.push(`Client gateway ${gateway} is not reachable`);const lease=await this.safe("cat",[this.paths.leasePath??DEFAULT_LEASES]);const dhcpLeaseFile=lease.ok&&lease.stdout.trim().length>0;if(!dhcpLeaseFile)errors.push("No DHCP lease is currently present in the dnsmasq lease file");const outbound=await this.safe("ping",["-c","1","-W","2","1.1.1.1"]);const outboundConnectivity=outbound.ok;if(!outboundConnectivity)errors.push("Outbound connectivity test failed");return{clientInterface,gatewayReachable,dhcpLeaseFile,outboundConnectivity,errors};}
-  private async snapshot():Promise<string>{await fs.mkdir(this.paths.snapshotDir,{recursive:true});const id=`${Date.now()}`;const file=join(this.paths.snapshotDir,`${id}.json`);const files=[this.paths.configPath,this.paths.dnsmasqPath,this.paths.nftablesPath,this.paths.legacyDnsmasqPath??DEFAULT_LEGACY_DNSMASQ];const contents:Record<string,string|null>={};for(const path of files)contents[path]=await fs.readFile(path,"utf8").catch(()=>null);let nft="";if(this.probe.snapshotNft)nft=await this.probe.snapshotNft();const data=JSON.stringify({files:contents,nft},null,2);await fs.writeFile(file,data,"utf8");return data;}
-  private async rollback(snapshot:string,servicesActivated:boolean):Promise<void>{try{const parsed=JSON.parse(snapshot) as{files?:Record<string,string|null>};for(const[path,content]of Object.entries(parsed.files??{})){if(content===null)await fs.rm(path,{force:true});else await this.writeAtomic(path,content);}}catch{}if(servicesActivated){await this.safe("systemctl",["restart","dnsmasq"]);await this.safe("systemctl",["restart","network-control-enforcement.service"]);}}
-  private async migrateLegacyDnsmasqConfig():Promise<void>{await fs.rm(this.paths.legacyDnsmasqPath??DEFAULT_LEGACY_DNSMASQ,{force:true}).catch(()=>undefined);}
-  private async installPrerequisites():Promise<void>{for(const packageName of PREREQUISITES){const result=await this.safe("dpkg-query",["-W","-f=${Status}",packageName]);if(result.ok&&/install ok installed/i.test(result.stdout))continue;const install=await this.safe("apt-get",["install","-y",packageName]);if(!install.ok)throw new Error(`unable to install prerequisite ${packageName}: ${install.stderr.trim()}`);}}
-  private async ensureParentDirectories():Promise<void>{const files=[this.paths.configPath,this.paths.dnsmasqPath,this.paths.nftablesPath,this.paths.reservationsPath??DEFAULT_RESERVATIONS,this.paths.modulesLoadPath??DEFAULT_MODULES,this.paths.dnsmasqOverridePath??DEFAULT_DNSMASQ_OVERRIDE];for(const file of files)await fs.mkdir(dirname(file),{recursive:true});}
-  private async writeAtomic(path:string,content:string):Promise<void>{await fs.mkdir(dirname(path),{recursive:true});const temp=`${path}.tmp-${process.pid}-${Date.now()}`;await fs.writeFile(temp,content,"utf8");await fs.rename(temp,path);}
-  private async readJson(command:string,args:string[]):Promise<any>{const result=await this.safe(command,args);if(!result.ok)return[];try{return JSON.parse(result.stdout);}catch{return[];}}
-  private async safe(command:string,args:string[]):Promise<{ok:boolean;stdout:string;stderr:string}>{try{const result=await this.probe.run(command,args);return{ok:true,stdout:result.stdout??"",stderr:result.stderr??""};}catch(error){return{ok:false,stdout:"",stderr:error instanceof Error?error.message:String(error)};}}
-  private failed(errors:string[]):SetupApplyResult{return{applied:false,configPath:this.paths.configPath,renderedFiles:[],health:{clientInterface:false,gatewayReachable:false,dhcpLeaseFile:false,outboundConnectivity:false,errors},rolledBack:false,errors};}
+  async inspectNetwork(): Promise<SetupNetworkReport> {
+    const errors: string[] = [];
+    const links = await this.readJson("ip", ["-j", "link", "show"]);
+    const addresses = await this.readJson("ip", ["-j", "-4", "addr", "show"]);
+    const routes = await this.readJson("ip", ["-j", "route", "show", "default"]);
+    const addressMap = new Map<string, string[]>();
+    for (const row of Array.isArray(addresses) ? addresses : []) {
+      const name = String(row.ifname ?? "");
+      const values = Array.isArray(row.addr_info) ? row.addr_info.filter((item: any) => item.family === "inet" && typeof item.local === "string").map((item: any) => `${item.local}/${item.prefixlen}`) : [];
+      addressMap.set(name, values);
+    }
+    const interfaces = (Array.isArray(links) ? links : []).map((row: any): SetupInterface => ({ name: String(row.ifname ?? ""), mac: typeof row.address === "string" ? row.address : null, state: String(row.operstate ?? "UNKNOWN"), addresses: addressMap.get(String(row.ifname ?? "")) ?? [], kind: typeof row.link_type === "string" ? row.link_type : null })).filter((item) => item.name && item.name !== "lo");
+    const defaultUplink = Array.isArray(routes) ? routes.find((row: any) => typeof row.dev === "string")?.dev ?? null : null;
+    const uplinkSubnets: Record<string, string[]> = {};
+    for (const item of interfaces) uplinkSubnets[item.name] = item.addresses.map(networkOf).filter((value): value is string => Boolean(value));
+    const occupied = new Set(Object.values(uplinkSubnets).flat());
+    const proposedClientSubnets = proposeClientSubnets(occupied);
+    if (!defaultUplink) errors.push("No default-route interface detected");
+    if (!interfaces.length) errors.push("No usable network interfaces detected");
+    if (defaultUplink && !(uplinkSubnets[defaultUplink] ?? []).length) errors.push("No IPv4 subnet found on the default uplink interface");
+    if (!proposedClientSubnets.length) errors.push("Unable to find a non-overlapping private client subnet");
+    return { interfaces, defaultUplink, uplinkSubnets, proposedClientSubnets, errors };
+  }
+
+  async diagnostics(interfaceName?: string): Promise<SetupDiagnostics> {
+    const network = await this.inspectNetwork();
+    const selected = interfaceName ?? network.defaultUplink;
+    const warnings: string[] = [];
+    if (!selected) return { interface: null, linkSpeedMbps: null, duplex: null, usbSpeed: null, warnings, errors: ["No interface available for diagnostics"] };
+    if (!shellSafe(selected, IFACE_RE) || !network.interfaces.some((item) => item.name === selected)) return { interface: selected, linkSpeedMbps: null, duplex: null, usbSpeed: null, warnings, errors: ["Interface is not a detected interface"] };
+    const link = await this.safe("ethtool", [selected]);
+    const speed = link.stdout.match(/Speed:\s*(\d+)Mb\/s/i)?.[1];
+    const duplex = link.stdout.match(/Duplex:\s*(\S+)/i)?.[1] ?? null;
+    const usb = await this.safe("lsusb", ["-t"]);
+    const usbSpeed = usb.stdout.match(/\b(12M|480M|5000M|10000M)\b/)?.[1] ?? null;
+    const linkSpeedMbps = speed ? Number(speed) : null;
+    if (linkSpeedMbps !== null && linkSpeedMbps < 100) warnings.push(`Low negotiated link speed: ${linkSpeedMbps} Mbps`);
+    if (usbSpeed === "12M") warnings.push("USB adapter is operating at 12M Full-Speed and may cap throughput.");
+    return { interface: selected, linkSpeedMbps, duplex, usbSpeed, warnings, errors: link.ok ? [] : [`Unable to read ethtool diagnostics for ${selected}`] };
+  }
+
+  async apply(input: SetupApplyInput): Promise<SetupApplyResult> {
+    const validation = this.validateInput(input);
+    if (validation.length) return this.failed(validation);
+    const network = await this.inspectNetwork();
+    const available = new Set(network.interfaces.map((item) => item.name));
+    const errors: string[] = [];
+    const sameInterface = input.clientInterface === input.uplinkInterface;
+    if (!available.has(input.clientInterface)) errors.push(`client interface not found: ${input.clientInterface}`);
+    if (!available.has(input.uplinkInterface)) errors.push(`uplink interface not found: ${input.uplinkInterface}`);
+    if (!sameInterface) errors.push("Single-Interface + IFB requires CLIENT_INTERFACE and UPLINK_INTERFACE to use the same interface");
+    const requestedNetwork = networkOf(input.clientSubnet);
+    const occupiedElsewhere = new Set(Object.entries(network.uplinkSubnets).filter(([name]) => name !== input.uplinkInterface).flatMap(([, subnets]) => subnets));
+    if (!requestedNetwork) errors.push("client subnet is invalid");
+    else if (!sameInterface && subnetOverlapsAny(input.clientSubnet, occupiedElsewhere)) errors.push("client subnet overlaps an existing interface subnet; choose a different client subnet");
+    const selected = network.interfaces.find((item) => item.name === input.uplinkInterface);
+    const gatewayCandidate = input.clientGatewayIp ?? deriveGateway(selected?.addresses ?? [], requestedNetwork ?? input.clientSubnet);
+    if (gatewayCandidate === null) errors.push("unable to derive a usable CLIENT_GATEWAY_IP from CLIENT_SUBNET");
+    if (gatewayCandidate !== null && !usableHost(gatewayCandidate, requestedNetwork ?? input.clientSubnet)) errors.push("CLIENT_GATEWAY_IP must be a usable host inside CLIENT_SUBNET");
+    if (errors.length) return this.failed(errors);
+    const gateway = gatewayCandidate!;
+    if (input.activate !== false) {
+      const preflight = await this.preflight();
+      if (preflight.errors.length) return this.failed(preflight.errors);
+    }
+    let snapshot = "";
+    if (input.activate !== false) {
+      try { snapshot = await this.snapshot(); } catch (error) { return this.failed([error instanceof Error ? error.message : String(error)]); }
+    }
+    let gatewayAdded = false;
+    let servicesActivated = false;
+    let health: SetupHealth = { clientInterface: false, gatewayReachable: false, dhcpLeaseFile: false, outboundConnectivity: false, errors: [] };
+    try {
+      await this.ensureParentDirectories();
+      if (input.activate !== false) gatewayAdded = await this.ensureGatewayAddress(input.clientInterface, gateway, requestedNetwork!);
+      const rendered = this.render({ ...input, clientSubnet: requestedNetwork! }, gateway);
+      await this.writeAtomic(this.paths.configPath, rendered.config);
+      await this.writeAtomic(this.paths.dnsmasqPath, rendered.dnsmasq);
+      await this.writeAtomic(this.paths.nftablesPath, rendered.nftables);
+      await this.writeAtomic(rendered.reservationsPath, "# Generated by network-control-system; do not edit.\n");
+      await this.writeAtomic(this.paths.modulesLoadPath ?? DEFAULT_MODULES, "ifb\n");
+      await this.writeAtomic(this.paths.dnsmasqOverridePath ?? DEFAULT_DNSMASQ_OVERRIDE, "[Service]\nRestart=on-failure\nRestartSec=5\n");
+      if (input.activate !== false) {
+        await this.migrateLegacyDnsmasqConfig();
+        const nftCheck = await this.safe("nft", ["-c", "-f", this.paths.nftablesPath]);
+        if (!nftCheck.ok) throw new Error(`nftables configuration validation failed: ${nftCheck.stderr.trim() || nftCheck.stdout.trim()}`);
+        const tables = await this.safe("nft", ["list", "tables", "ip"]);
+        if (!tables.ok) throw new Error(`unable to inspect nftables tables: ${tables.stderr.trim()}`);
+        if (!/^table\s+ip\s+filter\s*$/m.test(tables.stdout)) {
+          const loaded = await this.safe("nft", ["-f", this.paths.nftablesPath]);
+          if (!loaded.ok) throw new Error(`unable to load nftables configuration: ${loaded.stderr.trim()}`);
+        }
+        await this.probe.run("systemctl", ["daemon-reload"]);
+        await this.probe.run("systemctl", ["enable", "dnsmasq", "network-control-enforcement.service", "network-control-backend.service"]);
+        servicesActivated = true;
+        await this.probe.run("systemctl", ["restart", "network-control-enforcement.service"]);
+        const dnsTest = await this.safe("dnsmasq", ["--test"]);
+        if (!dnsTest.ok) throw new Error(`dnsmasq configuration validation failed: ${dnsTest.stderr.trim() || dnsTest.stdout.trim()}`);
+        await this.probe.run("systemctl", ["restart", "dnsmasq"]);
+        health = await this.health(input.clientInterface, gateway);
+        if (health.errors.length) throw new Error(health.errors.join("; "));
+      }
+      return { applied: true, configPath: this.paths.configPath, renderedFiles: [this.paths.configPath, this.paths.dnsmasqPath, this.paths.nftablesPath, rendered.reservationsPath, this.paths.modulesLoadPath ?? DEFAULT_MODULES, this.paths.dnsmasqOverridePath ?? DEFAULT_DNSMASQ_OVERRIDE], health, rolledBack: false, errors: [] };
+    } catch (error) {
+      if (gatewayAdded) await this.removeGatewayAddress(input.clientInterface, gateway, requestedNetwork!);
+      if (snapshot) await this.rollback(snapshot, servicesActivated);
+      const message = error instanceof Error ? error.message : String(error);
+      return { applied: false, configPath: this.paths.configPath, renderedFiles: [], health: health.errors.length ? health : { ...health, errors: [message] }, rolledBack: Boolean(snapshot), errors: [message] };
+    }
+  }
+
+  async rollbackLatest(): Promise<void> { const entries = await fs.readdir(this.paths.snapshotDir).catch(() => [] as string[]); const latest = entries.filter((name) => name.endsWith(".json")).sort().at(-1); if (!latest) return; const snapshot = await fs.readFile(join(this.paths.snapshotDir, latest), "utf8"); await this.rollback(snapshot, true); }
+
+  private validateInput(input: SetupApplyInput): string[] {
+    const errors: string[] = [];
+    if (!shellSafe(input.clientInterface, IFACE_RE)) errors.push("invalid client interface");
+    if (!shellSafe(input.uplinkInterface, IFACE_RE)) errors.push("invalid uplink interface");
+    if (!networkOf(input.clientSubnet)) errors.push("invalid client subnet");
+    if (!Number.isFinite(input.uplinkBandwidthMbps) || input.uplinkBandwidthMbps <= 0) errors.push("uplink bandwidth must be greater than zero");
+    if (!Number.isInteger(input.dashboardPort) || input.dashboardPort < 1 || input.dashboardPort > 65535) errors.push("dashboard port must be between 1 and 65535");
+    if (!Number.isInteger(input.sshPort) || input.sshPort < 1 || input.sshPort > 65535) errors.push("ssh port must be between 1 and 65535");
+    if (!input.dnsServers.length || input.dnsServers.some((server) => !IPV4_RE.test(server) || ipToNumber(server) === null)) errors.push("DNS servers must be valid IPv4 addresses");
+    if (input.clientGatewayIp && (!IPV4_RE.test(input.clientGatewayIp) || ipToNumber(input.clientGatewayIp) === null)) errors.push("invalid client gateway IP");
+    return errors;
+  }
+
+  private render(input: SetupApplyInput, gateway: string) {
+    const prefix = prefixOf(input.clientSubnet);
+    if (prefix === null) throw new Error("invalid client subnet prefix");
+    const range = subnetRange(input.clientSubnet);
+    if (!range) throw new Error("invalid client subnet range");
+    const start = numberToIp(range[0] + 10);
+    const end = numberToIp(range[1] - 1);
+    const reservationPath = input.dhcpReservationsPath ?? this.paths.reservationsPath ?? DEFAULT_RESERVATIONS;
+    const dns = input.dnsServers.join(",");
+    const config = ["# Generated by network-control-system; do not edit.", `CLIENT_INTERFACE=${input.clientInterface}`, `UPLINK_INTERFACE=${input.uplinkInterface}`, `CLIENT_SUBNET=${input.clientSubnet}`, `CLIENT_GATEWAY_IP=${gateway}`, `DHCP_RANGE_START=${start}`, `DHCP_RANGE_END=${end}`, `DNS_SERVERS=${dns}`, `DASHBOARD_PORT=${input.dashboardPort}`, `SSH_PORT=${input.sshPort}`, `UPLINK_BANDWIDTH_MBPS=${input.uplinkBandwidthMbps}`, "NETWORK_MODE=single-interface-ifb", "SETUP_COMPLETED=true", ""].join("\n");
+    const dnsmasq = ["# Generated by network-control-system; DHCP only.", "port=0", "bind-interfaces", `interface=${input.clientInterface}`, `dhcp-range=${start},${end},${prefix === 24 ? "255.255.255.0" : numberToIp(maskForPrefix(prefix))}`, `dhcp-option=3,${gateway}`, `dhcp-option=6,${dns}`, `dhcp-leasefile=${this.paths.leasePath ?? DEFAULT_LEASES}`, `dhcp-hostsfile=${reservationPath}`, ""].join("\n");
+    const nftables = [
+      "# Generated by network-control-system; do not edit.",
+      "# Runtime policy chains are owned by the enforcement layer.",
+      "table ip filter {",
+      "  chain ayad_nm_input {",
+      "    type filter hook input priority -300; policy accept;",
+      "  }",
+      "  chain ayad_nm_forward {",
+      "    type filter hook forward priority -300; policy accept;",
+      "  }",
+      "}",
+      "table ip nat {",
+      "  chain POSTROUTING {",
+      "    type nat hook postrouting priority srcnat; policy accept;",
+      `    ip saddr ${input.clientSubnet} oifname \"${input.uplinkInterface}\" masquerade comment \"ayad_nm_single_interface_nat\"`,
+      "  }",
+      "}",
+      ""
+    ].join("\n");
+    return { config, dnsmasq, nftables, reservationsPath: reservationPath };
+  }
+
+  private async ensureGatewayAddress(iface: string, gateway: string, subnet: string): Promise<boolean> {
+    const prefix = prefixOf(subnet); if (prefix === null) throw new Error("invalid client subnet prefix");
+    const addresses = await this.safe("ip", ["-j", "-4", "addr", "show", "dev", iface]);
+    if (addresses.ok) { try { const rows = JSON.parse(addresses.stdout) as any[]; const existing = rows.flatMap((row) => Array.isArray(row.addr_info) ? row.addr_info : []).some((item) => item.family === "inet" && item.local === gateway && Number(item.prefixlen) === prefix); if (existing) return false; } catch {} }
+    const result = await this.safe("ip", ["addr", "add", `${gateway}/${prefix}`, "dev", iface]);
+    if (!result.ok && !/File exists/i.test(result.stderr)) throw new Error(`unable to add client gateway address: ${result.stderr.trim()}`);
+    return result.ok;
+  }
+
+  private async removeGatewayAddress(iface: string, gateway: string, subnet: string): Promise<void> { const prefix = prefixOf(subnet); if (prefix === null) return; await this.safe("ip", ["addr", "del", `${gateway}/${prefix}`, "dev", iface]); }
+
+  private async health(iface: string, gateway: string): Promise<SetupHealth> {
+    const errors: string[] = [];
+    const link = await this.safe("ip", ["link", "show", "dev", iface]);
+    const clientInterface = link.ok;
+    if (!clientInterface) errors.push(`Client interface ${iface} is not reachable`);
+    const gatewayPing = await this.safe("ping", ["-c", "1", "-W", "1", gateway]);
+    const gatewayReachable = gatewayPing.ok;
+    if (!gatewayReachable) errors.push(`Client gateway ${gateway} is not reachable`);
+    const lease = await this.safe("cat", [this.paths.leasePath ?? DEFAULT_LEASES]);
+    const dhcpLeaseFile = lease.ok && lease.stdout.trim().length > 0;
+    if (!dhcpLeaseFile) errors.push("No DHCP lease is currently present in the dnsmasq lease file");
+    const outbound = await this.safe("ping", ["-c", "1", "-W", "2", "1.1.1.1"]);
+    const outboundConnectivity = outbound.ok;
+    if (!outboundConnectivity) errors.push("Outbound connectivity test failed");
+    return { clientInterface, gatewayReachable, dhcpLeaseFile, outboundConnectivity, errors };
+  }
+
+  private async snapshot(): Promise<string> {
+    await fs.mkdir(this.paths.snapshotDir, { recursive: true });
+    const id = `${Date.now()}`;
+    const file = join(this.paths.snapshotDir, `${id}.json`);
+    const files = [this.paths.configPath, this.paths.dnsmasqPath, this.paths.nftablesPath, this.paths.legacyDnsmasqPath ?? DEFAULT_LEGACY_DNSMASQ];
+    const contents: Record<string, string | null> = {};
+    for (const path of files) contents[path] = await fs.readFile(path, "utf8").catch(() => null);
+    let nft = ""; if (this.probe.snapshotNft) nft = await this.probe.snapshotNft();
+    const data = JSON.stringify({ files: contents, nft }, null, 2);
+    await fs.writeFile(file, data, "utf8");
+    return data;
+  }
+
+  private async rollback(snapshot: string, servicesActivated: boolean): Promise<void> {
+    try { const parsed = JSON.parse(snapshot) as { files?: Record<string, string | null> }; for (const [path, content] of Object.entries(parsed.files ?? {})) { if (content === null) await fs.rm(path, { force: true }); else await this.writeAtomic(path, content); } } catch {}
+    if (servicesActivated) { await this.safe("systemctl", ["restart", "dnsmasq"]); await this.safe("systemctl", ["restart", "network-control-enforcement.service"]); }
+  }
+
+  private async migrateLegacyDnsmasqConfig(): Promise<void> { await fs.rm(this.paths.legacyDnsmasqPath ?? DEFAULT_LEGACY_DNSMASQ, { force: true }).catch(() => undefined); }
+  private async ensureParentDirectories(): Promise<void> { const files = [this.paths.configPath, this.paths.dnsmasqPath, this.paths.nftablesPath, this.paths.reservationsPath ?? DEFAULT_RESERVATIONS, this.paths.modulesLoadPath ?? DEFAULT_MODULES, this.paths.dnsmasqOverridePath ?? DEFAULT_DNSMASQ_OVERRIDE]; for (const file of files) await fs.mkdir(dirname(file), { recursive: true }); }
+  private async writeAtomic(path: string, content: string): Promise<void> { await fs.mkdir(dirname(path), { recursive: true }); const temp = `${path}.tmp-${process.pid}-${Date.now()}`; await fs.writeFile(temp, content, "utf8"); await fs.rename(temp, path); }
+  private async readJson(command: string, args: string[]): Promise<any> { const result = await this.safe(command, args); if (!result.ok) return []; try { return JSON.parse(result.stdout); } catch { return []; } }
+  private async safe(command: string, args: string[]): Promise<{ ok: boolean; stdout: string; stderr: string }> { try { const result = await this.probe.run(command, args); return { ok: true, stdout: result.stdout ?? "", stderr: result.stderr ?? "" }; } catch (error) { return { ok: false, stdout: "", stderr: error instanceof Error ? error.message : String(error) }; }
+  private failed(errors: string[]): SetupApplyResult { return { applied: false, configPath: this.paths.configPath, renderedFiles: [], health: { clientInterface: false, gatewayReachable: false, dhcpLeaseFile: false, outboundConnectivity: false, errors }, rolledBack: false, errors }; }
 }
