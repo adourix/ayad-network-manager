@@ -89,17 +89,15 @@ export class TrafficEnforcementService {
     if (!Number.isFinite(this.quotaThrottleMbps) || this.quotaThrottleMbps <= 0) {
       throw new Error("Quota throttle rate must be greater than zero");
     }
-    const maxMbps = this.getUplinkBandwidthMbps();
-    if (this.quotaThrottleMbps > maxMbps) {
-      throw new Error(`Quota throttle rate ${this.quotaThrottleMbps} Mbps exceeds uplink bandwidth ${maxMbps} Mbps`);
-    }
-    const bitsPerSecond = BigInt(Math.round(this.quotaThrottleMbps * 1_000_000));
+    const rateMilliMbps = BigInt(Math.round(this.quotaThrottleMbps * 1000));
+    this.trafficPolicyValidator.validate(device, { rateMbps: rateMilliMbps });
+    const bitsPerSecond = rateMilliMbps * 1_000n;
     try {
       await this.trafficEnforcer.limitDownloadBits(device, bitsPerSecond);
       await this.trafficEnforcer.limitUploadBits(device, bitsPerSecond);
-      await this.operationsRepository?.audit({ action: "apply-quota-throttle", mac: device.mac.toString(), deviceId: device.id, details: { rateMilliMbps: Math.round(this.quotaThrottleMbps * 1000).toString(), result: "success" } });
+      await this.operationsRepository?.audit({ action: "apply-quota-throttle", mac: device.mac.toString(), deviceId: device.id, details: { rateMilliMbps: rateMilliMbps.toString(), result: "success" } });
     } catch (error) {
-      await this.operationsRepository?.audit({ action: "apply-quota-throttle", mac: device.mac.toString(), deviceId: device.id, details: { rateMilliMbps: Math.round(this.quotaThrottleMbps * 1000).toString(), result: "failure", error: error instanceof Error ? error.message : String(error) } });
+      await this.operationsRepository?.audit({ action: "apply-quota-throttle", mac: device.mac.toString(), deviceId: device.id, details: { rateMilliMbps: rateMilliMbps.toString(), result: "failure", error: error instanceof Error ? error.message : String(error) } });
       throw error;
     }
   }
@@ -131,11 +129,5 @@ export class TrafficEnforcementService {
       await this.operationsRepository?.audit({ action: "clear-quota-throttle", mac: device.mac.toString(), deviceId: device.id, details: { result: "failure", error: error instanceof Error ? error.message : String(error) } });
       throw error;
     }
-  }
-
-  private getUplinkBandwidthMbps(): number {
-    const value = Number(this.trafficPolicyValidator.constructor === Object ? NaN : 0);
-    void value;
-    return Number(process.env.UPLINK_BANDWIDTH_MBPS ?? "0");
   }
 }
