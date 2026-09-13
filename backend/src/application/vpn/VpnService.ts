@@ -36,7 +36,7 @@ export class VpnService {
 
   async setEnabled(enabled: boolean): Promise<VpnState> {
     const state = await this.repository.get();
-    if (enabled && !state.vmessLink) throw new Error("Configure a vmess or vless link first");
+    if (enabled && !state.vmessLink?.trim()) throw new Error("Configure a VMess or VLESS link first");
     try {
       const connected = await this.enforcement.apply(enabled);
       await this.repository.setEnabled(enabled);
@@ -58,11 +58,11 @@ export class VpnService {
         await this.audit?.audit({ action: "reconcile-vpn", details: { desiredEnabled: false, connected: false, result: "success" } });
         return result;
       }
-      if (!state.vmessLink) {
+      if (!state.vmessLink?.trim()) {
         await this.enforcement.apply(false);
         await this.repository.setEnabled(false);
         const result = await this.repository.setConnected(false);
-        await this.audit?.audit({ action: "reconcile-vpn", details: { desiredEnabled: true, connected: false, result: "missing-vmess-link" } });
+        await this.audit?.audit({ action: "reconcile-vpn", details: { desiredEnabled: true, connected: false, result: "missing-vpn-link" } });
         return result;
       }
       await this.enforcement.configure?.(state.vmessLink);
