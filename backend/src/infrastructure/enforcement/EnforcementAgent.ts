@@ -53,8 +53,35 @@ const priority: Job[] = [], background: Job[] = [];
 let running = false;
 const maxBackgroundQueue = 8;
 function schedule(job: Job, isBackground: boolean): void { if (isBackground) { if (background.length >= maxBackgroundQueue) throw new Error("background enforcement queue overloaded"); background.push(job); } else priority.push(job); void drain(); }
-async function drain(): Promise<void> { if (running) return; running = true; try { while (priority.length || background.length) { const job = priority.shift() ?? background.shift(); if (job) await job(); } } finally { running = false; } }
-async function executeRequest(socket: import("node:net").Socket, request: Request): Promise<void> { const executor = isBackgroundRead(request.command, request.args) ? backgroundRead : local; try { const result = await executor.execute(request.command, request.args); send(socket, { ok: true, ...result }); } catch (error) { send(socket, { ok: false, error: error instanceof Error ? error.message : String(error) }); } }
+async function executeVpnConfigWrite(args: string[]): Promise<{ stdout: string; stderr: string }> {
+  const content = args.slice(1).join("");
+  if (!content || content.length > 32_000) throw new Error("sing-box config payload is invalid");
+  let parsed: unknown;
+  try { parsed = JSON.parse(content); } catch { throw new Error("sing-box config payload is not valid JSON"); }
+  if (!parsed || typeof parsed !== "object") throw new Error("sing-box config payload must be a JSON object");
+  await fs.mkdir(resolve(vpnConfigStagePath, ".."), { recursive: true });
+  await fs.writeFile(vpnConfigStagePath, content, { mode: 0o600 });
+  try {
+    await local.execute("sing-box", ["check", "-c", vpnConfigStagePath]);
+    await local.execute("systemctl", ["start", vpnConfigInstallUnit]);
+  } catch (error) {
+    try { await fs.unlink(vpnConfigStagePath); } catch { /* best effort */ }
+    throw error;
+  }
+  return { stdout: "", stderr: "" };
+}
+async function executeRequest(socket: import("node:net").Socket, request: Request): Promise<void> {
+  try {
+    if (request.command === "write-sing-box-config") {
+      const result = await executeVpnConfigWrite(request.args);
+      send(socket, { ok: true, ...result });
+      return;
+    }
+    const executor = isBackgroundRead(request.command, request.args) ? backgroundRead : local;
+    const result = await executor.execute(request.command, request.args);
+    send(socket, { ok: true, ...result });
+  } catch (error) { send(socket, { ok: false, error: error instanceof Error ? error.message : String(error) }); }
+}
 const server = createServer((socket) => { let buffer = ""; socket.setEncoding("utf8"); socket.on("data", (chunk) => { buffer += chunk; let newline = buffer.indexOf("\n"); while (newline >= 0) { const line = buffer.slice(0, newline).trim(); buffer = buffer.slice(newline + 1); newline = buffer.indexOf("\n"); if (!line) continue; let request: Request; try { request = JSON.parse(line) as Request; } catch { send(socket, { ok: false, error: "invalid JSON request" }); continue; } if (!valid(request.command, request.args)) { send(socket, { ok: false, error: "command rejected by enforcement agent" }); continue; } try { schedule(() => executeRequest(socket, request), isBackgroundRead(request.command, request.args)); } catch (error) { send(socket, { ok: false, error: error instanceof Error ? error.message : String(error) }); } } }); socket.on("error", () => undefined); });
 await fs.mkdir(resolve(socketPath, ".."), { recursive: true });
 try { unlinkSync(socketPath); } catch { /* socket absent */ }
