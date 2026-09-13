@@ -6,11 +6,14 @@ import { LinuxSystemCommandExecutor } from "../enforcement/LinuxSystemCommandExe
 
 const execFileAsync = promisify(execFile);
 const PRIVILEGED_COMMANDS = new Set(["nft", "tc", "ip"]);
+const NFTABLES_CONFIG_PATH = process.env.NFTABLES_CONFIG_PATH ?? "/etc/nftables.d/network-control-system.nft";
 
 /**
  * Setup may inspect ordinary host state directly. nft/tc/ip remain behind the
- * enforcement boundary, while systemctl and diagnostics stay local so stderr
- * from the host service is preserved for setup error reporting.
+ * enforcement boundary for mutations and runtime reads. The setup-only nft
+ * configuration check is deliberately non-mutating and restricted to the
+ * generated system configuration path, so a complete ruleset can be validated
+ * before the enforcement agent is asked to load it.
  */
 export class LinuxSetupProbe implements SetupProbe {
   constructor(
@@ -18,6 +21,10 @@ export class LinuxSetupProbe implements SetupProbe {
   ) {}
 
   async run(command: string, args: string[]): Promise<SystemCommandResult> {
+    if (command === "nft" && args.length === 3 && args[0] === "-c" && args[1] === "-f" && args[2] === NFTABLES_CONFIG_PATH) {
+      return this.validateNftablesConfig();
+    }
+
     if (PRIVILEGED_COMMANDS.has(command)) {
       return this.enforcement.execute(command, args);
     }
@@ -39,5 +46,10 @@ export class LinuxSetupProbe implements SetupProbe {
 
   async restoreNft(snapshotPath: string): Promise<void> {
     await this.enforcement.execute("nft", ["-f", snapshotPath]);
+  }
+
+  private async validateNftablesConfig(): Promise<SystemCommandResult> {
+    const local = new LinuxSystemCommandExecutor(true);
+    return local.execute("nft", ["-c", "-f", NFTABLES_CONFIG_PATH]);
   }
 }
