@@ -362,9 +362,6 @@ install_production_services() {
 
 setup_port_owner() {
   local port="$1"
-  # fuser returns exit status 1 when the port has no owner. Because this
-  # installer uses `set -euo pipefail`, that expected "no process" result
-  # must not terminate the installer during command substitution.
   fuser -n tcp "${port}" 2>/dev/null \
     | awk '{for (i = 2; i <= NF; i++) if ($i ~ /^[0-9]+$/) { print $i; exit }}' \
     || true
@@ -417,7 +414,9 @@ start_setup_mode() {
     log "Starting temporary setup server"
     : > "${SETUP_LOG}"
     chmod 0600 "${SETUP_LOG}"
-    env NODE_ENV=development node dist/bootstrap.js >>"${SETUP_LOG}" 2>&1 &
+    # The temporary first-run wizard is intentionally HTTP. Production keeps
+    # the TLS settings from .env; explicitly clear them only for this process.
+    env NODE_ENV=development TLS_CERT_PATH= TLS_KEY_PATH= node dist/bootstrap.js >>"${SETUP_LOG}" 2>&1 &
     SETUP_PID="$!"
   fi
 
