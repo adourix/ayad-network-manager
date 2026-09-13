@@ -1,6 +1,8 @@
 import type { Device, HistorySample, LoginResponse, Policy, Quota, VpnStatus } from "../types/api";
 
-const baseUrl = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, "") ?? "";
+// Production is served by the same Fastify origin as the API. The API base URL is configurable only for Vite development builds.
+const configuredBaseUrl = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, "") ?? "";
+const baseUrl = import.meta.env.DEV ? configuredBaseUrl : "";
 
 export class ApiError extends Error {
   public readonly status: number;
@@ -38,9 +40,6 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   if (init.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
   const accessToken = token();
   if (accessToken) headers.set("Authorization", `Bearer ${accessToken}`);
-
-  // API state is dynamic. Do not allow browser HTTP caching to return stale
-  // setup status/preflight results after the backend has been rebuilt/restarted.
   const response = await fetch(`${baseUrl}${path}`, { ...init, headers, cache: "no-store", credentials: "include" });
   if (response.status === 401) {
     const message = await responseErrorMessage(response, "Authentication required");
