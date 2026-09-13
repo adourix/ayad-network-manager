@@ -220,6 +220,7 @@ SYSTEM_CONFIG_PATH=${CONFIG_FILE}
 DNSMASQ_CONFIG_PATH=/etc/dnsmasq.d/network-control-clients.conf
 NFTABLES_CONFIG_PATH=/etc/nftables.d/network-control-system.nft
 SETUP_SNAPSHOT_DIR=${BACKUP_DIR}
+ENFORCEMENT_SOCKET_PATH=/run/network-control/enforcement.sock
 EOF
   chmod 0600 "${ENV_FILE}"
 }
@@ -346,6 +347,7 @@ install_production_services() {
   local enforcement_unit="${SYSTEMD_DIR}/network-control-enforcement.service"
   grep -qF "EnvironmentFile=-${CONFIG_FILE}" "${enforcement_unit}" || die "enforcement unit is missing runtime config"
   grep -qF "EnvironmentFile=-${APP_ROOT}/.env" "${enforcement_unit}" || die "enforcement unit is missing installer environment"
+  grep -qF "ExecStart=/usr/bin/node ${APP_ROOT}/dist/infrastructure/enforcement/EnforcementAgent.js" "${enforcement_unit}" || die "enforcement unit points to an unexpected agent path"
 
   if grep -qE '@APP_ROOT@|@CONFIG_FILE@|@SYSTEMD_HELPER_DIR@' \
     "${SYSTEMD_DIR}/network-control-enforcement.service" \
@@ -357,7 +359,28 @@ install_production_services() {
   systemctl daemon-reload
   systemctl enable network-control-enforcement.service network-control-backend.service
   systemctl restart network-control-enforcement.service
+
+  for _ in $(seq 1 20); do
+    if [[ -S /run/network-control/enforcement.sock ]] && systemctl is-active --quiet network-control-enforcement.service; then
+      break
+    fi
+    if ! systemctl is-active --quiet network-control-enforcement.service; then
+      journalctl -u network-control-enforcement.service -n 80 --no-pager >&2 || true
+      die "network-control-enforcement.service failed to start or create /run/network-control/enforcement.sock"
+    fi
+    sleep 1
+  done
+
+  [[ -S /run/network-control/enforcement.sock ]] || {
+    journalctl -u network-control-enforcement.service -n 80 --no-pager >&2 || true
+    die "enforcement socket was not created: /run/network-control/enforcement.sock"
+  }
+
   systemctl restart network-control-backend.service
+  systemctl is-active --quiet network-control-backend.service || {
+    journalctl -u network-control-backend.service -n 80 --no-pager >&2 || true
+    die "network-control-backend.service failed to start"
+  }
 }
 
 setup_port_owner() {
