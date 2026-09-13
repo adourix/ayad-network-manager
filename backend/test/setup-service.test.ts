@@ -1,5 +1,5 @@
 import { strict as assert } from "node:assert";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
@@ -19,10 +19,9 @@ function paths(root: string): SetupPaths {
   };
 }
 
-test("setup apply rejects a client subnet that overlaps the uplink without destroying existing config", async () => {
-  const root = await mkdtemp(join(tmpdir(), "network-control-setup-overlap-"));
+test("setup accepts the uplink subnet as the client subnet in single-interface mode", async () => {
+  const root = await mkdtemp(join(tmpdir(), "network-control-setup-shared-"));
   const p = paths(root);
-  await writeFile(p.configPath, "OLD_CONFIG=true\n", "utf8");
   const probe = {
     run: async (command: string, args: string[]) => {
       if (command === "ip" && args.includes("link")) return { stdout: JSON.stringify([{ ifname: "eno1", address: "aa:bb:cc:dd:ee:ff", operstate: "UP", link_type: "ether" }]), stderr: "" };
@@ -33,9 +32,11 @@ test("setup apply rejects a client subnet that overlaps the uplink without destr
   };
   const service = new SetupService(probe, p, () => true);
   const result = await service.apply({ clientInterface: "eno1", uplinkInterface: "eno1", clientSubnet: "192.168.1.0/24", uplinkBandwidthMbps: 100, dashboardPort: 5000, sshPort: 22, dnsServers: ["1.1.1.1"], activate: false });
-  assert.equal(result.applied, false);
-  assert.match(result.errors.join("; "), /overlaps the uplink subnet/);
-  assert.equal(await readFile(p.configPath, "utf8"), "OLD_CONFIG=true\n");
+  assert.equal(result.applied, true);
+  const config = await readFile(p.configPath, "utf8");
+  assert.match(config, /CLIENT_SUBNET=192\.168\.1\.0\/24/);
+  assert.match(config, /CLIENT_GATEWAY_IP=192\.168\.1\.254/);
+  assert.match(await readFile(p.dnsmasqPath, "utf8"), /dhcp-option=3,192\.168\.1\.254/);
 });
 
 test("setup renders a separate client subnet and keeps DHCP-only dnsmasq safe", async () => {
