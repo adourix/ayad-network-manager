@@ -9,6 +9,7 @@ WorkingDirectory=@APP_ROOT@
 EnvironmentFile=-@APP_ROOT@/.env
 EnvironmentFile=-@CONFIG_FILE@
 RuntimeDirectory=network-control
+RuntimeDirectoryMode=0755
 ExecStart=/usr/bin/node @APP_ROOT@/dist/infrastructure/enforcement/EnforcementAgent.js
 Restart=on-failure
 RestartSec=5
@@ -17,7 +18,10 @@ AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
-ProtectHome=true
+# The installer may live under /root or another administrator-owned home
+# directory. ProtectHome=true would make WorkingDirectory inaccessible and
+# systemd would fail before ExecStart with status=200/CHDIR.
+ProtectHome=false
 ReadWritePaths=/run/network-control /etc/sing-box
 
 [Install]
