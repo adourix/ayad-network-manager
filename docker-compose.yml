@@ -1,0 +1,86 @@
+name: ayad-network-manager
+
+services:
+  db:
+    image: postgres:16-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-ayad_network_manager}
+      POSTGRES_USER: ${POSTGRES_USER:-ayad}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ayad} -d ${POSTGRES_DB:-ayad_network_manager}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks:
+      - app
+
+  enforcement:
+    build:
+      context: .
+      dockerfile: backend/deploy/enforcement/Dockerfile
+    restart: unless-stopped
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    environment:
+      NODE_ENV: production
+      ENFORCEMENT_SOCKET_PATH: /run/network-control/enforcement.sock
+      SYSTEM_CONFIG_PATH: /etc/network-control/config.env
+      SETUP_SNAPSHOT_DIR: /var/lib/network-control/backups
+    volumes:
+      - config-data:/etc/network-control
+      - runtime-socket:/run/network-control
+      - setup-state:/var/lib/network-control
+    healthcheck:
+      test: ["CMD-SHELL", "test -S /run/network-control/enforcement.sock"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+    networks:
+      - app
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/deploy/docker/backend.Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      DASHBOARD_PORT: ${DASHBOARD_PORT:-5000}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-ayad}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-ayad_network_manager}
+      ENFORCEMENT_SOCKET_PATH: /run/network-control/enforcement.sock
+      SYSTEM_CONFIG_PATH: /etc/network-control/config.env
+      SETUP_SNAPSHOT_DIR: /var/lib/network-control/backups
+      FRONTEND_DIST_PATH: /frontend-dist
+    ports:
+      - "${DASHBOARD_PORT:-5000}:${DASHBOARD_PORT:-5000}"
+    volumes:
+      - config-data:/etc/network-control
+      - runtime-socket:/run/network-control
+      - setup-state:/var/lib/network-control
+      - ./certs:/etc/network-control/certs:ro
+    depends_on:
+      db:
+        condition: service_healthy
+      enforcement:
+        condition: service_healthy
+    networks:
+      - app
+
+volumes:
+  config-data:
+  runtime-socket:
+  setup-state:
+  db-data:
+
+networks:
+  app:
+    driver: bridge
