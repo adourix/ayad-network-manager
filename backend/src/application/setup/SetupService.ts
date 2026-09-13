@@ -320,12 +320,20 @@ export class SetupService {
     const occupied = new Set(Object.values(network.uplinkSubnets).flat().map(networkOf).filter(Boolean) as string[]);
     const requestedNetwork = networkOf(input.clientSubnet);
     const uplinkNetworks = new Set((network.uplinkSubnets[input.uplinkInterface] ?? []).map(networkOf).filter(Boolean));
+    const clientInterfaceNetworks = new Set((network.uplinkSubnets[input.clientInterface] ?? []).map(networkOf).filter(Boolean));
     if (!requestedNetwork) {
       errors.push("client subnet is invalid");
-    } else if (uplinkNetworks.has(requestedNetwork)) {
+    } else if (uplinkNetworks.has(requestedNetwork) && !clientInterfaceNetworks.has(requestedNetwork)) {
       errors.push("client subnet overlaps the uplink subnet; choose a different client subnet");
-    } else if (subnetOverlapsAny(input.clientSubnet, occupied)) {
-      errors.push("client subnet overlaps an existing interface subnet; choose a different client subnet");
+    } else {
+      const occupiedElsewhere = new Set(
+        Object.entries(network.uplinkSubnets)
+          .filter(([name]) => name !== input.clientInterface)
+          .flatMap(([, subnets]) => subnets.map(networkOf).filter(Boolean) as string[]),
+      );
+      if (subnetOverlapsAny(input.clientSubnet, occupiedElsewhere)) {
+        errors.push("client subnet overlaps an existing interface subnet; choose a different client subnet");
+      }
     }
 
     const selected = network.interfaces.find((item) => item.name === input.uplinkInterface);
@@ -334,6 +342,7 @@ export class SetupService {
     else if (!usableHost(gatewayCandidate, input.clientSubnet)) errors.push("CLIENT_GATEWAY_IP must be a usable host inside CLIENT_SUBNET");
     if (errors.length) return this.failed(errors);
 
+    if (!gatewayCandidate) return this.failed(["unable to derive a free CLIENT_GATEWAY_IP from CLIENT_SUBNET"]);
     const gateway = gatewayCandidate;
     const preflight = await this.preflight();
     if (preflight.errors.length) return this.failed(preflight.errors);
