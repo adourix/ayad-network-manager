@@ -10,6 +10,9 @@ on:
       - "backend/**"
       - ".github/workflows/backend-ci.yml"
 
+permissions:
+  contents: write
+
 jobs:
   backend:
     runs-on: ubuntu-24.04
@@ -35,4 +38,18 @@ jobs:
         run: npm test
 
       - name: Build
-        run: npm run build
+        run: |
+          set -o pipefail
+          npm run build 2>&1 | tee /tmp/backend-build.log
+
+      - name: Publish temporary build diagnostics
+        if: failure()
+        working-directory: .
+        run: |
+          cp /tmp/backend-build.log CI_BUILD_ERROR.txt
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B ci-debug
+          git add CI_BUILD_ERROR.txt
+          git commit -m "ci: publish temporary build diagnostics" || true
+          git push --force origin ci-debug
