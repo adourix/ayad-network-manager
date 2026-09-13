@@ -169,13 +169,12 @@ write_admin_env() {
   read -r -p "Admin username [admin]: " admin_username
   admin_username="${admin_username:-admin}"
 
-  read -r -s -p "Admin password (minimum 12 characters): " admin_password
+  read -r -s -p "Admin password: " admin_password
   printf '\n'
   read -r -s -p "Confirm admin password: " admin_password_confirm
   printf '\n'
 
   [[ -n "${admin_password}" ]] || die "admin password cannot be empty"
-  [[ "${#admin_password}" -ge 12 ]] || die "admin password must be at least 12 characters"
   [[ "${admin_password}" == "${admin_password_confirm}" ]] || die "admin passwords do not match"
 
   admin_salt="$(openssl rand -hex 16)"
@@ -228,7 +227,7 @@ prepare_tls() {
   log "Preparing TLS certificate"
   install -d -m 0755 "${TLS_DIR}"
 
-  local default_iface default_ip
+  local default_iface default_ip tls_config
   default_iface="$(ip -4 route show default | awk 'NR==1 {print $5}')"
   default_ip=""
   if [[ -n "${default_iface}" ]]; then
@@ -237,11 +236,34 @@ prepare_tls() {
   [[ -n "${default_ip}" ]] || default_ip="127.0.0.1"
 
   if [[ ! -f "${TLS_DIR}/server.key" || ! -f "${TLS_DIR}/server.crt" ]]; then
+    tls_config="$(mktemp)"
+    chmod 0600 "${tls_config}"
+    trap 'rm -f "${tls_config}"' RETURN
+    cat > "${tls_config}" <<EOF
+[req]
+distinguished_name = req_distinguished_name
+x509_extensions = v3_req
+prompt = no
+
+[req_distinguished_name]
+CN = Ayad Network Manager
+
+[v3_req]
+subjectAltName = @alt_names
+
+[alt_names]
+IP.1 = ${default_ip}
+DNS.1 = ayad-nm.local
+DNS.2 = localhost
+IP.2 = 127.0.0.1
+EOF
+
     openssl req -x509 -nodes -newkey rsa:3072 -days 825 \
       -keyout "${TLS_DIR}/server.key" \
       -out "${TLS_DIR}/server.crt" \
-      -subj "/CN=Ayad Network Manager" \
-      -addext "subjectAltName=IP:${default_ip},DNS=ayad-nm.local,DNS=localhost,IP=127.0.0.1"
+      -config "${tls_config}"
+    rm -f "${tls_config}"
+    trap - RETURN
     chmod 0600 "${TLS_DIR}/server.key"
     chmod 0644 "${TLS_DIR}/server.crt"
   fi
