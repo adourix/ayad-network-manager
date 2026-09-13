@@ -22,6 +22,14 @@ export interface DeviceView {
   lastSeen: Date;
 }
 
+function formatRateMbps(milliMbps: bigint | null): string | null {
+  if (milliMbps === null) return null;
+  const whole = milliMbps / 1000n;
+  const fraction = milliMbps % 1000n;
+  if (fraction === 0n) return whole.toString();
+  return `${whole.toString()}.${fraction.toString().padStart(3, "0").replace(/0+$/, "")}`;
+}
+
 export class DeviceService {
   constructor(
     private readonly discoveryService: DeviceDiscoveryService,
@@ -71,8 +79,8 @@ export class DeviceService {
         identityValidated: device.identityValidated,
         identitySource: device.identitySource,
         blocked: policy?.blocked ?? false,
-        downloadLimit: policy?.downloadLimit?.toString() ?? null,
-        uploadLimit: policy?.uploadLimit?.toString() ?? null,
+        downloadLimit: formatRateMbps(policy?.downloadLimit ?? null),
+        uploadLimit: formatRateMbps(policy?.uploadLimit ?? null),
         online: onlineIds.has(device.id),
         firstSeen: device.firstSeen,
         lastSeen: device.lastSeen,
@@ -101,8 +109,8 @@ export class DeviceService {
       identityValidated: device.identityValidated,
       identitySource: device.identitySource,
       blocked: policy?.blocked ?? false,
-      downloadLimit: policy?.downloadLimit?.toString() ?? null,
-      uploadLimit: policy?.uploadLimit?.toString() ?? null,
+      downloadLimit: formatRateMbps(policy?.downloadLimit ?? null),
+      uploadLimit: formatRateMbps(policy?.uploadLimit ?? null),
       online,
       firstSeen: device.firstSeen,
       lastSeen: device.lastSeen,
