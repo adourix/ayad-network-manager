@@ -76,6 +76,7 @@ function SetupPage() {
   const [clientInterface, setClientInterface] = useState("");
   const [uplinkInterface, setUplinkInterface] = useState("");
   const [clientSubnet, setClientSubnet] = useState("");
+  const [subnetTouched, setSubnetTouched] = useState(false);
   const [gateway, setGateway] = useState("");
   const [bandwidth, setBandwidth] = useState("");
   const [dashboardPort, setDashboardPort] = useState("");
@@ -132,6 +133,14 @@ function SetupPage() {
   }, [network.data, interfaces, loadedConfig, reconfigure, clientInterface, uplinkInterface]);
 
   useEffect(() => {
+    if (reconfigure || !loadedConfig || subnetTouched || !sameInterfaceMode || detectedSubnets.length === 0) return;
+    const detectedSubnet = detectedSubnets[0]!;
+    if (clientSubnet === detectedSubnet) return;
+    setClientSubnet(detectedSubnet);
+    setGateway(gatewayFromSubnet(detectedSubnet, selectedInterface?.addresses));
+  }, [reconfigure, loadedConfig, subnetTouched, sameInterfaceMode, detectedSubnets, clientSubnet, selectedInterface]);
+
+  useEffect(() => {
     if (!clientSubnet && suggestedSubnets.length > 0) {
       setClientSubnet(suggestedSubnets[0]!);
       setGateway(gatewayFromSubnet(suggestedSubnets[0]!, sameInterfaceMode ? selectedInterface?.addresses : []));
@@ -181,6 +190,7 @@ function SetupPage() {
   const chooseInterface = (name: string) => {
     setUplinkInterface(name);
     setClientInterface(name);
+    setSubnetTouched(false);
     const selected = interfaces.find((item) => item.name === name);
     const available = selected?.addresses.map(subnetFromAddress).filter(Boolean) ?? network.data?.proposedClientSubnets ?? [];
     if (!clientSubnet && available.length) {
@@ -192,6 +202,7 @@ function SetupPage() {
   };
 
   const chooseSubnet = (value: string) => {
+    setSubnetTouched(true);
     setClientSubnet(value);
     setGateway(gatewayFromSubnet(value, sameInterfaceMode ? selectedInterface?.addresses : []));
     setError("");
