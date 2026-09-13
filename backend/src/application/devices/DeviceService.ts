@@ -15,6 +15,8 @@ export interface DeviceView {
   identityValidated: boolean;
   identitySource: string;
   blocked: boolean;
+  downloadLimit: string | null;
+  uploadLimit: string | null;
   online: boolean;
   firstSeen: Date;
   lastSeen: Date;
@@ -69,6 +71,8 @@ export class DeviceService {
         identityValidated: device.identityValidated,
         identitySource: device.identitySource,
         blocked: policy?.blocked ?? false,
+        downloadLimit: policy?.downloadLimit ?? null,
+        uploadLimit: policy?.uploadLimit ?? null,
         online: onlineIds.has(device.id),
         firstSeen: device.firstSeen,
         lastSeen: device.lastSeen,
@@ -97,6 +101,8 @@ export class DeviceService {
       identityValidated: device.identityValidated,
       identitySource: device.identitySource,
       blocked: policy?.blocked ?? false,
+      downloadLimit: policy?.downloadLimit ?? null,
+      uploadLimit: policy?.uploadLimit ?? null,
       online,
       firstSeen: device.firstSeen,
       lastSeen: device.lastSeen,
