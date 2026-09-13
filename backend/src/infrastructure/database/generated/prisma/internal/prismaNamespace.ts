@@ -1834,6 +1834,7 @@ export const AuditLogScalarFieldEnum = {
   deviceId: 'deviceId',
   action: 'action',
   mac: 'mac',
+  actor: 'actor',
   details: 'details',
   createdAt: 'createdAt'
 } as const
