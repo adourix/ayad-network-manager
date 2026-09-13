@@ -56,10 +56,17 @@ services:
       HOST: 0.0.0.0
       DASHBOARD_PORT: ${DASHBOARD_PORT:-5000}
       DATABASE_URL: postgresql://${POSTGRES_USER:-ayad}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-ayad_network_manager}
+      DATABASE_USER: ${POSTGRES_USER:-ayad}
+      DATABASE_PASSWORD: ${POSTGRES_PASSWORD}
+      DATABASE_NAME: ${POSTGRES_DB:-ayad_network_manager}
+      DATABASE_HOST: db
+      DATABASE_PORT: 5432
       ENFORCEMENT_SOCKET_PATH: /run/network-control/enforcement.sock
       SYSTEM_CONFIG_PATH: /etc/network-control/config.env
       SETUP_SNAPSHOT_DIR: /var/lib/network-control/backups
       FRONTEND_DIST_PATH: /frontend-dist
+      TLS_CERT_PATH: /etc/network-control/certs/server.crt
+      TLS_KEY_PATH: /etc/network-control/certs/server.key
     ports:
       - "${DASHBOARD_PORT:-5000}:${DASHBOARD_PORT:-5000}"
     volumes:
