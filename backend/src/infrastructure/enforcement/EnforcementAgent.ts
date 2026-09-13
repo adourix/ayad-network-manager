@@ -2,7 +2,15 @@ import { createServer } from "node:net";
 import { promises as fs } from "node:fs";
 import { unlinkSync } from "node:fs";
 import { resolve } from "node:path";
+import dotenv from "dotenv";
 import { LinuxSystemCommandExecutor } from "./LinuxSystemCommandExecutor.js";
+
+dotenv.config();
+dotenv.config({
+  path: process.env.SYSTEM_CONFIG_PATH ?? "/etc/network-control-system/config.env",
+  override: true,
+});
+
 const socketPath = process.env.ENFORCEMENT_SOCKET_PATH ?? "/run/network-control/enforcement.sock";
 const vpnConfigPath = process.env.SING_BOX_CONFIG_PATH ?? "/etc/sing-box/config.json";
 const vpnConfigStagePath = process.env.SING_BOX_STAGE_PATH ?? "/run/network-control/sing-box-config.json";
