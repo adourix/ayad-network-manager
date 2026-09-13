@@ -34,17 +34,36 @@ if [[ ! -f "${APP_ROOT}/package.json" ]]; then
   exit 1
 fi
 
-# systemd executes the compiled backend/enforcement agent from dist/. Always
-# rebuild before installing units so a git pull cannot leave dist/ stale.
+# systemd executes compiled artifacts from dist/. Never retain old generated
+# JavaScript when installing a new source revision: a stale dist tree can make
+# systemd execute code that no longer exists in src/ and is extremely difficult
+# to diagnose from the journal.
 cd "${APP_ROOT}"
+rm -rf dist
 npm run build
+
+for required in \
+  "dist/bootstrap.js" \
+  "dist/server.js" \
+  "dist/infrastructure/enforcement/EnforcementAgent.js" \
+  "dist/infrastructure/enforcement/NftEnforcer.js"; do
+  if [[ ! -f "${APP_ROOT}/${required}" ]]; then
+    echo "build did not produce required artifact: ${required}" >&2
+    exit 1
+  fi
+done
+
+# The current source owns management access through the dedicated management
+# chain. This guard catches accidental installation of an obsolete build before
+# systemd is restarted.
+if ! grep -q 'ayad_nm_input' "${APP_ROOT}/dist/infrastructure/enforcement/NftEnforcer.js"; then
+  echo "compiled NftEnforcer.js is missing the current management-chain implementation" >&2
+  exit 1
+fi
 
 install -d -m 0755 "${SYSTEMD_HELPER_DIR}"
 install -d -m 0755 "${BACKUP_DIR}"
 install -d -m 0755 /etc/modules-load.d /etc/systemd/system/dnsmasq.service.d
-# The backend runs as root with only the capabilities required for gateway
-# setup/enforcement. Keep setup storage root-writable so CAP_DAC_OVERRIDE is
-# not needed just to create setup snapshots.
 chown root:root "${BACKUP_DIR}"
 chmod 0755 "${BACKUP_DIR}"
 install -m 0750 -o root -g root \
@@ -63,10 +82,6 @@ render_and_install \
   "network-control-sing-box-config.service.template" \
   "network-control-sing-box-config.service"
 
-# ProtectSystem=strict makes the filesystem read-only to the service except
-# for explicit ReadWritePaths. Keep every path used by setup's atomic writes
-# writable, including nftables config, DHCP reservations, IFB module loading
-# and the dnsmasq restart policy override.
 BACKEND_UNIT="${SYSTEMD_DIR}/network-control-backend.service"
 if grep -q '^ReadWritePaths=' "${BACKEND_UNIT}"; then
   sed -i "s|^ReadWritePaths=.*$|ReadWritePaths=${APP_ROOT} /run/network-control /etc/dnsmasq.d /etc/nftables.d /etc/network-control-system /etc/modules-load.d /etc/systemd/system/dnsmasq.service.d /var/lib/network-control /var/lib/misc|" "${BACKEND_UNIT}"
@@ -81,17 +96,12 @@ for path in /var/lib/network-control /etc/nftables.d /var/lib/misc /etc/modules-
   fi
 done
 
-# The privileged enforcement agent must receive the same runtime network
-# configuration selected by setup. Never fall back to .env for this value:
-# .env is installer-owned and intentionally contains empty network placeholders.
 ENFORCEMENT_UNIT="${SYSTEMD_DIR}/network-control-enforcement.service"
 if ! grep -qF "EnvironmentFile=-${CONFIG_FILE}" "${ENFORCEMENT_UNIT}"; then
   echo "enforcement systemd unit is missing runtime config: ${CONFIG_FILE}" >&2
   exit 1
 fi
-if grep -qF "EnvironmentFile=-${APP_ROOT}/.env" "${ENFORCEMENT_UNIT}"; then
-  :
-else
+if ! grep -qF "EnvironmentFile=-${APP_ROOT}/.env" "${ENFORCEMENT_UNIT}"; then
   echo "enforcement systemd unit is missing installer environment file" >&2
   exit 1
 fi
@@ -106,9 +116,6 @@ fi
 
 systemctl daemon-reload
 systemctl enable network-control-enforcement.service network-control-backend.service
-# Both services execute dist/ artifacts. Restart both after the build so an
-# installation cannot leave the enforcement agent on an older executor while
-# the backend has already moved to the new build.
 systemctl restart network-control-enforcement.service
 systemctl restart network-control-backend.service
 
