@@ -6,67 +6,91 @@ import "./SetupPage.css";
 
 type Step = 0 | 1 | 2 | 3;
 
-function Check({ ok }: { ok: boolean }) {
+function Check({ ok, pending = false }: { ok: boolean; pending?: boolean }) {
+  if (pending) return <span className="setup-check">…</span>;
   return <span className={`setup-check ${ok ? "ok" : "bad"}`}>{ok ? "✓" : "!"}</span>;
 }
 
-function subnetFromAddress(address: string): string {
-  const match = address.match(/^(\d{1,3}(?:\.\d{1,3}){3})\/(\d{1,2})$/);
-  if (!match) return "";
-  const octets = match[1]!.split(".").map(Number);
-  const bits = Number(match[2]);
-  if (octets.length !== 4 || octets.some((octet) => octet < 0 || octet > 255) || bits < 0 || bits > 32) return "";
-  const mask = bits === 0 ? 0 : (0xffffffff << (32 - bits)) >>> 0;
-  const ip = ((octets[0]! << 24) | (octets[1]! << 16) | (octets[2]! << 8) | octets[3]!) >>> 0;
+function ipToNumber(ip: string): number | null {
+  const parts = ip.trim().split(".").map(Number);
+  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return null;
+  return (((parts[0]! << 24) >>> 0) | (parts[1]! << 16) | (parts[2]! << 8) | parts[3]!) >>> 0;
+}
+
+function numberToIp(value: number): string {
+  return `${(value >>> 24) & 255}.${(value >>> 16) & 255}.${(value >>> 8) & 255}.${value & 255}`;
+}
+
+function parseCidr(cidr: string): { ip: number; prefix: number; network: number; first: number; last: number } | null {
+  const match = cidr.trim().match(/^(\d{1,3}(?:\.\d{1,3}){3})\/(\d{1,2})$/);
+  if (!match) return null;
+  const ip = ipToNumber(match[1]!);
+  const prefix = Number(match[2]);
+  if (ip === null || prefix < 0 || prefix > 32) return null;
+  const mask = prefix === 0 ? 0 : (0xffffffff << (32 - prefix)) >>> 0;
   const network = ip & mask;
-  return `${network >>> 24}.${(network >>> 16) & 255}.${(network >>> 8) & 255}.${network & 255}/${bits}`;
+  const size = prefix === 32 ? 1 : 2 ** (32 - prefix);
+  return { ip, prefix, network, first: network, last: network + size - 1 };
+}
+
+function subnetFromAddress(address: string): string {
+  const parsed = parseCidr(address);
+  return parsed ? `${numberToIp(parsed.network)}/${parsed.prefix}` : "";
 }
 
 function gatewayFromSubnet(subnet: string): string {
-  const match = subnet.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\/(\d{1,2})$/);
-  if (!match) return "";
-  const bits = Number(match[5]);
-  if (bits > 30) return "";
-  const ip = match.slice(1, 5).map(Number);
-  const value = (((ip[0]! << 24) | (ip[1]! << 16) | (ip[2]! << 8) | ip[3]!) >>> 0);
-  const mask = bits === 0 ? 0 : (0xffffffff << (32 - bits)) >>> 0;
-  const network = value & mask;
-  return `${(network >>> 24) & 255}.${(network >>> 16) & 255}.${(network >>> 8) & 255}.${(network & 255) + 1}`;
+  const parsed = parseCidr(subnet);
+  if (!parsed || parsed.prefix >= 31) return "";
+  return numberToIp(parsed.network + 1);
+}
+
+function subnetsOverlap(a: string, b: string): boolean {
+  const left = parseCidr(a);
+  const right = parseCidr(b);
+  return Boolean(left && right && left.first <= right.last && right.first <= left.last);
 }
 
 function usableInterfaces(items: SetupInterface[]): SetupInterface[] {
   return items.filter((item) => item.name && item.state !== "DOWN" && item.state !== "NOTPRESENT");
 }
 
+function isValidDnsList(value: string): boolean {
+  const servers = value.split(",").map((item) => item.trim()).filter(Boolean);
+  return servers.length > 0 && servers.every((server) => ipToNumber(server) !== null);
+}
+
 function SetupPage() {
   const reconfigure = new URLSearchParams(window.location.search).get("mode") === "settings";
-  const [step, setStep] = useState<Step>(reconfigure ? 2 : 0);
-  const [initialized, setInitialized] = useState(false);
+  const [step, setStep] = useState<Step>(reconfigure ? 1 : 0);
+  const [loadedConfig, setLoadedConfig] = useState(false);
   const [clientInterface, setClientInterface] = useState("");
   const [uplinkInterface, setUplinkInterface] = useState("");
   const [clientSubnet, setClientSubnet] = useState("");
-  const [bandwidth, setBandwidth] = useState("100");
-  const [dashboardPort, setDashboardPort] = useState("5000");
+  const [gateway, setGateway] = useState("");
+  const [bandwidth, setBandwidth] = useState("");
+  const [dashboardPort, setDashboardPort] = useState("");
   const [sshPort, setSshPort] = useState("22");
   const [dnsServers, setDnsServers] = useState("1.1.1.1,8.8.8.8");
-  const [gateway, setGateway] = useState("");
   const [error, setError] = useState("");
+  const [networkAcknowledged, setNetworkAcknowledged] = useState(false);
 
   const config = useQuery({ queryKey: ["setup", "config"], queryFn: setupApi.config, retry: 1 });
   const preflight = useQuery({ queryKey: ["setup", "preflight"], queryFn: setupApi.preflight, retry: 1 });
   const network = useQuery({ queryKey: ["setup", "network"], queryFn: setupApi.network, retry: 1 });
-  const diagnostics = useQuery({ queryKey: ["setup", "diagnostics", uplinkInterface], queryFn: () => setupApi.diagnostics(uplinkInterface || undefined), enabled: Boolean(uplinkInterface), retry: 1 });
+  const diagnostics = useQuery({
+    queryKey: ["setup", "diagnostics", uplinkInterface],
+    queryFn: () => setupApi.diagnostics(uplinkInterface || undefined),
+    enabled: Boolean(uplinkInterface),
+    retry: 1,
+  });
 
   const interfaces = useMemo(() => usableInterfaces(network.data?.interfaces ?? []), [network.data?.interfaces]);
   const suggestedSubnets = network.data?.proposedClientSubnets ?? [];
-  const selected = interfaces.find((item) => item.name === uplinkInterface);
-  const detectedSubnet = selected?.addresses.map(subnetFromAddress).find(Boolean) ?? "";
-  const preflightOk = Boolean(preflight.data && preflight.data.errors.length === 0);
-  const networkOk = Boolean(network.data && network.data.errors.length === 0 && interfaces.length > 0 && uplinkInterface && clientInterface);
-  const formReady = Boolean(clientInterface && uplinkInterface && clientSubnet && gateway && bandwidth && dashboardPort && sshPort && dnsServers.trim());
+  const selectedInterface = interfaces.find((item) => item.name === uplinkInterface);
+  const selectedUplinkSubnets = network.data?.uplinkSubnets?.[uplinkInterface] ?? [];
 
   useEffect(() => {
-    if (initialized || !config.data) return;
+    if (loadedConfig || !config.data) return;
     const current = config.data;
     if (current.clientInterface) setClientInterface(current.clientInterface);
     if (current.uplinkInterface) setUplinkInterface(current.uplinkInterface);
@@ -76,11 +100,11 @@ function SetupPage() {
     if (current.dashboardPort) setDashboardPort(current.dashboardPort);
     if (current.sshPort) setSshPort(current.sshPort);
     if (current.dnsServers.length) setDnsServers(current.dnsServers.join(","));
-    setInitialized(true);
-  }, [config.data, initialized]);
+    setLoadedConfig(true);
+  }, [config.data, loadedConfig]);
 
   useEffect(() => {
-    if (!network.data || initialized && reconfigure && clientInterface && uplinkInterface) return;
+    if (!network.data || (loadedConfig && reconfigure && clientInterface && uplinkInterface)) return;
     const detected = network.data.defaultUplink && interfaces.some((item) => item.name === network.data.defaultUplink)
       ? network.data.defaultUplink
       : interfaces.length === 1
@@ -89,95 +113,226 @@ function SetupPage() {
     if (!detected) return;
     setUplinkInterface((value) => value || detected);
     setClientInterface((value) => value || detected);
-  }, [network.data, interfaces, initialized, reconfigure, clientInterface, uplinkInterface]);
+  }, [network.data, interfaces, loadedConfig, reconfigure, clientInterface, uplinkInterface]);
 
   useEffect(() => {
-    if (!suggestedSubnets.length) return;
-    if (!clientSubnet || (reconfigure && clientSubnet === detectedSubnet)) {
-      const next = suggestedSubnets[0]!;
-      setClientSubnet(next);
-      setGateway(gatewayFromSubnet(next));
+    if (!clientSubnet && suggestedSubnets.length > 0) {
+      setClientSubnet(suggestedSubnets[0]!);
+      setGateway(gatewayFromSubnet(suggestedSubnets[0]!));
     }
-  }, [suggestedSubnets, clientSubnet, reconfigure, detectedSubnet]);
+  }, [clientSubnet, suggestedSubnets]);
 
   useEffect(() => {
     if (!clientSubnet) return;
-    if (!gateway || !gateway.startsWith(clientSubnet.split("/")[0]!.split(".").slice(0, 3).join("."))) {
-      setGateway(gatewayFromSubnet(clientSubnet));
-    }
+    const derived = gatewayFromSubnet(clientSubnet);
+    if (!gateway || !parseCidr(clientSubnet) || !usableHostForSubnet(gateway, clientSubnet)) setGateway(derived);
   }, [clientSubnet, gateway]);
 
+  const preflightBlocking = (preflight.data?.errors ?? []).length > 0;
+  const networkSelected = Boolean(selectedInterface && clientInterface === uplinkInterface && selectedInterface.addresses.some((address) => subnetFromAddress(address)));
+  const subnetConflict = Boolean(clientSubnet && selectedUplinkSubnets.some((subnet) => subnetsOverlap(clientSubnet, subnet)));
+  const gatewayValid = Boolean(gateway && clientSubnet && usableHostForSubnet(gateway, clientSubnet));
+  const portsValid = Number.isInteger(Number(dashboardPort)) && Number(dashboardPort) >= 1 && Number(dashboardPort) <= 65535
+    && Number.isInteger(Number(sshPort)) && Number(sshPort) >= 1 && Number(sshPort) <= 65535;
+  const bandwidthValid = Number.isFinite(Number(bandwidth)) && Number(bandwidth) > 0;
+  const configReady = networkSelected && Boolean(clientSubnet) && !subnetConflict && gatewayValid && bandwidthValid && portsValid && isValidDnsList(dnsServers);
   const apply = useMutation({
     mutationFn: () => setupApi.apply({
       clientInterface,
       uplinkInterface,
       clientSubnet,
+      clientGatewayIp: gateway,
       uplinkBandwidthMbps: Number(bandwidth),
       dashboardPort: Number(dashboardPort),
       sshPort: Number(sshPort),
       dnsServers: dnsServers.split(",").map((value) => value.trim()).filter(Boolean),
-      clientGatewayIp: gateway || undefined,
       activate: true,
     }),
     onMutate: () => setError(""),
     onSuccess: (result) => {
-      if (result.applied && !result.rolledBack && result.health.errors.length === 0) setError("");
-      else setError(result.errors.join("; ") || result.health.errors.join("; ") || "Setup did not complete successfully");
+      if (result.applied && !result.rolledBack && result.health.errors.length === 0) {
+        setError("");
+      } else {
+        setError(result.errors.join("; ") || result.health.errors.join("; ") || "Setup did not complete successfully");
+      }
     },
     onError: (err) => setError(err instanceof Error ? err.message : "Setup failed"),
   });
 
-  const selectInterface = (name: string) => {
+  const applied = Boolean(apply.data?.applied && !apply.data?.rolledBack && apply.data.health.errors.length === 0);
+  const refreshAll = async () => {
+    setError("");
+    await Promise.all([preflight.refetch(), network.refetch()]);
+  };
+
+  const chooseInterface = (name: string) => {
     setUplinkInterface(name);
     setClientInterface(name);
-    const item = interfaces.find((candidate) => candidate.name === name);
-    const detected = item?.addresses.map(subnetFromAddress).find(Boolean) ?? "";
-    const proposed = network.data?.proposedClientSubnets?.[0] ?? "";
-    const nextSubnet = proposed || detected;
-    setClientSubnet(nextSubnet);
-    setGateway(gatewayFromSubnet(nextSubnet));
+    const available = network.data?.proposedClientSubnets ?? [];
+    const currentStillValid = clientSubnet && !selectedUplinkSubnets.some((subnet) => subnetsOverlap(clientSubnet, subnet));
+    if (!currentStillValid && available.length) {
+      setClientSubnet(available[0]!);
+      setGateway(gatewayFromSubnet(available[0]!));
+    }
+    setNetworkAcknowledged(false);
     setError("");
   };
 
-  const selectSubnet = (value: string) => {
+  const chooseSubnet = (value: string) => {
     setClientSubnet(value);
     setGateway(gatewayFromSubnet(value));
     setError("");
   };
 
-  const applied = Boolean(apply.data?.applied && !apply.data?.rolledBack && apply.data?.health.errors.length === 0);
-  const stepStatus = useMemo(() => [preflightOk, networkOk, formReady, applied], [preflightOk, networkOk, formReady, applied]);
-  const title = reconfigure ? "Gateway settings" : "Configure your gateway";
-  const subtitle = reconfigure
-    ? "Review the current gateway configuration, choose a non-overlapping client network, then apply the same validated setup path."
-    : "Detect the gateway network, prevent subnet conflicts, review the configuration, then apply the Single-Interface + IFB setup.";
+  const nextFromNetwork = () => {
+    if (!networkSelected) {
+      setError("Select a detected interface with an IPv4 address first.");
+      return;
+    }
+    if (network.data?.defaultUplink && network.data.defaultUplink !== uplinkInterface) {
+      setNetworkAcknowledged(true);
+    }
+    setError("");
+    setStep(2);
+  };
+
   const finish = () => window.location.assign(reconfigure ? "/" : "/login");
 
   return (
     <div className="setup-page">
-      <div className="setup-topbar"><div className="setup-brand"><span className="setup-brand-mark">A</span><div><strong>Ayad</strong><small>Network Manager</small></div></div><span className="setup-mode">{reconfigure ? "Gateway settings" : "First-time gateway setup"}</span></div>
+      <div className="setup-topbar">
+        <div className="setup-brand">
+          <span className="setup-brand-mark">A</span>
+          <div><strong>Ayad</strong><small>Network Manager</small></div>
+        </div>
+        <span className="setup-mode">{reconfigure ? "Gateway settings" : "First-time gateway setup"}</span>
+      </div>
+
       <main className="setup-container">
-        <div className="setup-heading"><span className="setup-eyebrow">AYAD NM / {reconfigure ? "SETTINGS" : "SETUP"}</span><h1>{title}</h1><p>{subtitle}</p></div>
-        <div className="setup-steps">{["Preflight", "Network", "Configuration", "Apply"].map((label, index) => <div key={label} className={`setup-step ${step === index ? "active" : ""} ${stepStatus[index] ? "complete" : ""}`}><span>{index + 1}</span><b>{label}</b></div>)}</div>
+        <div className="setup-heading">
+          <span className="setup-eyebrow">AYAD NM / {reconfigure ? "SETTINGS" : "SETUP"}</span>
+          <h1>{reconfigure ? "Gateway settings" : "Configure your gateway"}</h1>
+          <p>{reconfigure
+            ? "Review the detected network, choose a non-overlapping client subnet, and apply the validated gateway configuration."
+            : "The wizard detects the network, prevents subnet collisions, derives the client gateway, and verifies the result before finishing."}</p>
+        </div>
 
-        {step === 0 && <section className="setup-card"><div className="setup-card-head"><div><span className="setup-eyebrow">STEP 01</span><h2>System preflight</h2><p>Nothing is changed until the required prerequisites pass.</p></div>{preflight.isFetching && <span className="setup-loading">Checking…</span>}</div><div className="setup-check-grid">
-          {[["Root privileges", Boolean(preflight.data?.root), preflight.data?.root ? "Ready" : "Needs attention"], ["Port 53 available (optional)", true, preflight.data?.port53Free ? "Available" : "Occupied; DHCP-only mode will use port 0"], ["IFB kernel module", Boolean(preflight.data?.ifbAvailable), preflight.data?.ifbAvailable ? "Ready" : "Needs attention"], ["Firewall manager", !preflight.data?.firewallManager, preflight.data?.firewallManager ? "Needs attention" : "Ready"], ["System time synchronized", Boolean(preflight.data?.timeSynchronized), preflight.data?.timeSynchronized ? "Ready" : "Needs attention"]].map(([label, ok, status]) => <div className="setup-check-row" key={String(label)}><Check ok={Boolean(ok)}/><span>{label}</span><small>{String(status)}</small></div>)}
-        </div>{preflight.data?.errors.map((item) => <div className="setup-warning" key={item}>{item}</div>)}{preflight.data?.warnings.map((item) => <div className="setup-warning" key={item}>{item}</div>)}<div className="setup-actions"><button className="setup-primary" disabled={!preflightOk} onClick={() => setStep(1)}>Continue to network</button></div></section>}
+        <div className="setup-steps">
+          {["Preflight", "Network", "Configuration", "Apply"].map((label, index) => (
+            <div key={label} className={`setup-step ${step === index ? "active" : ""} ${(index === 0 && !preflightBlocking && Boolean(preflight.data)) || (index === 1 && networkSelected) || (index === 2 && configReady) || (index === 3 && applied) ? "complete" : ""}`}>
+              <span>{index + 1}</span><b>{label}</b>
+            </div>
+          ))}
+        </div>
 
-        {step === 1 && <section className="setup-card"><div className="setup-card-head"><div><span className="setup-eyebrow">STEP 02</span><h2>Network interfaces</h2><p>For the current Single-Interface + IFB implementation, both roles use the same NIC. The uplink subnet is detected only to avoid reusing it for the client network.</p></div>{network.isFetching && <span className="setup-loading">Detecting…</span>}</div><div className="setup-interface-list">
-          {interfaces.map((item) => <button key={item.name} type="button" className={`setup-interface ${uplinkInterface === item.name ? "selected" : ""}`} onClick={() => selectInterface(item.name)}><div><strong>{item.name}</strong><span>{item.kind ?? "network interface"} · {item.state}</span></div><div className="setup-interface-meta"><span>{item.addresses.join(", ") || "No IPv4 address"}</span><span>{item.mac ?? "No MAC"}</span></div></button>)}
-        </div>{!interfaces.length && <div className="setup-warning">No usable network interface was detected.</div>}{network.data?.errors.map((item) => <div className="setup-warning" key={item}>{item}</div>)}{diagnostics.data && <div className="setup-diagnostics"><span>Link speed <b>{diagnostics.data.linkSpeedMbps ? `${diagnostics.data.linkSpeedMbps} Mbps` : "Unknown"}</b></span><span>Duplex <b>{diagnostics.data.duplex ?? "Unknown"}</b></span>{diagnostics.data.warnings.map((item) => <span className="setup-warning inline" key={item}>{item}</span>)}</div>}<div className="setup-actions"><button className="setup-secondary" onClick={() => setStep(0)}>Back</button><button className="setup-primary" disabled={!networkOk || !uplinkInterface} onClick={() => setStep(2)}>Continue to configuration</button></div></section>}
+        {step === 0 && (
+          <section className="setup-card">
+            <div className="setup-card-head">
+              <div><span className="setup-eyebrow">STEP 01</span><h2>System preflight</h2><p>Read-only checks first. No network configuration is changed on this step.</p></div>
+              <button className="setup-secondary" onClick={refreshAll} disabled={preflight.isFetching || network.isFetching}>Refresh</button>
+            </div>
+            <div className="setup-check-grid">
+              <div className="setup-check-row"><Check ok={Boolean(preflight.data?.root)} pending={preflight.isLoading}/><span>Root privileges</span><small>{preflight.data?.root ? "Ready" : "Required"}</small></div>
+              <div className="setup-check-row"><Check ok={true} pending={preflight.isLoading}/><span>UDP 53 conflict</span><small>{preflight.data ? (preflight.data.port53Free ? "Available" : "Occupied — DHCP-only mode uses port=0") : "Checking…"}</small></div>
+              <div className="setup-check-row"><Check ok={Boolean(preflight.data?.ifbAvailable)} pending={preflight.isLoading}/><span>IFB kernel module</span><small>{preflight.data?.ifbAvailable ? "Ready" : "Required"}</small></div>
+              <div className="setup-check-row"><Check ok={!Boolean(preflight.data?.firewallManager)} pending={preflight.isLoading}/><span>Competing firewall manager</span><small>{preflight.data?.firewallManager ? `${preflight.data.firewallManager} active — review required` : "No active UFW detected"}</small></div>
+              <div className="setup-check-row"><Check ok={Boolean(preflight.data?.timeSynchronized)} pending={preflight.isLoading}/><span>System time</span><small>{preflight.data?.timeSynchronized ? "Synchronized" : "Warning — scheduling needs sync"}</small></div>
+            </div>
+            {preflight.data?.errors.map((item) => <div className="setup-error" key={item}>{item}</div>)}
+            {preflight.data?.warnings.map((item) => <div className="setup-warning" key={item}>{item}</div>)}
+            <div className="setup-actions"><button className="setup-primary" disabled={!preflight.data || preflightBlocking} onClick={() => setStep(1)}>Continue to network</button></div>
+          </section>
+        )}
 
-        {step === 2 && <section className="setup-card"><div className="setup-card-head"><div><span className="setup-eyebrow">STEP 03</span><h2>Gateway configuration</h2><p>The client network must not overlap any detected interface subnet. The gateway is derived from the selected client subnet, never copied from the uplink address.</p></div></div><div className="setup-form-grid">
-          <label>Client interface<input value={clientInterface} readOnly/></label><label>Uplink interface<input value={uplinkInterface} readOnly/></label><label>Client subnet<select value={clientSubnet} onChange={(event) => selectSubnet(event.target.value)}>{suggestedSubnets.map((subnet) => <option key={subnet} value={subnet}>{subnet} · recommended</option>)}{clientSubnet && !suggestedSubnets.includes(clientSubnet) && <option value={clientSubnet}>{clientSubnet}</option>}</select></label><label>Gateway IP<input value={gateway} onChange={(event) => setGateway(event.target.value)} placeholder="Derived from client subnet"/></label><label>Uplink bandwidth (Mbps)<input type="number" min="1" step="1" value={bandwidth} onChange={(event) => setBandwidth(event.target.value)}/></label><label>Dashboard port<input type="number" min="1" max="65535" value={dashboardPort} onChange={(event) => setDashboardPort(event.target.value)}/></label><label>SSH port<input type="number" min="1" max="65535" value={sshPort} onChange={(event) => setSshPort(event.target.value)}/></label><label>DNS servers<input value={dnsServers} onChange={(event) => setDnsServers(event.target.value)} placeholder="1.1.1.1,8.8.8.8"/></label>
-        </div><div className="setup-note"><b>Network safety</b><span>Uplink and client networks are kept separate. The same physical NIC may carry both addresses in Single-Interface + IFB mode. DHCP is DHCP-only with port=0, so an existing DNS listener on port 53 is not a setup failure.</span></div>{error && <div className="setup-error">{error}</div>}<div className="setup-actions"><button className="setup-secondary" onClick={() => setStep(1)}>Back</button><button className="setup-primary" disabled={!formReady} onClick={() => { setError(""); setStep(3); }}>Review and apply</button></div></section>}
+        {step === 1 && (
+          <section className="setup-card">
+            <div className="setup-card-head">
+              <div><span className="setup-eyebrow">STEP 02</span><h2>Choose the gateway interface</h2><p>The current implementation is Single-Interface + IFB, so CLIENT_INTERFACE and UPLINK_INTERFACE must be the same physical interface. The existing uplink subnet is detected only to prevent collisions.</p></div>
+              <button className="setup-secondary" onClick={refreshAll} disabled={network.isFetching}>Refresh detection</button>
+            </div>
+            <div className="setup-interface-list">
+              {interfaces.map((item) => {
+                const isDefault = network.data?.defaultUplink === item.name;
+                const selected = uplinkInterface === item.name;
+                return <button key={item.name} type="button" className={`setup-interface ${selected ? "selected" : ""}`} onClick={() => chooseInterface(item.name)}>
+                  <div><strong>{item.name}</strong><span>{item.kind ?? "network interface"} · {item.state}{isDefault ? " · default route" : ""}</span></div>
+                  <div className="setup-interface-meta"><span>{item.addresses.length ? item.addresses.join(", ") : "No IPv4 address"}</span><span>{item.mac ?? "No MAC"}</span></div>
+                </button>;
+              })}
+            </div>
+            {!interfaces.length && <div className="setup-error">No usable network interfaces were returned by the backend.</div>}
+            {network.data?.errors.map((item) => <div className="setup-warning" key={item}>{item}</div>)}
+            {network.data?.defaultUplink && uplinkInterface && network.data.defaultUplink !== uplinkInterface && <div className="setup-warning">You selected {uplinkInterface} instead of the detected default-route interface {network.data.defaultUplink}. Continue only if that is intentional.</div>}
+            {networkAcknowledged && <div className="setup-note"><b>Manual selection</b><span>The default route was not used. The selected interface will be validated again by the backend before applying configuration.</span></div>}
+            {diagnostics.data && <div className="setup-diagnostics"><span>Link speed <b>{diagnostics.data.linkSpeedMbps ? `${diagnostics.data.linkSpeedMbps} Mbps` : "Unknown"}</b></span><span>Duplex <b>{diagnostics.data.duplex ?? "Unknown"}</b></span>{diagnostics.data.warnings.map((item) => <span className="setup-warning inline" key={item}>{item}</span>)}</div>}
+            <div className="setup-actions"><button className="setup-secondary" onClick={() => setStep(0)}>Back</button><button className="setup-primary" disabled={!networkSelected} onClick={nextFromNetwork}>Continue to configuration</button></div>
+          </section>
+        )}
 
-        {step === 3 && <section className="setup-card"><div className="setup-card-head"><div><span className="setup-eyebrow">STEP 04</span><h2>{applied ? "Setup applied" : "Apply configuration"}</h2><p>{applied ? "The gateway configuration has been applied and persisted." : "The backend will validate the non-overlapping network, render the OS configuration, persist runtime values, activate services, and run the setup health checks."}</p></div>{apply.isPending && <span className="setup-loading">Applying…</span>}</div><div className="setup-form-grid"><label>Client interface<input value={clientInterface} readOnly/></label><label>Uplink interface<input value={uplinkInterface} readOnly/></label><label>Client subnet<input value={clientSubnet} readOnly/></label><label>Gateway IP<input value={gateway} readOnly/></label><label>Bandwidth<input value={`${bandwidth} Mbps`} readOnly/></label><label>Dashboard port<input value={dashboardPort} readOnly/></label><label>SSH port<input value={sshPort} readOnly/></label><label>DNS servers<input value={dnsServers} readOnly/></label></div>{apply.data && <div className="setup-check-grid"><div className="setup-check-row"><Check ok={apply.data.health.clientInterface}/><span>Client interface</span><small>{apply.data.health.clientInterface ? "Ready" : "Failed"}</small></div><div className="setup-check-row"><Check ok={apply.data.health.gatewayReachable}/><span>Gateway address</span><small>{apply.data.health.gatewayReachable ? "Ready" : "Failed"}</small></div><div className="setup-check-row"><Check ok={apply.data.health.dhcpLeaseFile}/><span>DHCP lease database</span><small>{apply.data.health.dhcpLeaseFile ? "Ready" : "Failed"}</small></div><div className="setup-check-row"><Check ok={apply.data.health.outboundConnectivity}/><span>Gateway outbound connectivity</span><small>{apply.data.health.outboundConnectivity ? "Ready" : "Failed"}</small></div></div>}{error && <div className="setup-error">{error}</div>}<div className="setup-actions">{!applied && <button className="setup-secondary" disabled={apply.isPending} onClick={() => setStep(2)}>Back</button>}{!applied && <button className="setup-primary" disabled={apply.isPending} onClick={() => apply.mutate()}>{apply.isPending ? "Applying…" : "Apply configuration"}</button>}{applied && <button className="setup-primary" onClick={finish}>{reconfigure ? "Return to dashboard" : "Continue to login"}</button>}</div></section>}
+        {step === 2 && (
+          <section className="setup-card">
+            <div className="setup-card-head"><div><span className="setup-eyebrow">STEP 03</span><h2>Client network and gateway</h2><p>CLIENT_SUBNET must not overlap any detected interface subnet. CLIENT_GATEWAY_IP is derived from that client subnet and is never copied from the uplink IP.</p></div></div>
+            <div className="setup-form-grid">
+              <label>Client interface<input value={clientInterface} readOnly/></label>
+              <label>Uplink interface<input value={uplinkInterface} readOnly/></label>
+              <label>Client subnet<input value={clientSubnet} onChange={(event) => chooseSubnet(event.target.value)} placeholder="10.0.0.0/24"/></label>
+              <label>Gateway IP<input value={gateway} onChange={(event) => setGateway(event.target.value)} placeholder="Derived automatically"/></label>
+              <label>Uplink bandwidth (Mbps)<input type="number" min="0.001" step="0.001" value={bandwidth} onChange={(event) => setBandwidth(event.target.value)} placeholder="Required"/></label>
+              <label>Dashboard port<input type="number" min="1" max="65535" value={dashboardPort} onChange={(event) => setDashboardPort(event.target.value)} placeholder="Required"/></label>
+              <label>SSH port<input type="number" min="1" max="65535" value={sshPort} onChange={(event) => setSshPort(event.target.value)}/></label>
+              <label>DNS servers<input value={dnsServers} onChange={(event) => setDnsServers(event.target.value)} placeholder="1.1.1.1,8.8.8.8"/></label>
+            </div>
+            {suggestedSubnets.length > 0 && <div className="setup-note"><b>Recommended non-overlapping networks</b><span>{suggestedSubnets.map((subnet) => <button key={subnet} type="button" className="setup-chip" onClick={() => chooseSubnet(subnet)}>{subnet}</button>)}</span></div>}
+            {subnetConflict && <div className="setup-error">The selected client subnet overlaps an existing interface subnet. Choose one of the recommended networks.</div>}
+            {!subnetConflict && clientSubnet && <div className="setup-note"><b>Network validation</b><span>{selectedUplinkSubnets.length ? `Detected uplink subnet(s): ${selectedUplinkSubnets.join(", ")}. The selected client network does not overlap them.` : "No IPv4 subnet was detected on the selected interface."}</span></div>}
+            {!gatewayValid && clientSubnet && <div className="setup-error">Gateway must be a usable host address inside the selected client subnet.</div>}
+            {!bandwidthValid && bandwidth && <div className="setup-error">Uplink bandwidth must be a number greater than zero.</div>}
+            {!portsValid && (dashboardPort || sshPort) && <div className="setup-error">Dashboard and SSH ports must be integers between 1 and 65535.</div>}
+            {dnsServers && !isValidDnsList(dnsServers) && <div className="setup-error">DNS servers must be valid IPv4 addresses separated by commas.</div>}
+            {error && <div className="setup-error">{error}</div>}
+            <div className="setup-actions"><button className="setup-secondary" onClick={() => setStep(1)} disabled={apply.isPending}>Back</button><button className="setup-primary" disabled={!configReady} onClick={() => { setError(""); setStep(3); }}>Review configuration</button></div>
+          </section>
+        )}
 
-        <p className="setup-footnote">Setup creates environment-specific dnsmasq, nftables and service configuration on the gateway, persists runtime values to the system configuration, and does not execute networking commands from the browser.</p>
+        {step === 3 && (
+          <section className="setup-card">
+            <div className="setup-card-head"><div><span className="setup-eyebrow">STEP 04</span><h2>{applied ? "Setup verified" : "Review and apply"}</h2><p>{applied ? "The configuration was applied, persisted, and passed the backend health checks." : "No changes are made until you press Apply. The backend performs its own validation, snapshots existing state, applies the configuration, and rolls back on failure."}</p></div>{apply.isPending && <span className="setup-loading">Applying…</span>}</div>
+            <div className="setup-form-grid">
+              <label>Client interface<input value={clientInterface} readOnly/></label>
+              <label>Uplink interface<input value={uplinkInterface} readOnly/></label>
+              <label>Client subnet<input value={clientSubnet} readOnly/></label>
+              <label>Gateway IP<input value={gateway} readOnly/></label>
+              <label>Uplink bandwidth<input value={`${bandwidth} Mbps`} readOnly/></label>
+              <label>Dashboard port<input value={dashboardPort} readOnly/></label>
+              <label>SSH port<input value={sshPort} readOnly/></label>
+              <label>DNS servers<input value={dnsServers} readOnly/></label>
+            </div>
+            {apply.data && <div className="setup-check-grid">
+              <div className="setup-check-row"><Check ok={apply.data.health.clientInterface}/><span>Client interface</span><small>{apply.data.health.clientInterface ? "Ready" : "Failed"}</small></div>
+              <div className="setup-check-row"><Check ok={apply.data.health.gatewayReachable}/><span>Gateway address</span><small>{apply.data.health.gatewayReachable ? "Reachable" : "Failed"}</small></div>
+              <div className="setup-check-row"><Check ok={apply.data.health.dhcpLeaseFile}/><span>DHCP lease state</span><small>{apply.data.health.dhcpLeaseFile ? "Lease present" : "No current lease"}</small></div>
+              <div className="setup-check-row"><Check ok={apply.data.health.outboundConnectivity}/><span>Outbound connectivity</span><small>{apply.data.health.outboundConnectivity ? "Verified" : "Failed"}</small></div>
+            </div>}
+            {error && <div className="setup-error">{error}</div>}
+            {apply.data?.rolledBack && <div className="setup-warning">The backend rolled the system back to the previous state after the failed apply.</div>}
+            <div className="setup-actions">
+              {!applied && <button className="setup-secondary" disabled={apply.isPending} onClick={() => setStep(2)}>Back</button>}
+              {!applied && <button className="setup-primary" disabled={apply.isPending} onClick={() => apply.mutate()}>{apply.isPending ? "Applying…" : "Apply configuration"}</button>}
+              {applied && <button className="setup-primary" onClick={finish}>{reconfigure ? "Return to dashboard" : "Continue to login"}</button>}
+            </div>
+          </section>
+        )}
+
+        <p className="setup-footnote">Environment-specific interface names, client subnet, gateway, DHCP range, DNS, ports, and bandwidth are selected at setup time. The browser only calls the backend API; it never executes Linux networking commands.</p>
       </main>
     </div>
   );
+}
+
+function usableHostForSubnet(ip: string, subnet: string): boolean {
+  const value = ipToNumber(ip);
+  const parsed = parseCidr(subnet);
+  return value !== null && Boolean(parsed && parsed.prefix < 31 && value > parsed.first && value < parsed.last);
 }
 
 export default SetupPage;
