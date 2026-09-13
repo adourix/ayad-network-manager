@@ -9,19 +9,33 @@ import type {
 
 const execFileAsync = promisify(execFile);
 
-// nftables state can be large on long-lived gateways. Keep command execution
-// bounded, but large enough for a complete rollback snapshot.
 const COMMAND_TIMEOUT_MS = 30_000;
 const SYSTEMCTL_TIMEOUT_MS = 20_000;
 const REMOTE_RESPONSE_GRACE_MS = 5_000;
 const REMOTE_CONNECT_RETRIES = 20;
 const REMOTE_CONNECT_RETRY_DELAY_MS = 250;
 const COMMAND_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
+const ERROR_OUTPUT_MAX_BYTES = 4 * 1024;
 
 function describeCommand(command: string, args: string[]): string {
-  // Never include the sing-box config payload in an error because it may contain secrets.
   if (command === "write-sing-box-config") return command;
   return [command, ...args].join(" ");
+}
+
+function boundedErrorOutput(value: unknown): string {
+  if (typeof value !== "string") return "";
+  const normalized = value.trim();
+  if (!normalized) return "";
+  return normalized.length > ERROR_OUTPUT_MAX_BYTES
+    ? `${normalized.slice(0, ERROR_OUTPUT_MAX_BYTES)}…`
+    : normalized;
+}
+
+function localFailureDetail(error: unknown): string {
+  const failure = error as { message?: unknown; stderr?: unknown; stdout?: unknown };
+  const message = typeof failure.message === "string" ? failure.message : String(error);
+  const stderr = boundedErrorOutput(failure.stderr);
+  return stderr ? `${message}; stderr: ${stderr}` : message;
 }
 
 export class LinuxSystemCommandExecutor implements SystemCommandExecutor {
@@ -44,7 +58,6 @@ export class LinuxSystemCommandExecutor implements SystemCommandExecutor {
           "ENFORCEMENT_SOCKET_PATH is required outside the enforcement agent",
         );
       }
-
       return this.executeRemote(socketPath, command, args);
     }
 
@@ -65,13 +78,11 @@ export class LinuxSystemCommandExecutor implements SystemCommandExecutor {
         killSignal: "SIGKILL",
         maxBuffer: COMMAND_MAX_BUFFER_BYTES,
       });
-
       return { stdout, stderr };
     } catch (error) {
-      const failure = error instanceof Error ? error : new Error(String(error));
       throw new Error(
-        `${describeCommand(command, args)} failed: ${failure.message}`,
-        { cause: failure },
+        `${describeCommand(command, args)} failed: ${localFailureDetail(error)}`,
+        { cause: error instanceof Error ? error : undefined },
       );
     }
   }
@@ -132,18 +143,13 @@ export class LinuxSystemCommandExecutor implements SystemCommandExecutor {
         if (settled) return;
         settled = true;
         cleanup();
-
         if (error) reject(error);
         else resolve(result!);
       };
 
       const responseTimeout = this.timeoutMs + REMOTE_RESPONSE_GRACE_MS;
       deadline = setTimeout(() => {
-        finish(
-          new Error(
-            `enforcement command timed out after ${this.timeoutMs}ms`,
-          ),
-        );
+        finish(new Error(`enforcement command timed out after ${this.timeoutMs}ms`));
       }, responseTimeout);
 
       socket.once("error", (error) => finish(error));
@@ -154,7 +160,6 @@ export class LinuxSystemCommandExecutor implements SystemCommandExecutor {
         if (newline < 0) return;
 
         const line = data.slice(0, newline);
-
         try {
           const result = JSON.parse(line) as {
             ok: boolean;
@@ -169,11 +174,9 @@ export class LinuxSystemCommandExecutor implements SystemCommandExecutor {
           }
 
           if (!result.ok) {
-            finish(
-              new Error(
-                `${describeCommand(command, args)} failed: ${result.error ?? "privileged enforcement command failed"}`,
-              ),
-            );
+            finish(new Error(
+              `${describeCommand(command, args)} failed: ${result.error ?? "privileged enforcement command failed"}`,
+            ));
             return;
           }
 
@@ -182,21 +185,13 @@ export class LinuxSystemCommandExecutor implements SystemCommandExecutor {
             stderr: result.stderr ?? "",
           });
         } catch (error) {
-          finish(
-            error instanceof Error
-              ? error
-              : new Error(String(error)),
-          );
+          finish(error instanceof Error ? error : new Error(String(error)));
         }
       });
 
       socket.once("close", () => {
         if (settled) return;
-        finish(
-          new Error(
-            "enforcement socket closed before a response was received",
-          ),
-        );
+        finish(new Error("enforcement socket closed before a response was received"));
       });
 
       socket.once("connect", () => {
