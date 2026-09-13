@@ -11,3 +11,6 @@ backend/cache/
 backend/node_modules/
 backend/client/
 backend-before-architecture.tar.gz
+
+# Local Docker TLS material
+certs/
