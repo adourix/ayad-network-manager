@@ -231,12 +231,12 @@ export async function getBlockedIps(): Promise<Set<string>> {
 }
 
 async function addElementUnlocked(table: string, setName: string, value: string): Promise<void> {
-  const args = ["add", "element", TABLE_FAMILY, table, setName, `{ ${value} }`];
+  const args = ["add", "element", TABLE_FAMILY, table, setName, "{", value, "}"];
   try { await execNft(args); } catch (error) { if (!isAlreadyExists(error)) throw error; }
 }
 
 async function deleteElementUnlocked(table: string, setName: string, value: string): Promise<void> {
-  const args = ["delete", "element", TABLE_FAMILY, table, setName, `{ ${value} }`];
+  const args = ["delete", "element", TABLE_FAMILY, table, setName, "{", value, "}"];
   try { await execNft(args); } catch (error) { if (!isMissingElement(error)) throw error; }
 }
 
