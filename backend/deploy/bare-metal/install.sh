@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 APP_ROOT="${APP_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 REPO_ROOT="$(cd "${APP_ROOT}/.." && pwd)"
@@ -52,6 +53,7 @@ install_packages() {
     ca-certificates curl openssl git build-essential \
     postgresql postgresql-client postgresql-contrib \
     dnsmasq nftables iproute2 ethtool tcpdump \
+    kmod \
     iputils-ping procps util-linux
 }
 
