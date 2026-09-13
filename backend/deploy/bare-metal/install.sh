@@ -380,7 +380,7 @@ probe_setup_server() {
 start_setup_mode() {
   if [[ -f "${CONFIG_FILE}" ]] && grep -q '^SETUP_COMPLETED=true$' "${CONFIG_FILE}"; then
     log "Setup is already complete; skipping setup wizard bootstrap"
-    return
+    return 0
   fi
 
   cd "${APP_ROOT}"
