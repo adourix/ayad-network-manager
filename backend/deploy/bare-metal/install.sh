@@ -20,6 +20,7 @@ SETUP_LOG="/var/log/network-control-setup.log"
 SETUP_PID=""
 DB_NAME="ayad_nm"
 DB_USER="ayad_nm"
+SETUP_RESPONSE_GRACE_SECONDS="${SETUP_RESPONSE_GRACE_SECONDS:-3}"
 
 log() { printf '\n==> %s\n' "$*"; }
 die() { echo "ERROR: $*" >&2; exit 1; }
@@ -462,6 +463,8 @@ EOF
   while true; do
     if [[ -f "${CONFIG_FILE}" ]] && grep -q '^SETUP_COMPLETED=true$' "${CONFIG_FILE}"; then
       log "Setup wizard completed"
+      log "Waiting ${SETUP_RESPONSE_GRACE_SECONDS}s for the final setup response to reach the browser"
+      sleep "${SETUP_RESPONSE_GRACE_SECONDS}"
       break
     fi
     if ! kill -0 "${SETUP_PID}" 2>/dev/null; then
