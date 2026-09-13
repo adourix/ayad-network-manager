@@ -133,8 +133,6 @@ EOF
   install -m 0644 "${APP_ROOT}/deploy/bare-metal/dnsmasq-dhcp-only.conf" \
     /etc/dnsmasq.d/network-control-dns.conf
 
-  # VPN is opt-in. Install the runtime, but do not create a TUN interface or
-  # start sing-box until the operator supplies a VMess/VLESS link.
   systemctl disable --now sing-box 2>/dev/null || true
 }
 
@@ -361,6 +359,24 @@ install_production_services() {
   systemctl restart network-control-backend.service
 }
 
+setup_port_owner() {
+  local port="$1"
+  fuser -n tcp "${port}" 2>/dev/null | awk '{print $1}' | head -n 1
+}
+
+is_setup_server_process() {
+  local pid="$1"
+  [[ -n "${pid}" ]] || return 1
+  [[ -r "/proc/${pid}/cmdline" ]] || return 1
+  tr '\0' ' ' < "/proc/${pid}/cmdline" | grep -q 'dist/bootstrap.js'
+}
+
+probe_setup_server() {
+  local port="$1"
+  curl -fsS --connect-timeout 1 --max-time 2 \
+    "http://127.0.0.1:${port}/api/health" >/dev/null 2>&1
+}
+
 start_setup_mode() {
   if [[ -f "${CONFIG_FILE}" ]] && grep -q '^SETUP_COMPLETED=true$' "${CONFIG_FILE}"; then
     log "Setup is already complete; skipping setup wizard bootstrap"
@@ -368,16 +384,40 @@ start_setup_mode() {
   fi
 
   cd "${APP_ROOT}"
-  log "Starting temporary setup server"
-  : > "${SETUP_LOG}"
-  chmod 0600 "${SETUP_LOG}"
-  env NODE_ENV=development node dist/bootstrap.js >>"${SETUP_LOG}" 2>&1 &
-  SETUP_PID="$!"
-
   local port="${DASHBOARD_PORT:-5000}"
+  local existing_pid
+
+  existing_pid="$(setup_port_owner "${port}")"
+  if [[ -n "${existing_pid}" ]]; then
+    if is_setup_server_process "${existing_pid}" && probe_setup_server "${port}"; then
+      log "Temporary setup server is already running on port ${port}; reusing PID ${existing_pid}"
+      SETUP_PID="${existing_pid}"
+    elif is_setup_server_process "${existing_pid}"; then
+      log "Found stale temporary setup server PID ${existing_pid}; stopping it"
+      kill "${existing_pid}" 2>/dev/null || true
+      for _ in $(seq 1 10); do
+        kill -0 "${existing_pid}" 2>/dev/null || break
+        sleep 1
+      done
+      if kill -0 "${existing_pid}" 2>/dev/null; then
+        kill -9 "${existing_pid}" 2>/dev/null || true
+      fi
+    else
+      die "setup port ${port} is already occupied by another process (PID ${existing_pid}); choose another DASHBOARD_PORT"
+    fi
+  fi
+
+  if [[ -z "${SETUP_PID}" ]]; then
+    log "Starting temporary setup server"
+    : > "${SETUP_LOG}"
+    chmod 0600 "${SETUP_LOG}"
+    env NODE_ENV=development node dist/bootstrap.js >>"${SETUP_LOG}" 2>&1 &
+    SETUP_PID="$!"
+  fi
+
   local ready=0
   for _ in $(seq 1 30); do
-    if curl -fsS "http://127.0.0.1:${port}/api/health" >/dev/null 2>&1; then
+    if probe_setup_server "${port}"; then
       ready=1
       break
     fi
