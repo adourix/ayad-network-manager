@@ -77,44 +77,38 @@ export class BlockedIpReconciliationService {
         neighborIpByMac.set(mac, ip);
       }
 
+      // blocked_ips is not a second copy of every MAC block. It is the
+      // IP-only enforcement path for devices whose real L2 identity is hidden
+      // behind a proxying AP. Keep the kernel set aligned only with those
+      // proxy-backed blocked devices.
       const expectedBlockedIps = new Set<string>();
       const expectedBlockedDevices = new Map<string, typeof devices[number]>();
 
       for (const device of devices) {
         const policy = await this.policyRepository.findByDeviceId(device.id);
         if (!policy?.blocked || !device.identityValidated || device.identitySource === "PROXY_UNCONFIRMED") continue;
+        if (device.l2Visible) continue;
 
         const mac = normalizeMac(device.mac.toString());
         const dhcpIp = activeLeaseByMac.get(mac);
-
         if (dhcpIp) {
           const neighborOwner = neighborMacByIp.get(dhcpIp);
           const captureConfirms = this.broadcastCaptureReader?.recentIdentities().some(
             (capture) => normalizeMac(capture.mac) === mac &&
               (capture.sourceIp === undefined || normalizeIp(capture.sourceIp) === dhcpIp),
           ) ?? false;
-          const persistedProxyConfirms = !device.l2Visible && device.proxyMac !== null &&
+          const persistedProxyConfirms = device.proxyMac !== null &&
             normalizeMac(device.proxyMac.toString()) === normalizeMac(neighborOwner ?? "");
 
-          if (device.l2Visible && neighborOwner === mac) {
-            expectedBlockedIps.add(dhcpIp);
-            expectedBlockedDevices.set(dhcpIp, device);
-          } else if (!device.l2Visible && (neighborOwner === mac || captureConfirms || persistedProxyConfirms)) {
+          if (neighborOwner === mac || captureConfirms || persistedProxyConfirms) {
             expectedBlockedIps.add(dhcpIp);
             expectedBlockedDevices.set(dhcpIp, device);
           }
           continue;
         }
 
-        const neighborIp = neighborIpByMac.get(mac);
-        if (neighborIp) {
-          const dhcpOwner = activeDhcpMacByIp.get(neighborIp);
-          const neighborOwner = neighborMacByIp.get(neighborIp);
-          if ((!dhcpOwner || dhcpOwner === mac) && (!neighborOwner || neighborOwner === mac)) {
-            expectedBlockedIps.add(neighborIp);
-            expectedBlockedDevices.set(neighborIp, device);
-          }
-        }
+        // Static-IP proxy-backed devices are not resolvable safely without a
+        // current DHCP ownership signal. Do not guess a new IP.
       }
 
       const bindingByIp = new Map(bindings.map((binding) => [binding.ip, binding]));
@@ -128,14 +122,17 @@ export class BlockedIpReconciliationService {
         if (boundDevice) {
           const currentIp = activeLeaseByMac.get(normalizeMac(boundDevice.mac.toString()));
           if (currentIp && currentIp !== blockedIp) {
+            // Positive DHCP evidence says this blocked proxy-backed device moved.
+            // Release the old IP here; the next expected-state pass installs the
+            // new address without relying on absence from discovery.
             await this.releaseIp(blockedIp, `device ${boundDevice.id} moved to ${currentIp}`);
             continue;
           }
         }
 
-        // IP reuse is released only when DHCP positively says that a
-        // different MAC owns this address. Neighbor/ARP observations alone
-        // are deliberately not a release trigger.
+        // IP reuse is released only when DHCP positively says that a different
+        // MAC owns the address. ARP alone and a quiet device are not release
+        // triggers.
         const dhcpOwner = activeDhcpMacByIp.get(blockedIp);
         if (dhcpOwner && (!boundDevice || dhcpOwner !== normalizeMac(boundDevice.mac.toString()))) {
           await this.releaseIp(blockedIp, `DHCP reassigned to ${dhcpOwner}`);
@@ -153,7 +150,7 @@ export class BlockedIpReconciliationService {
             device.id,
             device.identitySource === "PROXY_ACCEPTED_BY_ADMIN" ? null : device.mac.toString(),
             expectedIp,
-            device.l2Visible ? "mac-enforced" : "ip-enforced-proxy",
+            "ip-enforced-proxy",
           );
         }
       }
