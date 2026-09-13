@@ -17,6 +17,8 @@ export interface Device {
   identityValidated: boolean;
   identitySource: IdentitySource;
   blocked: boolean;
+  downloadLimit: string | null;
+  uploadLimit: string | null;
   appliedQuota: string | null;
   quotaPeriod: string | null;
   quotaAction: string | null;
