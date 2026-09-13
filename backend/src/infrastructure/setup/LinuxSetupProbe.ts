@@ -9,16 +9,20 @@ const PRIVILEGED_COMMANDS = new Set(["nft", "tc", "ip"]);
 const NFTABLES_CONFIG_PATH = process.env.NFTABLES_CONFIG_PATH ?? "/etc/nftables.d/network-control-system.nft";
 
 /**
- * Setup may inspect ordinary host state directly. nft/tc/ip remain behind the
- * enforcement boundary for mutations and runtime reads. The setup-only nft
- * configuration check is deliberately non-mutating and restricted to the
- * generated system configuration path, so a complete ruleset can be validated
- * before the enforcement agent is asked to load it.
+ * The setup wizard runs before the production enforcement service exists.
+ * Network discovery and setup-time validation therefore cannot depend on the
+ * enforcement socket. Runtime enforcement remains behind the enforcement
+ * boundary; this local executor is used only by the pre-enforcement setup
+ * probe to inspect/apply the host state needed to bootstrap that boundary.
  */
 export class LinuxSetupProbe implements SetupProbe {
+  private readonly setupExecutor: SystemCommandExecutor;
+
   constructor(
     private readonly enforcement: SystemCommandExecutor = new LinuxSystemCommandExecutor(),
-  ) {}
+  ) {
+    this.setupExecutor = new LinuxSystemCommandExecutor(true);
+  }
 
   async run(command: string, args: string[]): Promise<SystemCommandResult> {
     if (command === "nft" && args.length === 3 && args[0] === "-c" && args[1] === "-f" && args[2] === NFTABLES_CONFIG_PATH) {
@@ -26,7 +30,7 @@ export class LinuxSetupProbe implements SetupProbe {
     }
 
     if (PRIVILEGED_COMMANDS.has(command)) {
-      return this.enforcement.execute(command, args);
+      return this.setupExecutor.execute(command, args);
     }
 
     try {
@@ -40,16 +44,14 @@ export class LinuxSetupProbe implements SetupProbe {
   }
 
   async snapshotNft(): Promise<string> {
-    const result = await this.enforcement.execute("nft", ["list", "ruleset"]);
-    return result.stdout;
+    return (await this.setupExecutor.execute("nft", ["list", "ruleset"])).stdout;
   }
 
   async restoreNft(snapshotPath: string): Promise<void> {
-    await this.enforcement.execute("nft", ["-f", snapshotPath]);
+    await this.setupExecutor.execute("nft", ["-f", snapshotPath]);
   }
 
   private async validateNftablesConfig(): Promise<SystemCommandResult> {
-    const local = new LinuxSystemCommandExecutor(true);
-    return local.execute("nft", ["-c", "-f", NFTABLES_CONFIG_PATH]);
+    return this.setupExecutor.execute("nft", ["-c", "-f", NFTABLES_CONFIG_PATH]);
   }
 }
