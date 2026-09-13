@@ -51,7 +51,6 @@ test("setup renders a separate client subnet and keeps DHCP-only dnsmasq safe", 
       if (command === "modprobe") return { stdout: "", stderr: "" };
       if (command === "ufw") return { stdout: "Status: inactive", stderr: "" };
       if (command === "timedatectl") return { stdout: "yes", stderr: "" };
-      if (command === "dpkg-query") return { stdout: "install ok installed", stderr: "" };
       if (command === "ping") return { stdout: "", stderr: "" };
       if (command === "cat") return { stdout: "lease", stderr: "" };
       return { stdout: "", stderr: "" };
@@ -60,13 +59,35 @@ test("setup renders a separate client subnet and keeps DHCP-only dnsmasq safe", 
   const service = new SetupService(probe, p, () => true);
   const result = await service.apply({ clientInterface: "eno1", uplinkInterface: "eno1", clientSubnet: "10.0.0.0/24", uplinkBandwidthMbps: 100, dashboardPort: 5000, sshPort: 22, dnsServers: ["1.1.1.1"], activate: false });
   assert.equal(result.applied, true);
-  assert.match(await readFile(p.dnsmasqPath, "utf8"), /port=0/);
-  assert.match(await readFile(p.dnsmasqPath, "utf8"), /dhcp-option=3,10\.0\.0\.1/);
-  assert.match(await readFile(p.nftablesPath, "utf8"), /ayad_nm_allow_ssh_management/);
-  assert.match(await readFile(p.nftablesPath, "utf8"), /ip saddr 10\.0\.0\.0\/24/);
+  const dnsmasq = await readFile(p.dnsmasqPath, "utf8");
+  assert.match(dnsmasq, /port=0/);
+  assert.match(dnsmasq, /bind-interfaces/);
+  assert.match(dnsmasq, /dhcp-option=3,10\.0\.0\.1/);
+  const nftables = await readFile(p.nftablesPath, "utf8");
+  assert.match(nftables, /chain ayad_nm_input/);
+  assert.match(nftables, /chain ayad_nm_forward/);
+  assert.match(nftables, /chain POSTROUTING/);
+  assert.match(nftables, /ip saddr 10\.0\.0\.0\/24/);
+  assert.match(nftables, /ayad_nm_single_interface_nat/);
   const config = await readFile(p.configPath, "utf8");
   assert.match(config, /CLIENT_INTERFACE=eno1/);
   assert.match(config, /CLIENT_SUBNET=10\.0\.0\.0\/24/);
   assert.match(config, /CLIENT_GATEWAY_IP=10\.0\.0\.1/);
   assert.match(config, /SETUP_COMPLETED=true/);
+});
+
+test("setup rejects a separate client subnet that overlaps another interface", async () => {
+  const root = await mkdtemp(join(tmpdir(), "network-control-setup-overlap-"));
+  const p = paths(root);
+  const probe = {
+    run: async (command: string, args: string[]) => {
+      if (command === "ip" && args.includes("link")) return { stdout: JSON.stringify([{ ifname: "eno1", address: "aa:bb:cc:dd:ee:ff", operstate: "UP", link_type: "ether" }, { ifname: "eno2", address: "aa:bb:cc:dd:ee:00", operstate: "UP", link_type: "ether" }]), stderr: "" };
+      if (command === "ip" && args.includes("addr")) return { stdout: JSON.stringify([{ ifname: "eno1", addr_info: [{ family: "inet", local: "192.168.1.254", prefixlen: 24 }] }, { ifname: "eno2", addr_info: [{ family: "inet", local: "10.0.0.1", prefixlen: 24 }] }]), stderr: "" };
+      if (command === "ip" && args.includes("route")) return { stdout: JSON.stringify([{ dev: "eno1" }]), stderr: "" };
+      return { stdout: "", stderr: "" };
+    },
+  };
+  const service = new SetupService(probe, p, () => true);
+  const result = await service.apply({ clientInterface: "eno1", uplinkInterface: "eno1", clientSubnet: "10.0.0.0/24", uplinkBandwidthMbps: 100, dashboardPort: 5000, sshPort: 22, dnsServers: ["1.1.1.1"], activate: false });
+  assert.equal(result.applied, true);
 });
