@@ -50,10 +50,19 @@ export class SetupService {
     if (!available.has(input.uplinkInterface)) errors.push(`uplink interface not found: ${input.uplinkInterface}`);
     if (!sameInterface) errors.push("Single-Interface + IFB requires CLIENT_INTERFACE and UPLINK_INTERFACE to use the same interface");
     const requestedNetwork = networkOf(input.clientSubnet);
-    const occupied = new Set(Object.values(network.uplinkSubnets).flat());
-    if (!requestedNetwork) errors.push("client subnet is invalid");
-    else if (subnetOverlapsAny(input.clientSubnet, occupied)) errors.push("client subnet overlaps an existing interface subnet; choose a different client subnet");
     const selected = network.interfaces.find((item) => item.name === input.uplinkInterface);
+    const occupiedOtherInterfaces = Object.entries(network.uplinkSubnets)
+      .filter(([iface]) => iface !== input.uplinkInterface)
+      .flatMap(([, subnets]) => subnets);
+    if (!requestedNetwork) errors.push("client subnet is invalid");
+    else if (sameInterface) {
+      const selectedSubnets = selected?.addresses.map(networkOf).filter((value): value is string => Boolean(value)) ?? [];
+      if (!selectedSubnets.includes(requestedNetwork)) {
+        errors.push("single-interface client subnet must match an existing subnet on the selected interface");
+      }
+    } else if (subnetOverlapsAny(requestedNetwork, occupiedOtherInterfaces)) {
+      errors.push("client subnet overlaps an existing interface subnet; choose a different client subnet");
+    }
     const gatewayCandidate = input.clientGatewayIp ?? deriveGateway(selected?.addresses ?? [], requestedNetwork ?? input.clientSubnet);
     if (gatewayCandidate === null) errors.push("unable to derive a usable CLIENT_GATEWAY_IP from CLIENT_SUBNET");
     if (gatewayCandidate !== null && !usableHost(gatewayCandidate, requestedNetwork ?? input.clientSubnet)) errors.push("CLIENT_GATEWAY_IP must be a usable host inside CLIENT_SUBNET");
