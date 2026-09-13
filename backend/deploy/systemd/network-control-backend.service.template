@@ -2,6 +2,7 @@
 Description=Network Control System backend
 After=network-online.target postgresql.service network-control-enforcement.service
 Wants=network-online.target
+Requires=network-control-enforcement.service
 
 [Service]
 Type=simple
