@@ -36,7 +36,34 @@ function shellSafe(value: string, pattern: RegExp): boolean { return pattern.tes
 export class SetupService {
   constructor(private readonly probe: SetupProbe, private readonly paths: SetupPaths = { configPath: process.env.SYSTEM_CONFIG_PATH ?? "/etc/network-control-system/config.env", dnsmasqPath: process.env.DNSMASQ_CONFIG_PATH ?? "/etc/dnsmasq.d/network-control-clients.conf", nftablesPath: process.env.NFTABLES_CONFIG_PATH ?? "/etc/nftables.d/network-control-system.nft", snapshotDir: process.env.SETUP_SNAPSHOT_DIR ?? "/var/lib/network-control/backups", leasePath: process.env.DHCP_LEASES_PATH ?? DEFAULT_LEASES, reservationsPath: process.env.DHCP_RESERVATIONS_PATH ?? DEFAULT_RESERVATIONS, modulesLoadPath: process.env.IFB_MODULES_LOAD_PATH ?? DEFAULT_MODULES, dnsmasqOverridePath: process.env.DNSMASQ_SYSTEMD_OVERRIDE_PATH ?? DEFAULT_DNSMASQ_OVERRIDE, legacyDnsmasqPath: process.env.LEGACY_DNSMASQ_PATH ?? DEFAULT_LEGACY_DNSMASQ }, private readonly isRoot: () => boolean = () => typeof process.getuid !== "function" || process.getuid() === 0) {}
 
-  async preflight(): Promise<SetupReport> { const errors: string[] = [], warnings: string[] = []; const root = this.isRoot(); const port = await this.safe("ss", ["-H", "-lun", "sport", "=", ":53"]); const port53Free = port.ok && port.stdout.trim() === ""; const moduleLoaded = await this.safe("test", ["-e", "/sys/module/ifb"]); const ifb = moduleLoaded.ok ? moduleLoaded : await this.safe("modprobe", ["ifb"]); const ufw = await this.safe("ufw", ["status"]); const firewallManager = ufw.ok && /Status:\s+active/i.test(ufw.stdout) ? "ufw" : null; const timed = await this.safe("timedatectl", ["show", "-p", "NTPSynchronized", "--value"]); const timeSynchronized = timed.stdout.trim() === "yes"; if (!root) errors.push("Root privileges are required. Run the setup service with the required privileges."); if (!port.ok) errors.push(`Unable to inspect UDP port 53${port.stderr ? `: ${port.stderr.trim()}` : ""}`); if (!ifb.ok) errors.push("The IFB kernel module is unavailable or could not be loaded."); if (!port53Free) warnings.push("UDP port 53 is occupied; dnsmasq will use DHCP-only mode with port=0."); if (firewallManager) warnings.push("UFW is active. Review its rules before applying nftables configuration."); if (!timeSynchronized) warnings.push("System clock is not synchronized. Scheduling will require a synchronized clock."); return { root, port53Free, ifbAvailable: ifb.ok, firewallManager, timeSynchronized, errors, warnings }; }
+  async preflight(): Promise<SetupReport> {
+    const errors: string[] = [], warnings: string[] = [];
+    const root = this.isRoot();
+    const udp53 = await this.safe("ss", ["-H", "-lun", "sport", "=", ":53"]);
+    const tcp53 = await this.safe("ss", ["-H", "-ltn", "sport", "=", ":53"]);
+    const port53CheckFailed = !udp53.ok || !tcp53.ok;
+    const port53Occupied =
+      (udp53.ok && udp53.stdout.trim() !== "") ||
+      (tcp53.ok && tcp53.stdout.trim() !== "");
+    const port53Free = !port53CheckFailed && !port53Occupied;
+    const moduleLoaded = await this.safe("test", ["-e", "/sys/module/ifb"]);
+    const ifb = moduleLoaded.ok ? moduleLoaded : await this.safe("modprobe", ["ifb"]);
+    const ufw = await this.safe("ufw", ["status"]);
+    const firewallManager = ufw.ok && /Status:\s+active/i.test(ufw.stdout) ? "ufw" : null;
+    const timed = await this.safe("timedatectl", ["show", "-p", "NTPSynchronized", "--value"]);
+    const timeSynchronized = timed.stdout.trim() === "yes";
+
+    if (!root) errors.push("Root privileges are required. Run the setup service with the required privileges.");
+    if (port53CheckFailed) {
+      warnings.push("Unable to reliably inspect TCP/UDP port 53; dnsmasq will use DHCP-only mode with port=0.");
+    } else if (port53Occupied) {
+      warnings.push("TCP/UDP port 53 is occupied; dnsmasq will use DHCP-only mode with port=0.");
+    }
+    if (!ifb.ok) errors.push("The IFB kernel module is unavailable or could not be loaded.");
+    if (firewallManager) warnings.push("UFW is active. Review its rules before applying nftables configuration.");
+    if (!timeSynchronized) warnings.push("System clock is not synchronized. Scheduling will require a synchronized clock.");
+    return { root, port53Free, ifbAvailable: ifb.ok, firewallManager, timeSynchronized, errors, warnings };
+  }
 
   async inspectNetwork(): Promise<SetupNetworkReport> { const errors: string[] = []; const links = await this.readJson("ip", ["-j", "link", "show"]); const addresses = await this.readJson("ip", ["-j", "-4", "addr", "show"]); const routes = await this.readJson("ip", ["-j", "route", "show", "default"]); const addressMap = new Map<string, string[]>(); for (const row of Array.isArray(addresses) ? addresses : []) { const name = String(row.ifname ?? ""); const values = Array.isArray(row.addr_info) ? row.addr_info.filter((item: any) => item.family === "inet" && typeof item.local === "string").map((item: any) => `${item.local}/${item.prefixlen}`) : []; addressMap.set(name, values); } const interfaces = (Array.isArray(links) ? links : []).map((row: any): SetupInterface => ({ name: String(row.ifname ?? ""), mac: typeof row.address === "string" ? row.address : null, state: String(row.operstate ?? "UNKNOWN"), addresses: addressMap.get(String(row.ifname ?? "")) ?? [], kind: typeof row.link_type === "string" ? row.link_type : null })).filter((item) => item.name && item.name !== "lo"); const defaultUplink = Array.isArray(routes) ? routes.find((row: any) => typeof row.dev === "string")?.dev ?? null : null; const uplinkSubnets: Record<string, string[]> = {}; for (const item of interfaces) uplinkSubnets[item.name] = item.addresses.map(networkOf).filter((value): value is string => Boolean(value)); const occupied = new Set(Object.values(uplinkSubnets).flat()); const proposedClientSubnets = proposeClientSubnets(occupied); if (!defaultUplink) errors.push("No default-route interface detected"); if (!interfaces.length) errors.push("No usable network interfaces detected"); if (defaultUplink && !(uplinkSubnets[defaultUplink] ?? []).length) errors.push("No IPv4 subnet found on the default uplink interface"); if (!proposedClientSubnets.length) errors.push("Unable to find a non-overlapping private client subnet"); return { interfaces, defaultUplink, uplinkSubnets, proposedClientSubnets, errors }; }
 
