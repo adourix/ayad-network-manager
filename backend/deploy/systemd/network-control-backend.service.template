@@ -14,6 +14,7 @@ EnvironmentFile=-@CONFIG_FILE@
 Environment=ENFORCEMENT_SOCKET_PATH=/run/network-control/enforcement.sock
 RuntimeDirectory=network-control
 RuntimeDirectoryMode=0755
+ExecStartPre=/bin/sh -c 'for i in $(seq 1 60); do [ -S /run/network-control/enforcement.sock ] && exit 0; sleep 0.25; done; echo "enforcement socket did not become ready" >&2; exit 1'
 ExecStart=/usr/bin/node @APP_ROOT@/dist/bootstrap.js
 Restart=on-failure
 RestartSec=5
