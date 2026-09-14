@@ -6,20 +6,16 @@ const executor = new LinuxSystemCommandExecutor();
 const TABLE = "ayad_nm";
 const CHAIN = "dns_redirect";
 const COMMENT_PREFIX = "ayad_nm_dns_redirect";
+const GOOGLE_DNS = "8.8.8.8";
 const IPV4 = /^(?:\d{1,3}\.){3}\d{1,3}$/;
-
-function targetFor(profile: DnsProfile): string | null {
-  switch (profile) {
-    case "GOOGLE": return "8.8.8.8";
-    case "CLOUDFLARE": return "1.1.1.1";
-    case "ADGUARD": return config.dns.adguardDnsIp || null;
-    case "UNFILTERED": return null;
-  }
-}
+const ADGUARD_HEALTH_CACHE_MS = 5_000;
+let adguardHealth: { value: boolean; checkedAt: number } = { value: false, checkedAt: 0 };
 
 function validateIp(ip: string): string {
   const value = ip.trim();
-  if (!IPV4.test(value)) throw new Error(`Invalid IPv4 address: ${ip}`);
+  if (!IPV4.test(value) || value.split(".").some((part) => Number(part) > 255)) {
+    throw new Error(`Invalid IPv4 address: ${ip}`);
+  }
   return value;
 }
 
@@ -31,6 +27,38 @@ function alreadyExists(error: unknown): boolean {
 async function nft(args: string[]): Promise<string> {
   const result = await executor.execute("nft", args);
   return result.stdout;
+}
+
+async function isAdguardHealthy(): Promise<boolean> {
+  const now = Date.now();
+  if (now - adguardHealth.checkedAt < ADGUARD_HEALTH_CACHE_MS) return adguardHealth.value;
+
+  const ip = config.dns.adguardDnsIp;
+  if (!config.dns.adguardEnabled || !ip || !IPV4.test(ip)) {
+    adguardHealth = { value: false, checkedAt: now };
+    return false;
+  }
+
+  try {
+    const response = await fetch(`http://127.0.0.1:${config.dns.adguardDashboardPort}/control/status`, {
+      signal: AbortSignal.timeout(1_500),
+    });
+    if (!response.ok) throw new Error(`AdGuard status returned HTTP ${response.status}`);
+    const status = await response.json() as { running?: boolean };
+    adguardHealth = { value: status.running !== false, checkedAt: now };
+  } catch {
+    adguardHealth = { value: false, checkedAt: now };
+  }
+  return adguardHealth.value;
+}
+
+async function targetFor(profile: DnsProfile): Promise<string | null> {
+  switch (profile) {
+    case "GOOGLE": return GOOGLE_DNS;
+    case "CLOUDFLARE": return "1.1.1.1";
+    case "ADGUARD": return (await isAdguardHealthy()) ? validateIp(config.dns.adguardDnsIp) : GOOGLE_DNS;
+    case "UNFILTERED": return null;
+  }
 }
 
 async function ensureChain(): Promise<void> {
@@ -45,7 +73,7 @@ async function listRules(): Promise<Array<{ handle: number; comment: string | nu
   return stdout.split(/\r?\n/).flatMap((line) => {
     const handle = line.match(/# handle (\d+)/)?.[1];
     if (!handle) return [];
-    const comment = line.match(/comment "([^"]+)"/)?.[1] ?? null;
+    const comment = line.match(/comment \"([^\"]+)\"/)?.[1] ?? null;
     return [{ handle: Number(handle), comment }];
   });
 }
@@ -61,9 +89,8 @@ export async function setDnsProfile(ip: string, profile: DnsProfile): Promise<vo
   const address = validateIp(ip);
   await ensureChain();
   await removeDeviceRules(address);
-  const target = targetFor(profile);
+  const target = await targetFor(profile);
   if (!target) return;
-  if (profile === "ADGUARD" && !config.dns.adguardDnsIp) throw new Error("ADGUARD_DNS_IP is not configured");
   const marker = `${COMMENT_PREFIX}_${address}`;
   await nft(["add", "rule", "inet", TABLE, CHAIN, "ip", "saddr", address, "udp", "dport", "53", "dnat", "to", `${target}:53`, "comment", marker]);
   await nft(["add", "rule", "inet", TABLE, CHAIN, "ip", "saddr", address, "tcp", "dport", "53", "dnat", "to", `${target}:53`, "comment", marker]);
