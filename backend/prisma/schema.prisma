@@ -40,6 +40,13 @@ enum IdentitySource {
   PROXY_ACCEPTED_BY_ADMIN
 }
 
+enum DnsProfile {
+  GOOGLE
+  CLOUDFLARE
+  ADGUARD
+  UNFILTERED
+}
+
 model NeighborObservation {
   id BigInt @id @default(autoincrement())
   mac String
@@ -67,6 +74,7 @@ model DevicePolicy {
   profile Profile? @relation(fields: [profileId], references: [id], onDelete: SetNull)
   scheduleId Int?
   schedule Schedule? @relation(fields: [scheduleId], references: [id], onDelete: SetNull)
+  dnsProfile DnsProfile @default(GOOGLE)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   @@index([profileId])
