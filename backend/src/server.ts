@@ -102,6 +102,29 @@ if (setupComplete) {
   const quotaService = new QuotaService(deviceRepository, policyRepository, trafficEnforcementService, firewallService, notificationRepository, quotaPeriodRepository);
   const trafficUsageReader = new NftTrafficUsageReader({ mode: config.network.networkMode, clientInterface: config.network.clientInterface, uplinkInterface: null, clientSubnet: config.network.clientSubnet }, systemCommandExecutor);
   const trafficSampleRepository = new PrismaTrafficSampleRepository(); const trafficAccountingService = new TrafficAccountingService(deviceRepository, discoveryService, trafficUsageReader, trafficSampleRepository, quotaService);
+
+  app.get<{ Querystring: { range?: string } }>("/api/traffic/usage", async (request, reply) => {
+    const range = request.query.range ?? "day";
+    const durations: Record<string, number> = { day: 86_400_000, week: 604_800_000, month: 2_592_000_000 };
+    const duration = durations[range];
+    if (duration === undefined) return reply.code(400).send({ error: "range must be day, week, or month" });
+    const now = new Date();
+    const samples = await trafficSampleRepository.findHistory({ from: new Date(now.getTime() - duration), to: now });
+    const totals = new Map<number, { downloadBytes: bigint; uploadBytes: bigint }>();
+    for (const sample of samples) {
+      const current = totals.get(sample.deviceId) ?? { downloadBytes: 0n, uploadBytes: 0n };
+      current.downloadBytes += sample.downloadBytes;
+      current.uploadBytes += sample.uploadBytes;
+      totals.set(sample.deviceId, current);
+    }
+    return [...totals.entries()].map(([deviceId, value]) => ({
+      deviceId,
+      downloadBytes: value.downloadBytes.toString(),
+      uploadBytes: value.uploadBytes.toString(),
+      totalBytes: (value.downloadBytes + value.uploadBytes).toString(),
+    }));
+  });
+
   const trafficReconciliationService = new TrafficReconciliationService(deviceRepository, policyRepository, trafficEnforcer, config.network.quotaThrottleMbps);
   await deviceRoutes(app, deviceService, devicePolicyService, firewallService, liveMonitoringService, trafficEnforcementService, quotaService, trafficAccountingService, trafficSampleRepository);
   const portRuleEnforcer = new NftPortRuleEnforcer(systemCommandExecutor, operationsRepository); await policyCatalogRoutes(app, new PolicyCatalogService(policyCatalogRepository, deviceRepository, portRuleEnforcer));
