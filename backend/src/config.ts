@@ -1,53 +1,22 @@
 import { config as loadDotenv } from "dotenv";
-
-// Load installer-owned static settings first (database, auth, paths, etc.).
 loadDotenv();
-
-// Setup-owned network/runtime settings are persisted outside .env. Load them
-// explicitly and let setup values override the install-time placeholders in
-// .env (which are intentionally blank before setup is completed).
 const systemConfigPath = process.env.SYSTEM_CONFIG_PATH ?? "/etc/network-control-system/config.env";
 loadDotenv({ path: systemConfigPath, override: true });
 
 function optional(name: string): string { return process.env[name] ?? ""; }
-function numberFromEnv(name: string, fallback: number): number {
-  const value = process.env[name];
-  if (!value) return fallback;
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) throw new Error(`Invalid numeric environment variable: ${name}`);
-  return parsed;
-}
+function numberFromEnv(name: string, fallback: number): number { const value = process.env[name]; if (!value) return fallback; const parsed = Number(value); if (!Number.isFinite(parsed)) throw new Error(`Invalid numeric environment variable: ${name}`); return parsed; }
 function networkModeFromEnv(): "dual-interface" | "single-interface-ifb" {
   const value = (process.env.NETWORK_MODE ?? "single-interface-ifb").trim().toLowerCase();
-  // Accept the setup wizard's persisted legacy spelling as well as the
-  // canonical values used internally. This module is imported before the
-  // bootstrap can decide whether setup mode is required, so an old persisted
-  // value must never crash the setup server.
   if (value === "single_iface_ifb" || value === "single-iface-ifb") return "single-interface-ifb";
   if (value === "dual_iface" || value === "dual_iface_ifb") return "dual-interface";
-  if (value !== "dual-interface" && value !== "single-interface-ifb") {
-    throw new Error(`Invalid NETWORK_MODE: ${process.env.NETWORK_MODE}. Expected "dual-interface" or "single-interface-ifb".`);
-  }
+  if (value !== "dual-interface" && value !== "single-interface-ifb") throw new Error(`Invalid NETWORK_MODE: ${process.env.NETWORK_MODE}. Expected "dual-interface" or "single-interface-ifb".`);
   return value;
 }
-
 const dnsServers = (process.env.DNS_SERVERS ?? "1.1.1.1,8.8.8.8").split(",").map((value) => value.trim()).filter(Boolean);
 if (dnsServers.length === 0) throw new Error("DNS_SERVERS must contain at least one server");
-
-// Setup completion is an explicit persisted state, not merely the presence of
-// optional runtime variables. The setup wizard writes SETUP_COMPLETED=true
-// only after the configuration and health checks succeed. Database settings
-// remain installer-owned and must also be present before the full control plane
-// can start.
 const gatewaySetupComplete = process.env.SETUP_COMPLETED?.toLowerCase() === "true";
-const databaseReady = ["DATABASE_URL", "DATABASE_USER", "DATABASE_PASSWORD", "DATABASE_NAME", "DATABASE_HOST"]
-  .every((name) => Boolean(process.env[name]));
-const networkSetupReady = [
-  "CLIENT_INTERFACE", "UPLINK_INTERFACE", "CLIENT_GATEWAY_IP", "CLIENT_SUBNET",
-  "UPLINK_BANDWIDTH_MBPS", "VPN_TUN_INTERFACE", "SING_BOX_CONFIG_PATH", "VPN_TUN_ADDRESS",
-  "DHCP_RESERVATIONS_PATH", "DHCP_LEASES_PATH",
-].every((name) => Boolean(process.env[name]));
-
+const databaseReady = ["DATABASE_URL", "DATABASE_USER", "DATABASE_PASSWORD", "DATABASE_NAME", "DATABASE_HOST"].every((name) => Boolean(process.env[name]));
+const networkSetupReady = ["CLIENT_INTERFACE", "UPLINK_INTERFACE", "CLIENT_GATEWAY_IP", "CLIENT_SUBNET", "UPLINK_BANDWIDTH_MBPS", "VPN_TUN_INTERFACE", "SING_BOX_CONFIG_PATH", "VPN_TUN_ADDRESS", "DHCP_RESERVATIONS_PATH", "DHCP_LEASES_PATH"].every((name) => Boolean(process.env[name]));
 export const setupComplete = gatewaySetupComplete && databaseReady && networkSetupReady;
 
 export const config = {
@@ -59,23 +28,18 @@ export const config = {
     tlsKeyPath: process.env.TLS_KEY_PATH ?? null,
   },
   network: {
-    clientInterface: optional("CLIENT_INTERFACE"),
-    uplinkInterface: optional("UPLINK_INTERFACE"),
-    networkMode: networkModeFromEnv(),
-    lanInterface: optional("CLIENT_INTERFACE"),
-    wanInterface: optional("UPLINK_INTERFACE"),
-    clientGatewayIp: optional("CLIENT_GATEWAY_IP"),
-    clientSubnet: optional("CLIENT_SUBNET"),
-    lanIp: optional("CLIENT_GATEWAY_IP"),
-    lanSubnet: optional("CLIENT_SUBNET"),
-    wanIp: process.env.WAN_IP ?? "",
-    uplinkBandwidthMbps: BigInt(process.env.UPLINK_BANDWIDTH_MBPS ?? "0"),
-    quotaThrottleMbps: numberFromEnv("QUOTA_THROTTLE_MBPS", 0.5),
-    vpnTunnelInterface: optional("VPN_TUN_INTERFACE"),
-    vpnConfigPath: optional("SING_BOX_CONFIG_PATH"),
-    vpnTunAddress: optional("VPN_TUN_ADDRESS"),
-    sshPort: numberFromEnv("SSH_PORT", 22),
-    dnsServers,
+    clientInterface: optional("CLIENT_INTERFACE"), uplinkInterface: optional("UPLINK_INTERFACE"), networkMode: networkModeFromEnv(),
+    lanInterface: optional("CLIENT_INTERFACE"), wanInterface: optional("UPLINK_INTERFACE"), clientGatewayIp: optional("CLIENT_GATEWAY_IP"),
+    clientSubnet: optional("CLIENT_SUBNET"), lanIp: optional("CLIENT_GATEWAY_IP"), lanSubnet: optional("CLIENT_SUBNET"), wanIp: process.env.WAN_IP ?? "",
+    uplinkBandwidthMbps: BigInt(process.env.UPLINK_BANDWIDTH_MBPS ?? "0"), quotaThrottleMbps: numberFromEnv("QUOTA_THROTTLE_MBPS", 0.5),
+    vpnTunnelInterface: optional("VPN_TUN_INTERFACE"), vpnConfigPath: optional("SING_BOX_CONFIG_PATH"), vpnTunAddress: optional("VPN_TUN_ADDRESS"),
+    sshPort: numberFromEnv("SSH_PORT", 22), dnsServers,
+  },
+  dns: {
+    adguardEnabled: process.env.INSTALL_ADGUARD?.toLowerCase() === "true",
+    adguardDnsIp: optional("ADGUARD_DNS_IP"),
+    adguardDashboardPort: numberFromEnv("ADGUARD_DASHBOARD_PORT", 3000),
+    adguardContainerName: process.env.ADGUARD_CONTAINER_NAME ?? "adguardhome",
   },
   setup: {
     dhcpReservationsPath: process.env.DHCP_RESERVATIONS_PATH ?? "/var/lib/misc/network-control-reservations.conf",
@@ -83,12 +47,8 @@ export const config = {
     notificationWebhookUrl: process.env.NOTIFICATION_WEBHOOK_URL ?? null,
   },
   database: {
-    url: optional("DATABASE_URL"),
-    user: optional("DATABASE_USER"),
-    password: optional("DATABASE_PASSWORD"),
-    name: optional("DATABASE_NAME"),
-    host: optional("DATABASE_HOST"),
-    port: numberFromEnv("DATABASE_PORT", 5432),
+    url: optional("DATABASE_URL"), user: optional("DATABASE_USER"), password: optional("DATABASE_PASSWORD"), name: optional("DATABASE_NAME"),
+    host: optional("DATABASE_HOST"), port: numberFromEnv("DATABASE_PORT", 5432),
   },
 } as const;
 
