@@ -154,6 +154,13 @@ export interface SetupRuntimeConfig {
   networkMode: string;
 }
 
+export interface DeviceUsage {
+  deviceId: number;
+  downloadBytes: string;
+  uploadBytes: string;
+  totalBytes: string;
+}
+
 export const api = {
   login: (username: string, password: string) => request<LoginResponse>("/api/auth/login", {
     method: "POST", body: JSON.stringify({ username, password }),
@@ -191,6 +198,7 @@ export const api = {
       bucketStart: row.bucketStart ?? row.timestamp ?? "",
     }));
   },
+  deviceUsage: (range: "day" | "week" | "month") => request<DeviceUsage[]>(`/api/traffic/usage?range=${range}`),
   vpnStatus: () => request<VpnStatus>("/api/vpn/status"),
   vpnConfig: (vmessLink: string) => request<unknown>("/api/vpn/config", { method: "POST", body: JSON.stringify({ vmessLink }) }),
   vpnEnable: () => request<unknown>("/api/vpn/enable", { method: "POST" }),
