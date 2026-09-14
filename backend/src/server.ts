@@ -23,6 +23,8 @@ import { PrismaTrafficSampleRepository } from "./infrastructure/database/PrismaT
 import { TrafficAccountingService } from "./application/monitoring/TrafficAccountingService.js";
 import { LiveMonitoringService } from "./application/monitoring/LiveMonitoringService.js";
 import { DevicePolicyService } from "./application/policies/DevicePolicyService.js";
+import { DnsProfileService } from "./application/policies/DnsProfileService.js";
+import { dnsRoutes } from "./interfaces/http/routes/dns.js";
 import { LinuxDhcpLeaseReader } from "./infrastructure/network/LinuxDhcpLeaseReader.js";
 import { LinuxNeighborTableReader } from "./infrastructure/network/LinuxNeighborTableReader.js";
 import { DhcpNeighborIdentityValidator } from "./infrastructure/network/DhcpNeighborIdentityValidator.js";
@@ -97,6 +99,7 @@ if (setupComplete) {
   const trafficEnforcer = new SingleInterfaceIfbTrafficEnforcer(config.network.uplinkBandwidthMbps, config.network.lanInterface, systemCommandExecutor, ifbManager, tcStateReader);
   const trafficEnforcementService = new TrafficEnforcementService(trafficEnforcer, trafficPolicyValidator, deviceRepository, policyRepository, config.network.quotaThrottleMbps, operationsRepository);
   const devicePolicyService = new DevicePolicyService(deviceRepository, policyRepository, policyCatalogRepository);
+  const dnsProfileService = new DnsProfileService(deviceRepository, policyRepository);
   const notificationRepository = new PrismaNotificationRepository();
   const quotaPeriodRepository = new PrismaQuotaPeriodRepository();
   const quotaService = new QuotaService(deviceRepository, policyRepository, trafficEnforcementService, firewallService, notificationRepository, quotaPeriodRepository);
@@ -104,29 +107,17 @@ if (setupComplete) {
   const trafficSampleRepository = new PrismaTrafficSampleRepository(); const trafficAccountingService = new TrafficAccountingService(deviceRepository, discoveryService, trafficUsageReader, trafficSampleRepository, quotaService);
 
   app.get<{ Querystring: { range?: string } }>("/api/traffic/usage", async (request, reply) => {
-    const range = request.query.range ?? "day";
-    const durations: Record<string, number> = { day: 86_400_000, week: 604_800_000, month: 2_592_000_000 };
-    const duration = durations[range];
+    const range = request.query.range ?? "day"; const durations: Record<string, number> = { day: 86_400_000, week: 604_800_000, month: 2_592_000_000 }; const duration = durations[range];
     if (duration === undefined) return reply.code(400).send({ error: "range must be day, week, or month" });
-    const now = new Date();
-    const samples = await trafficSampleRepository.findHistory({ from: new Date(now.getTime() - duration), to: now });
+    const now = new Date(); const samples = await trafficSampleRepository.findHistory({ from: new Date(now.getTime() - duration), to: now });
     const totals = new Map<number, { downloadBytes: bigint; uploadBytes: bigint }>();
-    for (const sample of samples) {
-      const current = totals.get(sample.deviceId) ?? { downloadBytes: 0n, uploadBytes: 0n };
-      current.downloadBytes += sample.downloadBytes;
-      current.uploadBytes += sample.uploadBytes;
-      totals.set(sample.deviceId, current);
-    }
-    return [...totals.entries()].map(([deviceId, value]) => ({
-      deviceId,
-      downloadBytes: value.downloadBytes.toString(),
-      uploadBytes: value.uploadBytes.toString(),
-      totalBytes: (value.downloadBytes + value.uploadBytes).toString(),
-    }));
+    for (const sample of samples) { const current = totals.get(sample.deviceId) ?? { downloadBytes: 0n, uploadBytes: 0n }; current.downloadBytes += sample.downloadBytes; current.uploadBytes += sample.uploadBytes; totals.set(sample.deviceId, current); }
+    return [...totals.entries()].map(([deviceId, value]) => ({ deviceId, downloadBytes: value.downloadBytes.toString(), uploadBytes: value.uploadBytes.toString(), totalBytes: (value.downloadBytes + value.uploadBytes).toString() }));
   });
 
   const trafficReconciliationService = new TrafficReconciliationService(deviceRepository, policyRepository, trafficEnforcer, config.network.quotaThrottleMbps);
   await deviceRoutes(app, deviceService, devicePolicyService, firewallService, liveMonitoringService, trafficEnforcementService, quotaService, trafficAccountingService, trafficSampleRepository);
+  await dnsRoutes(app, dnsProfileService);
   const portRuleEnforcer = new NftPortRuleEnforcer(systemCommandExecutor, operationsRepository); await policyCatalogRoutes(app, new PolicyCatalogService(policyCatalogRepository, deviceRepository, portRuleEnforcer));
   await operationsRoutes(app, new OperationsService(operationsRepository));
   const vpnService = new VpnService(new PrismaVpnRepository(), new SingleInterfaceVpnController(systemCommandExecutor, config.network.vpnTunnelInterface), operationsRepository); await vpnRoutes(app, vpnService);
@@ -143,9 +134,7 @@ if (setupComplete) {
   vpnService.startMonitor();
   await scheduleEnforcementService.start(); await trafficAccountingService.start(); await trafficRetentionService.start(); await deviceDiscoverySyncService.start(); await liveMonitoringService.start(); await blockedIpReconciliationService.start(); await ipBindingLifecycleService.start(); await trafficReconciliationService.start(); await dhcpReservationService.start();
 
-  process.on("SIGTERM", async () => {
-    vpnService.stopMonitor(); trafficAccountingService.stop(); trafficRetentionService.stop(); deviceDiscoverySyncService.stop(); liveMonitoringService.stop(); blockedIpReconciliationService.stop(); ipBindingLifecycleService.stop(); trafficReconciliationService.stop(); scheduleEnforcementService.stop(); dhcpReservationService.stop(); broadcastCaptureReader.stop(); await app.close();
-  });
+  process.on("SIGTERM", async () => { vpnService.stopMonitor(); trafficAccountingService.stop(); trafficRetentionService.stop(); deviceDiscoverySyncService.stop(); liveMonitoringService.stop(); blockedIpReconciliationService.stop(); ipBindingLifecycleService.stop(); trafficReconciliationService.stop(); scheduleEnforcementService.stop(); dhcpReservationService.stop(); broadcastCaptureReader.stop(); await app.close(); });
 } else {
   registerFrontend(app);
   process.on("SIGTERM", async () => { await app.close(); });
