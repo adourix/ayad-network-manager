@@ -1,0 +1,4 @@
+CREATE TYPE "DnsProfile" AS ENUM ('GOOGLE', 'CLOUDFLARE', 'ADGUARD', 'UNFILTERED');
+
+ALTER TABLE "device_policies"
+ADD COLUMN "dnsProfile" "DnsProfile" NOT NULL DEFAULT 'GOOGLE';
