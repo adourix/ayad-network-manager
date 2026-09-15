@@ -24,9 +24,20 @@ export class VpnService {
     const normalized = link.trim();
     if (!/^(vmess|vless):\/\//i.test(normalized)) throw new Error("Only vmess and vless links are supported");
     try {
+      const current = await this.repository.get();
       await this.enforcement.configure?.(normalized);
+
+      // Configuring an already-enabled VPN must also activate the new config.
+      // configure() validates/stages/installs it; apply(true) restarts sing-box,
+      // waits for tun readiness, and keeps the existing fail-closed policy.
+      if (current.enabled) {
+        const connected = await this.enforcement.apply(true);
+        if (!connected) throw new Error("VPN configuration was installed but the tunnel did not become ready");
+      }
+
       const result = await this.repository.saveLink(normalized);
-      await this.audit?.audit({ action: "configure-vpn", details: { result: "success" } });
+      if (current.enabled) await this.repository.setConnected(true);
+      await this.audit?.audit({ action: "configure-vpn", details: { result: "success", reactivated: current.enabled } });
       return result;
     } catch (error) {
       await this.audit?.audit({ action: "configure-vpn", details: { result: "failure", error: error instanceof Error ? error.message : String(error) } });
