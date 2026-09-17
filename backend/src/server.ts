@@ -17,6 +17,7 @@ import { NftTrafficUsageReader } from "./infrastructure/enforcement/NftTrafficUs
 import { NftDeviceBlocker } from "./infrastructure/enforcement/NftDeviceBlocker.js";
 import { NftBlockedDeviceReader } from "./infrastructure/enforcement/NftBlockedDeviceReader.js";
 import { configureNftAudit, ensureFirewallState, ensureSingleInterfaceNat } from "./infrastructure/enforcement/NftEnforcer.js";
+import { NftDnsProfileEnforcer } from "./infrastructure/enforcement/NftDnsProfileEnforcer.js";
 import { PrismaDevicePolicyRepository } from "./infrastructure/database/PrismaDevicePolicyRepository.js";
 import { PrismaDeviceRepository } from "./infrastructure/database/PrismaDeviceRepository.js";
 import { PrismaTrafficSampleRepository } from "./infrastructure/database/PrismaTrafficSampleRepository.js";
@@ -98,7 +99,7 @@ if (setupComplete) {
   const trafficEnforcer = new SingleInterfaceIfbTrafficEnforcer(config.network.uplinkBandwidthMbps, config.network.lanInterface, systemCommandExecutor, ifbManager, tcStateReader);
   const trafficEnforcementService = new TrafficEnforcementService(trafficEnforcer, trafficPolicyValidator, deviceRepository, policyRepository, config.network.quotaThrottleMbps, operationsRepository);
   const devicePolicyService = new DevicePolicyService(deviceRepository, policyRepository, policyCatalogRepository);
-  const dnsProfileService = new DnsProfileService(deviceRepository, policyRepository);
+  const dnsProfileService = new DnsProfileService(deviceRepository, policyRepository, new NftDnsProfileEnforcer(systemCommandExecutor));
   const notificationRepository = new PrismaNotificationRepository(); const quotaPeriodRepository = new PrismaQuotaPeriodRepository();
   const quotaService = new QuotaService(deviceRepository, policyRepository, trafficEnforcementService, firewallService, notificationRepository, quotaPeriodRepository);
   const trafficUsageReader = new NftTrafficUsageReader({ mode: config.network.networkMode, clientInterface: config.network.clientInterface, uplinkInterface: null, clientSubnet: config.network.clientSubnet }, systemCommandExecutor);
@@ -124,8 +125,9 @@ if (setupComplete) {
   await ensureFirewallState(); await ensureSingleInterfaceNat(config.network.clientSubnet); await firewallService.reconcile(); await dhcpReservationService.reconcile(); await dnsProfileService.reconcile();
   for (const device of await deviceRepository.findAll()) { if (!device.ip) continue; for (const rule of await policyCatalogRepository.portRules(device.id)) if (rule.enabled) await portRuleEnforcer.apply({ mac: device.mac.toString(), ip: device.ip.toString() }, rule); }
   await trafficReconciliationService.reconcile(); await blockedIpReconciliationService.reconcile(); await ipBindingLifecycleService.reconcile(); await profileEnforcementService.reconcile(); await vpnService.reconcile();
+  await dnsProfileService.start();
   vpnService.startMonitor(); await scheduleEnforcementService.start(); await trafficAccountingService.start(); await trafficRetentionService.start(); await deviceDiscoverySyncService.start(); await liveMonitoringService.start(); await blockedIpReconciliationService.start(); await ipBindingLifecycleService.start(); await trafficReconciliationService.start(); await dhcpReservationService.start();
-  process.on("SIGTERM", async () => { vpnService.stopMonitor(); trafficAccountingService.stop(); trafficRetentionService.stop(); deviceDiscoverySyncService.stop(); liveMonitoringService.stop(); blockedIpReconciliationService.stop(); ipBindingLifecycleService.stop(); trafficReconciliationService.stop(); scheduleEnforcementService.stop(); dhcpReservationService.stop(); broadcastCaptureReader.stop(); await app.close(); });
+  process.on("SIGTERM", async () => { vpnService.stopMonitor(); dnsProfileService.stop(); trafficAccountingService.stop(); trafficRetentionService.stop(); deviceDiscoverySyncService.stop(); liveMonitoringService.stop(); blockedIpReconciliationService.stop(); ipBindingLifecycleService.stop(); trafficReconciliationService.stop(); scheduleEnforcementService.stop(); dhcpReservationService.stop(); broadcastCaptureReader.stop(); await app.close(); });
 } else { registerFrontend(app); process.on("SIGTERM", async () => { await app.close(); }); }
 await app.listen({ host: config.server.host, port: config.server.port });
 app.log.info(`Server listening at ${config.server.tlsCertPath ? "https" : "http"}://${config.server.host}:${config.server.port}`);
