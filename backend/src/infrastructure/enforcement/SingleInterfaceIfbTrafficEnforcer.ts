@@ -209,10 +209,18 @@ export class SingleInterfaceIfbTrafficEnforcer implements TrafficEnforcer {
   private async reconcileInterfaceState(interfaceName: string, expectedClassIds: Set<string>): Promise<void> {
     const actualClasses = await this.tcStateReader.getDeviceClasses(interfaceName);
     const actualFilters = await this.tcStateReader.getDeviceFilters(interfaceName);
+    const actualClassIds = new Set(
+      actualClasses.map((classState) => classState.classId.trim().toLowerCase()),
+    );
 
+    // A filter is only valid when both its class exists in the kernel and its
+    // class is part of the desired state. This also removes orphan filters
+    // left behind by an interrupted/partial tc mutation or a previous class-ID
+    // mapping. An orphan filter must never survive reconciliation merely
+    // because its class-id happens to be expected by the DB.
     for (const filter of actualFilters) {
       const classId = filter.classId.trim().toLowerCase();
-      if (expectedClassIds.has(classId)) continue;
+      if (actualClassIds.has(classId) && expectedClassIds.has(classId)) continue;
       try {
         await this.executor.execute("tc", TcBuilder.deleteFilter(interfaceName, filter.priority).args);
       } catch (error) {
