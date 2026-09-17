@@ -8,9 +8,22 @@ DATA_ROOT="${ADGUARD_DATA_ROOT:-/var/lib/adguardhome}"
 WORK_DIR="${DATA_ROOT}/work"
 CONF_DIR="${DATA_ROOT}/conf"
 IMAGE="adguard/adguardhome"
+CONFIG_FILE="${SYSTEM_CONFIG_PATH:-/etc/network-control-system/config.env}"
 
 log() { printf '\n==> %s\n' "$*"; }
 die() { echo "ERROR: $*" >&2; exit 1; }
+set_config_value() {
+  local key="$1" value="$2"
+  mkdir -p "$(dirname "${CONFIG_FILE}")"
+  touch "${CONFIG_FILE}"
+  chmod 0600 "${CONFIG_FILE}"
+  if grep -qE "^${key}=" "${CONFIG_FILE}"; then
+    sed -i "s|^${key}=.*$|${key}=${value}|" "${CONFIG_FILE}"
+  else
+    printf '%s=%s\n' "${key}" "${value}" >> "${CONFIG_FILE}"
+  fi
+}
+
 [[ "$(id -u)" -eq 0 ]] || die "run as root"
 [[ "${INSTALL_ADGUARD:-false}" == "true" ]] || { log "AdGuard installation disabled by INSTALL_ADGUARD=false"; exit 0; }
 command -v docker >/dev/null 2>&1 || die "Docker is required when AdGuard Home installation is enabled"
@@ -43,7 +56,7 @@ docker inspect -f '{{.State.Running}}' "${CONTAINER_NAME}" | grep -q true || die
 
 container_ip="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "${CONTAINER_NAME}")"
 [[ -n "${container_ip}" ]] || die "Unable to determine AdGuard Home container IP"
-ADGUARD_DNS_IP="${ADGUARD_DNS_IP:-${container_ip}}"
+ADGUARD_DNS_IP="${container_ip}"
 
 config_file="${CONF_DIR}/AdGuardHome.yaml"
 if [[ ! -s "${config_file}" ]]; then
@@ -76,12 +89,17 @@ PY
   log "AdGuard Home first-run configuration completed"
 fi
 
-log "Validating AdGuard DNS and dashboard"
+log "Validating AdGuard Home dashboard"
 for _ in $(seq 1 30); do
   if curl -fsS --max-time 2 "http://127.0.0.1:${DASHBOARD_PORT}/control/status" >/dev/null 2>&1; then break; fi
   sleep 1
 done
 curl -fsS --max-time 3 "http://127.0.0.1:${DASHBOARD_PORT}/control/status" >/dev/null || die "AdGuard dashboard health check failed"
+
+set_config_value "INSTALL_ADGUARD" "true"
+set_config_value "ADGUARD_CONTAINER_NAME" "${CONTAINER_NAME}"
+set_config_value "ADGUARD_DNS_IP" "${ADGUARD_DNS_IP}"
+set_config_value "ADGUARD_DASHBOARD_PORT" "${DASHBOARD_PORT}"
 
 log "AdGuard Home ready: container=${CONTAINER_NAME} ip=${ADGUARD_DNS_IP} dashboard_port=${DASHBOARD_PORT}"
 printf '%s\n' "${ADGUARD_DNS_IP}"
