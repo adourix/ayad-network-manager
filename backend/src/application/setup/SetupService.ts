@@ -141,5 +141,6 @@ export class SetupService {
   private async writeAtomic(path: string, content: string): Promise<void> { await fs.mkdir(dirname(path), { recursive: true }); const temp = `${path}.tmp-${process.pid}-${Date.now()}`; await fs.writeFile(temp, content, "utf8"); await fs.rename(temp, path); }
   private async readJson(command: string, args: string[]): Promise<any> { const result = await this.safe(command, args); if (!result.ok) return []; try { return JSON.parse(result.stdout); } catch { return []; } }
   private async safe(command: string, args: string[]): Promise<{ ok: boolean; stdout: string; stderr: string }> { try { const result = await this.probe.run(command, args); return { ok: true, stdout: result.stdout ?? "", stderr: result.stderr ?? "" }; } catch (error) { return { ok: false, stdout: "", stderr: error instanceof Error ? error.message : String(error) }; }
+  }
   private failed(errors: string[]): SetupApplyResult { return { applied: false, configPath: this.paths.configPath, renderedFiles: [], health: { clientInterface: false, gatewayReachable: false, dhcpLeaseFile: false, outboundConnectivity: false, errors }, rolledBack: false, errors }; }
 }
