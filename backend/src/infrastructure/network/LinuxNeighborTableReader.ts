@@ -29,6 +29,9 @@ export class LinuxNeighborTableReader implements NeighborTableReader {
         neighbors.push({ ip, mac: normalizeMac(mac), state: state.toUpperCase() });
       }
       return neighbors;
-    } catch { return []; }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`Failed to read Linux neighbor table on ${interfaceName}: ${message}`);
+    }
   }
 }
