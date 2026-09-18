@@ -3,6 +3,7 @@ import type { DeviceRepository } from "../../domain/repositories/DeviceRepositor
 import type { DevicePolicyRepository } from "../../domain/repositories/DevicePolicyRepository.js";
 import type { BlockedDeviceRepository } from "../../domain/repositories/BlockedDeviceRepository.js";
 import type { DeviceBlocker } from "./DeviceBlocker.js";
+import { withIpBindingMutationLock } from "./IpBindingMutationLock.js";
 
 function normalizeMac(mac: string): string { return mac.trim().toLowerCase(); }
 function normalizeIp(ip: string): string { return ip.trim(); }
@@ -42,6 +43,7 @@ export class BlockedIpReconciliationService {
     this.running = true;
 
     try {
+      await withIpBindingMutationLock(async () => {
       if (!this.deviceBlocker) throw new Error("Blocked IP reconciliation requires an enforcement adapter");
 
       const [devices, leases, neighbors, blockedIps, bindings] = await Promise.all([
@@ -154,6 +156,7 @@ export class BlockedIpReconciliationService {
           );
         }
       }
+      });
     } catch (error) {
       console.error("Blocked IP reconciliation failed:", error);
     } finally {
