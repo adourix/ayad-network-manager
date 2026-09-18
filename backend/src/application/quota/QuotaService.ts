@@ -108,11 +108,40 @@ export class QuotaService {
       return null;
     }
     const period = await this.getOrCreateCurrentPeriod(device.id, policy.quotaPeriod, timestamp);
-    const updated = await this.quotaPeriodRepository.updateUsage(period.id, period.usedDownloadBytes + downloadBytes, period.usedUploadBytes + uploadBytes);
-    await this.notifyThresholds(device.id, mac, policy.quota, period.usedDownloadBytes + downloadBytes + period.usedUploadBytes + uploadBytes, period.periodStart);
+    const updated = await this.quotaPeriodRepository.incrementUsage(period.id, downloadBytes, uploadBytes);
+    await this.notifyThresholds(device.id, mac, policy.quota, updated.usedDownloadBytes + updated.usedUploadBytes, updated.periodStart);
     const view = this.buildView(policy.quota, policy.quotaPeriod, policy.quotaAction, updated);
     if (view.exhausted) await this.enforceQuotaAction(device.id, mac);
     return view;
+  }
+
+  async reconcilePolicy(mac: string): Promise<void> {
+    const device = await resolveDeviceIdentifier(this.deviceRepository, mac);
+    if (!device) return;
+    const policy = await this.policyRepository.findByDeviceId(device.id);
+    if (!policy) return;
+
+    if (policy.quota === null || policy.quotaPeriod === null) {
+      if (policy.quotaEnforcedAction) {
+        await this.clearQuotaEnforcement(device.id, mac, policy.quotaEnforcedAction);
+      }
+      return;
+    }
+
+    const period = await this.quotaPeriodRepository.findCurrent(device.id, policy.quotaPeriod, new Date());
+    if (!period) {
+      if (policy.quotaEnforcedAction) {
+        await this.clearQuotaEnforcement(device.id, mac, policy.quotaEnforcedAction);
+      }
+      return;
+    }
+
+    const view = this.buildView(policy.quota, policy.quotaPeriod, policy.quotaAction, period);
+    if (view.exhausted) {
+      await this.enforceQuotaAction(device.id, mac);
+    } else if (policy.quotaEnforcedAction) {
+      await this.clearQuotaEnforcement(device.id, mac, policy.quotaEnforcedAction);
+    }
   }
 
   async resetQuota(mac: string): Promise<QuotaView | null> {
