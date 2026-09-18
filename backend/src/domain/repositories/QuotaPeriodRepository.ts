@@ -33,4 +33,10 @@ export interface QuotaPeriodRepository {
     usedDownloadBytes: bigint,
     usedUploadBytes: bigint,
   ): Promise<QuotaPeriodData>;
+
+  incrementUsage(
+    periodId: number,
+    downloadBytes: bigint,
+    uploadBytes: bigint,
+  ): Promise<QuotaPeriodData>;
 }
