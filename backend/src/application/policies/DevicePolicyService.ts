@@ -2,6 +2,7 @@ import type { DeviceRepository } from "../../domain/repositories/DeviceRepositor
 import type { DevicePolicyRepository } from "../../domain/repositories/DevicePolicyRepository.js";
 import type { PolicyCatalogRepository } from "../../domain/repositories/PolicyCatalogRepository.js";
 import { resolveDeviceIdentifier } from "../devices/DeviceIdentifierResolver.js";
+import type { QuotaService } from "../quota/QuotaService.js";
 
 export interface DevicePolicyData {
   blocked: boolean;
@@ -20,6 +21,7 @@ export class DevicePolicyService {
     private readonly deviceRepository: DeviceRepository,
     private readonly policyRepository: DevicePolicyRepository,
     private readonly catalog?: PolicyCatalogRepository,
+    private readonly quotaService?: QuotaService,
   ) {}
 
   async getDevicePolicy(mac: string): Promise<DevicePolicyData | null> {
@@ -82,6 +84,18 @@ export class DevicePolicyService {
     }
 
     const policy = await this.policyRepository.upsert(device.id, updates);
+
+    if (
+      this.quotaService &&
+      (data.quota !== undefined ||
+        data.quotaPeriod !== undefined ||
+        data.quotaAction !== undefined ||
+        data.quotaEnforcedAction !== undefined ||
+        (data.profileId !== undefined && data.profileId !== null))
+    ) {
+      await this.quotaService.reconcilePolicy(mac);
+    }
+
     return this.toPolicyData(policy);
   }
 
