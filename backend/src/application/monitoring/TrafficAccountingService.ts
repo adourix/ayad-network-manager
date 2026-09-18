@@ -64,10 +64,20 @@ export class TrafficAccountingService {
     }, this.intervalMs);
   }
 
-  stop(): void {
-    if (!this.timer) return;
-    clearInterval(this.timer);
-    this.timer = undefined;
+  async stop(): Promise<void> {
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = undefined;
+    }
+
+    for (const [deviceId, bucket] of this.pendingBuckets) {
+      try {
+        await this.flushHistoryBucket(deviceId, bucket);
+        this.pendingBuckets.delete(deviceId);
+      } catch (error) {
+        console.error(`Failed to flush traffic history for device ${deviceId} during shutdown:`, error);
+      }
+    }
   }
 
   getLiveTraffic(): LiveTraffic[] {
@@ -116,9 +126,7 @@ export class TrafficAccountingService {
         if (!activeDeviceIds.has(deviceId)) this.previous.delete(deviceId);
       }
 
-      for (const deviceId of this.pendingBuckets.keys()) {
-        if (!activeDeviceIds.has(deviceId)) this.pendingBuckets.delete(deviceId);
-      }
+      await this.flushExpiredHistoryBuckets(now);
 
       const activeMacs = new Set(discoveredDevices.map((device) => device.mac));
       for (const mac of this.live.keys()) {
@@ -229,6 +237,23 @@ export class TrafficAccountingService {
       firstTimestamp: timestamp,
       lastTimestamp: timestamp,
     });
+  }
+
+  private async flushExpiredHistoryBuckets(now: Date): Promise<void> {
+    const currentBucketStart = new Date(
+      Math.floor(now.getTime() / HISTORY_BUCKET_MS) * HISTORY_BUCKET_MS,
+    );
+
+    for (const [deviceId, bucket] of this.pendingBuckets) {
+      if (bucket.bucketStart.getTime() >= currentBucketStart.getTime()) continue;
+
+      try {
+        await this.flushHistoryBucket(deviceId, bucket);
+        this.pendingBuckets.delete(deviceId);
+      } catch (error) {
+        console.error(`Failed to flush traffic history for device ${deviceId}:`, error);
+      }
+    }
   }
 
   private async flushHistoryBucket(deviceId: number, bucket: PendingBucket): Promise<void> {
