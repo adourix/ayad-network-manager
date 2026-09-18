@@ -69,4 +69,15 @@ export class PrismaQuotaPeriodRepository implements QuotaPeriodRepository {
     });
     return toDomain(row);
   }
+
+  async incrementUsage(periodId: number, downloadBytes: bigint, uploadBytes: bigint): Promise<QuotaPeriodData> {
+    const row = await prisma.quotaPeriod.update({
+      where: { id: periodId },
+      data: {
+        usedDownloadBytes: { increment: downloadBytes },
+        usedUploadBytes: { increment: uploadBytes },
+      },
+    });
+    return toDomain(row);
+  }
 }
