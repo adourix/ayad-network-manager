@@ -8,7 +8,12 @@ export class LinuxDhcpLeaseReader implements DhcpLeaseReader {
 
   async read(): Promise<DhcpLease[]> {
     let content: string;
-    try { content = await readFile(this.leaseFile, "utf8"); } catch { return []; }
+    try {
+      content = await readFile(this.leaseFile, "utf8");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`Failed to read DHCP lease file ${this.leaseFile}: ${message}`);
+    }
     const leases: DhcpLease[] = [];
     for (const line of content.split("\n")) {
       const parts = line.trim().split(/\s+/);
