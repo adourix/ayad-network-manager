@@ -96,10 +96,10 @@ if (setupComplete) {
   const trafficPolicyValidator = new DefaultTrafficPolicyValidator(config.network.uplinkBandwidthMbps);
   const trafficEnforcer = new SingleInterfaceIfbTrafficEnforcer(config.network.uplinkBandwidthMbps, config.network.lanInterface, systemCommandExecutor, ifbManager, tcStateReader);
   const trafficEnforcementService = new TrafficEnforcementService(trafficEnforcer, trafficPolicyValidator, deviceRepository, policyRepository, config.network.quotaThrottleMbps, operationsRepository);
-  const devicePolicyService = new DevicePolicyService(deviceRepository, policyRepository, policyCatalogRepository);
   const notificationRepository = new PrismaNotificationRepository();
   const quotaPeriodRepository = new PrismaQuotaPeriodRepository();
   const quotaService = new QuotaService(deviceRepository, policyRepository, trafficEnforcementService, firewallService, notificationRepository, quotaPeriodRepository);
+  const devicePolicyService = new DevicePolicyService(deviceRepository, policyRepository, policyCatalogRepository, quotaService);
   const trafficUsageReader = new NftTrafficUsageReader({ mode: config.network.networkMode, clientInterface: config.network.clientInterface, uplinkInterface: null, clientSubnet: config.network.clientSubnet }, systemCommandExecutor);
   const trafficSampleRepository = new PrismaTrafficSampleRepository(); const trafficAccountingService = new TrafficAccountingService(deviceRepository, discoveryService, trafficUsageReader, trafficSampleRepository, quotaService);
 
