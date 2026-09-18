@@ -67,12 +67,12 @@ export class NftTrafficUsageReader implements TrafficUsageReader {
   async reconcileDeviceAccounting(devices: TrafficUsageDevice[]): Promise<void> {
     await this.ensureTable();
 
-    // The accounting chain is exclusively owned by this reader. Rebuild its
-    // rules from desired state instead of trying to repair an arbitrarily large
-    // legacy chain one handle at a time. Named counters are intentionally kept.
-    await this.execNftMutation(["flush", "chain", TABLE_FAMILY, TABLE_NAME, CHAIN_NAME]);
-
+    // Keep named counters intact and repair only managed rules. Flushing the
+    // whole chain creates a window with no accounting rules and can leave the
+    // chain partially rebuilt if a later nft command fails.
     const counters = await this.readCounters();
+    const rules = await this.readRules();
+    const expectedComments = new Set<string>();
 
     for (const device of devices) {
       const mac = validateMac(device.mac);
@@ -80,20 +80,35 @@ export class NftTrafficUsageReader implements TrafficUsageReader {
       const ip = validateIp(device.ip);
 
       await this.ensureDeviceCounters(mac, counters);
+      expectedComments.add(this.ruleComment(mac, "download"));
+      expectedComments.add(this.ruleComment(mac, "upload"));
+
       await this.ensureRuleWithState(
         "download",
         mac,
         ip,
         this.counterName(mac, "download"),
-        [],
+        rules,
       );
       await this.ensureRuleWithState(
         "upload",
         mac,
         ip,
         this.counterName(mac, "upload"),
-        [],
+        rules,
       );
+    }
+
+    // Remove only stale rules owned by this accounting chain. Do this after
+    // installing the desired rules so a failed mutation cannot empty the chain.
+    const refreshedRules = await this.readRules();
+    for (const rule of refreshedRules) {
+      if (!rule.comment.startsWith("ayad_nm_download_") && !rule.comment.startsWith("ayad_nm_upload_")) continue;
+      if (expectedComments.has(rule.comment)) continue;
+      await this.execNftMutation([
+        "delete", "rule", TABLE_FAMILY, TABLE_NAME, CHAIN_NAME,
+        "handle", String(rule.handle),
+      ]);
     }
   }
 
