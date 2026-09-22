@@ -4,6 +4,10 @@ import type { TrafficEnforcer } from "./TrafficEnforcer.js";
 import type { TrafficPolicyInput, TrafficPolicyValidator } from "./TrafficPolicyValidator.js";
 import type { OperationsRepository } from "../../domain/repositories/OperationsRepository.js";
 import { resolveDeviceIdentifier } from "../devices/DeviceIdentifierResolver.js";
+import type { DeviceDiscoveryService } from "../devices/DeviceDiscoveryService.js";
+import { reconcileIdentityObservation } from "../../domain/services/IdentityStateReconciler.js";
+import { IpAddress } from "../../domain/value-objects/IpAddress.js";
+import { MacAddress } from "../../domain/value-objects/MacAddress.js";
 
 export class TrafficEnforcementService {
   constructor(
@@ -13,10 +17,34 @@ export class TrafficEnforcementService {
     private readonly policyRepository: DevicePolicyRepository,
     private readonly quotaThrottleMbps = 0.5,
     private readonly operationsRepository?: OperationsRepository,
+    private readonly discoveryService?: DeviceDiscoveryService,
   ) {}
 
+  private async resolveFreshDevice(identifier: string) {
+    const current = await resolveDeviceIdentifier(this.deviceRepository, identifier);
+    if (!current || !this.discoveryService) return current;
+
+    const discovered = await this.discoveryService.discover();
+    const observed = discovered.find((item) =>
+      item.mac.toLowerCase() === current.mac.toString().toLowerCase(),
+    );
+    if (!observed) return current;
+
+    const reconciled = reconcileIdentityObservation(current, observed);
+    return this.deviceRepository.upsert({
+      mac: MacAddress.create(reconciled.mac),
+      ip: IpAddress.create(reconciled.ip),
+      hostname: reconciled.hostname,
+      l2Visible: reconciled.l2Visible,
+      proxyMac: reconciled.proxyMac ? MacAddress.create(reconciled.proxyMac) : null,
+      identityValidated: reconciled.identityValidated,
+      identitySource: reconciled.identitySource,
+      seenAt: new Date(),
+    });
+  }
+
   async limitDownload(mac: string, input: TrafficPolicyInput): Promise<void> {
-    const device = await resolveDeviceIdentifier(this.deviceRepository, mac);
+    const device = await this.resolveFreshDevice(mac);
     if (!device) throw new Error(`Device not found: ${mac}`);
     if (!device.identityValidated) throw new Error(`Device identity is not validated: ${mac}`);
     this.trafficPolicyValidator.validate(device, input);
@@ -31,7 +59,7 @@ export class TrafficEnforcementService {
   }
 
   async limitUpload(mac: string, input: TrafficPolicyInput): Promise<void> {
-    const device = await resolveDeviceIdentifier(this.deviceRepository, mac);
+    const device = await this.resolveFreshDevice(mac);
     if (!device) throw new Error(`Device not found: ${mac}`);
     if (!device.identityValidated) throw new Error(`Device identity is not validated: ${mac}`);
     this.trafficPolicyValidator.validate(device, input);
@@ -83,7 +111,7 @@ export class TrafficEnforcementService {
   }
 
   async applyQuotaThrottle(mac: string): Promise<void> {
-    const device = await resolveDeviceIdentifier(this.deviceRepository, mac);
+    const device = await this.resolveFreshDevice(mac);
     if (!device) throw new Error(`Device not found: ${mac}`);
     if (!device.identityValidated) throw new Error(`Device identity is not validated: ${mac}`);
     if (!Number.isFinite(this.quotaThrottleMbps) || this.quotaThrottleMbps <= 0) {
@@ -103,7 +131,7 @@ export class TrafficEnforcementService {
   }
 
   async clearQuotaThrottle(mac: string): Promise<void> {
-    const device = await resolveDeviceIdentifier(this.deviceRepository, mac);
+    const device = await this.resolveFreshDevice(mac);
     if (!device) throw new Error(`Device not found: ${mac}`);
     try {
       const policy = await this.policyRepository.findByDeviceId(device.id);
