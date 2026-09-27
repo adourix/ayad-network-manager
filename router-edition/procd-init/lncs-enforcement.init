@@ -31,7 +31,13 @@ start_service() {
     procd_close_instance
 }
 
+reload_service() {
+    stop
+    start
+}
+
 service_triggers() {
-    procd_add_interface_trigger "interface.*.up" lan /etc/init.d/lncs-enforcement reload
-    procd_add_interface_trigger "interface.*.up" wan /etc/init.d/lncs-enforcement reload
+    procd_add_reload_trigger firewall network
+    procd_add_reload_interface_trigger lan
+    procd_add_reload_interface_trigger wan
 }
