@@ -107,6 +107,7 @@ export function registerAuthentication(app: FastifyInstance): void {
       }
 
       const admin = await prisma.authUser.findUnique({ where: { id: 1 } });
+      if (!admin) return reply.code(401).send({ error: "Invalid credentials" });
       const body = request.body ?? {};
       const valid =
         admin !== null &&
