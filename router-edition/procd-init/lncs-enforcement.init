@@ -23,7 +23,7 @@ start_service() {
     procd_set_param stderr 1
 
     if [ -x /sbin/ujail ] && [ -f "$CAP_FILE" ]; then
-        procd_add_jail lncs-enforcement
+        procd_add_jail lncs-enforcement requirejail
         procd_set_param capabilities "$CAP_FILE"
         procd_set_param no_new_privs 1
     fi
