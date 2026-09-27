@@ -23,14 +23,14 @@ import { PrismaTrafficSampleRepository } from "./infrastructure/database/PrismaT
 import { TrafficAccountingService } from "./application/monitoring/TrafficAccountingService.js";
 import { LiveMonitoringService } from "./application/monitoring/LiveMonitoringService.js";
 import { DevicePolicyService } from "./application/policies/DevicePolicyService.js";
-import { LinuxDhcpLeaseReader } from "./infrastructure/network/LinuxDhcpLeaseReader.js";
+import { OpenWrtDhcpLeaseReader } from "./infrastructure/network/OpenWrtDhcpLeaseReader.js";
 import { LinuxNeighborTableReader } from "./infrastructure/network/LinuxNeighborTableReader.js";
 import { DhcpNeighborIdentityValidator } from "./infrastructure/network/DhcpNeighborIdentityValidator.js";
 import { BroadcastCaptureReader } from "./infrastructure/network/BroadcastCaptureReader.js";
 import { DeviceDiscoveryService } from "./application/devices/DeviceDiscoveryService.js";
 import { DeviceDiscoverySyncService } from "./application/devices/DeviceDiscoverySyncService.js";
 import { DeviceService } from "./application/devices/DeviceService.js";
-import { config, setupComplete } from "./config.js";
+import { config } from "./config.js";
 import { deviceRoutes } from "./interfaces/http/routes/devices.js";
 import { registerAuthentication } from "./interfaces/http/auth.js";
 import { PrismaPolicyCatalogRepository } from "./infrastructure/database/PrismaPolicyCatalogRepository.js";
@@ -47,9 +47,6 @@ import { ScheduleEnforcementService } from "./application/policies/ScheduleEnfor
 import { TrafficRetentionService } from "./infrastructure/database/TrafficRetentionService.js";
 import { NftPortRuleEnforcer } from "./infrastructure/enforcement/NftPortRuleEnforcer.js";
 import { ProfileEnforcementService } from "./application/policies/ProfileEnforcementService.js";
-import { SetupService } from "./application/setup/SetupService.js";
-import { LinuxSetupProbe } from "./infrastructure/setup/LinuxSetupProbe.js";
-import { setupRoutes } from "./interfaces/http/routes/setup.js";
 import { DhcpReservationService } from "./application/setup/DhcpReservationService.js";
 import { AuditedSystemCommandExecutor } from "./infrastructure/enforcement/AuditedSystemCommandExecutor.js";
 import { PrismaBlockedDeviceRepository } from "./infrastructure/database/PrismaBlockedDeviceRepository.js";
@@ -57,8 +54,7 @@ import { PrismaNeighborObservationRepository } from "./infrastructure/database/P
 import { PrismaQuotaPeriodRepository } from "./infrastructure/database/PrismaQuotaPeriodRepository.js";
 import { registerFrontend } from "./interfaces/http/staticFrontend.js";
 
-if (config.network.networkMode !== "single-interface-ifb") throw new Error("Dual-interface mode is reserved for the next implementation phase; use NETWORK_MODE=single-interface-ifb");
-if (setupComplete && config.nodeEnv === "production" && (!config.server.tlsCertPath || !config.server.tlsKeyPath)) throw new Error("TLS_CERT_PATH and TLS_KEY_PATH are required in production");
+if (config.network.networkMode !== "single-interface-ifb") throw new Error("Router Edition currently supports NETWORK_MODE=single-interface-ifb only");
 
 const app = Fastify({ logger: true, bodyLimit: 64 * 1024, ...(config.server.tlsCertPath && config.server.tlsKeyPath ? { https: { cert: readFileSync(config.server.tlsCertPath), key: readFileSync(config.server.tlsKeyPath) } } : {}) });
 app.setErrorHandler((error, _request, reply) => {
@@ -74,11 +70,9 @@ registerAuthentication(app);
 const operationsRepository = new PrismaOperationsRepository();
 configureNftAudit(operationsRepository);
 const systemCommandExecutor = new AuditedSystemCommandExecutor(new LinuxSystemCommandExecutor(), operationsRepository);
-const dhcpLeaseReader = new LinuxDhcpLeaseReader(config.setup.dhcpLeasesPath);
+const dhcpLeaseReader = new OpenWrtDhcpLeaseReader(config.setup.dhcpLeasesPath);
 const neighborTableReader = new LinuxNeighborTableReader(systemCommandExecutor);
-await setupRoutes(app, new SetupService(new LinuxSetupProbe()));
 
-if (setupComplete) {
   const identityValidator = new DhcpNeighborIdentityValidator(config.network.clientSubnet, false);
   const broadcastCaptureReader = new BroadcastCaptureReader(config.network.clientInterface); broadcastCaptureReader.start();
   app.post<{ Params: { mac: string } }>("/api/devices/:mac/recheck-identity", { schema: { params: { type: "object", required: ["mac"], additionalProperties: false, properties: { mac: { type: "string", pattern: "^([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$" } } } } }, async (request) => { const result = await broadcastCaptureReader.recheck(request.params.mac); await operationsRepository.audit({ action: "recheck-identity", mac: request.params.mac.toLowerCase(), actor: process.env.ADMIN_USERNAME ?? "admin", details: { observed: result.observed, passiveOnly: true } }); return { mac: request.params.mac.toLowerCase(), observed: result.observed, passiveOnly: true, windowMs: 10_000 }; });
@@ -130,7 +124,7 @@ if (setupComplete) {
   const portRuleEnforcer = new NftPortRuleEnforcer(systemCommandExecutor, operationsRepository); await policyCatalogRoutes(app, new PolicyCatalogService(policyCatalogRepository, deviceRepository, portRuleEnforcer));
   await operationsRoutes(app, new OperationsService(operationsRepository));
   const vpnService = new VpnService(new PrismaVpnRepository(), new SingleInterfaceVpnController(systemCommandExecutor, config.network.vpnTunnelInterface), operationsRepository); await vpnRoutes(app, vpnService);
-  const dhcpReservationService = new DhcpReservationService(deviceRepository, policyRepository, config.setup.dhcpReservationsPath, { reload: async () => { await systemCommandExecutor.execute("systemctl", ["restart", "dnsmasq"]); } });
+  const dhcpReservationService = new DhcpReservationService(deviceRepository, policyRepository, config.setup.dhcpReservationsPath, { reload: async () => { const { execFile } = await import("node:child_process"); await new Promise<void>((resolve, reject) => execFile("/etc/init.d/dnsmasq", ["reload"], { timeout: 10_000 }, (error) => error ? reject(error) : resolve())); } });
   const scheduleEnforcementService = new ScheduleEnforcementService(deviceRepository, policyRepository, policyCatalogRepository, trafficEnforcementService, deviceBlocker, operationsRepository);
   const trafficRetentionService = new TrafficRetentionService();
   const profileEnforcementService = new ProfileEnforcementService(deviceRepository, policyRepository, policyCatalogRepository, trafficEnforcementService);
@@ -146,10 +140,5 @@ if (setupComplete) {
   process.on("SIGTERM", async () => {
     vpnService.stopMonitor(); await trafficAccountingService.stop(); trafficRetentionService.stop(); deviceDiscoverySyncService.stop(); liveMonitoringService.stop(); blockedIpReconciliationService.stop(); ipBindingLifecycleService.stop(); trafficReconciliationService.stop(); scheduleEnforcementService.stop(); dhcpReservationService.stop(); broadcastCaptureReader.stop(); await app.close();
   });
-} else {
-  registerFrontend(app);
-  process.on("SIGTERM", async () => { await app.close(); });
-}
-
 await app.listen({ host: config.server.host, port: config.server.port });
 app.log.info(`Server listening at ${config.server.tlsCertPath ? "https" : "http"}://${config.server.host}:${config.server.port}`);
