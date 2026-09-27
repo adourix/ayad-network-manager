@@ -128,12 +128,5 @@ export const config = {
   },
 } as const;
 
-if (
-  config.nodeEnv === "production" &&
-  (!process.env.ADMIN_PASSWORD_HASH ||
-    !process.env.ADMIN_PASSWORD_SALT ||
-    process.env.ADMIN_PASSWORD === "change-me" ||
-    process.env.ADMIN_PASSWORD === "change-me-before-production")
-) {
-  throw new Error("Production requires ADMIN_PASSWORD_HASH and ADMIN_PASSWORD_SALT; default credentials are forbidden");
-}
+// Router Edition seeds the initial administrator credential in SQLite.
+// The first login is admin/admin and is forced to change the password from the UI.
