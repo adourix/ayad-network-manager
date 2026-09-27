@@ -1,0 +1,20 @@
+#!/bin/sh /etc/rc.common
+
+START=94
+STOP=20
+
+DB="/etc/lncs/lncs.db"
+SCHEMA="/usr/lib/lncs/database/init.sql"
+
+start() {
+    [ -x /usr/bin/sqlite3 ] || return 1
+    [ -f "$SCHEMA" ] || return 1
+    mkdir -p /etc/lncs
+    if [ ! -s "$DB" ]; then
+        umask 077
+        /usr/bin/sqlite3 "$DB" < "$SCHEMA" || return 1
+    else
+        /usr/bin/sqlite3 "$DB" < "$SCHEMA" || return 1
+    fi
+    chmod 600 "$DB"
+}
