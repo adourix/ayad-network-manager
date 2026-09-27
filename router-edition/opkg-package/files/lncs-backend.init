@@ -1,2 +1,21 @@
 #!/bin/sh /etc/rc.common
-exec /etc/init.d/lncs-backend "$@"
+# LNCS Router Edition backend service.
+
+START=96
+STOP=09
+USE_PROCD=1
+
+start_service() {
+    [ -f /etc/lncs/router.env ] && . /etc/lncs/router.env
+
+    procd_open_instance
+    procd_set_param command /usr/bin/node /usr/lib/lncs/backend/dist/bootstrap.js
+    procd_set_param env NODE_ENV=production
+    procd_set_param env SYSTEM_CONFIG_PATH=/etc/lncs/router.env
+    procd_set_param respawn 3600 5 5
+    procd_close_instance
+}
+
+service_triggers() {
+    procd_add_reload_trigger network firewall
+}
