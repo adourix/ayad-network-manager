@@ -21,7 +21,6 @@ const clientInterface = process.env.CLIENT_INTERFACE ?? "";
 const uplinkInterface = process.env.UPLINK_INTERFACE ?? "";
 const vpnTunInterface = process.env.VPN_TUN_INTERFACE ?? "";
 const clientSubnet = process.env.CLIENT_SUBNET ?? "";
-const allowedSystemctlUnits = new Set(["sing-box", "dnsmasq", "network-control-enforcement.service", "network-control-backend.service", vpnConfigInstallUnit]);
 const allowed = new Set(["nft", "tc", "ip", "sing-box", "sing-box-service", "write-sing-box-config"]);
 const local = new LinuxSystemCommandExecutor(true);
 const backgroundRead = new LinuxSystemCommandExecutor(true, 30_000);
@@ -117,8 +116,11 @@ function validManagedNftRule(args: string[]): boolean {
         args[startIndex + 3] !== "oifname" ||
         args[startIndex + 5] !== "masquerade" ||
         args[startIndex + 6] !== "comment") return false;
-    return args[startIndex + 4] === uplinkInterface &&
-      args[startIndex + 7] === "ayad_nm_single_interface_nat" &&
+    const outputInterface = args[startIndex + 4]!;
+    const comment = args[startIndex + 7]!;
+    return validInterface(outputInterface) &&
+      (outputInterface === uplinkInterface || outputInterface === vpnTunInterface) &&
+      (comment === "ayad_nm_single_interface_nat" || comment === "ayad_nm_vpn_nat") &&
       !!uplinkInterface;
   }
 
