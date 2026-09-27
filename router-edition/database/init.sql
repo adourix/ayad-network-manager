@@ -123,6 +123,22 @@ CREATE TABLE IF NOT EXISTS ip_bindings (
 );
 CREATE INDEX IF NOT EXISTS ip_bindings_ip_active_idx ON ip_bindings(ip, active);
 
+
+CREATE TABLE IF NOT EXISTS auth_users (
+  id INTEGER PRIMARY KEY DEFAULT 1,
+  username TEXT NOT NULL UNIQUE,
+  passwordHash TEXT NOT NULL,
+  passwordSalt TEXT NOT NULL,
+  mustChangePassword BOOLEAN NOT NULL DEFAULT 1,
+  createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updatedAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+INSERT OR IGNORE INTO auth_users
+  (id, username, passwordHash, passwordSalt, mustChangePassword)
+VALUES
+  (1, 'admin', '618977eb21ef16a2f69b9d2e7388b6075d36b1d6fc0eb8ccd1af1ab20330be83', 'cba76db026471119d185c33b742a21bc', 1);
+
 CREATE TABLE IF NOT EXISTS auth_sessions (
   id INTEGER PRIMARY KEY AUTOINCREMENT, tokenHash TEXT NOT NULL UNIQUE, expiresAt DATETIME NOT NULL,
   createdAt DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
