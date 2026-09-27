@@ -11,6 +11,7 @@ ENV_FILE="/etc/lncs/router.env"
 start_service() {
     [ -x "$PROG" ] || return 1
     [ -f "$ENTRY" ] || return 1
+    "$PROG" -e 'if (Number(process.versions.node.split(".")[0]) < 22) process.exit(1)' || { logger -t lncs-backend "Node.js 22+ is required"; return 1; }
     . "$ENV_FILE" 2>/dev/null || true
 
     procd_open_instance "lncs-backend"
