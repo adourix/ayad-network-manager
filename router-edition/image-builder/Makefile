@@ -9,6 +9,7 @@
 
 IMAGEBUILDER ?= ./openwrt-imagebuilder
 PROFILE ?=
+LNCS_IPK ?=
 FILES := $(CURDIR)/files
 
 PACKAGES := \
@@ -32,6 +33,10 @@ PACKAGES := \
 check:
 	@test -n "$(PROFILE)" || (echo "PROFILE is required"; exit 2)
 	@test -x "$(IMAGEBUILDER)/make" || (echo "IMAGEBUILDER/make not found"; exit 2)
+	@test -n "$(LNCS_IPK)" || (echo "LNCS_IPK must point to the target-built lncs-router-edition package"; exit 2)
+	@test -f "$(LNCS_IPK)" || (echo "LNCS_IPK not found: $(LNCS_IPK)"; exit 2)
+	@mkdir -p "$(IMAGEBUILDER)/packages"
+	@cp "$(LNCS_IPK)" "$(IMAGEBUILDER)/packages/"
 
 image: check
 	$(IMAGEBUILDER)/make image PROFILE="$(PROFILE)" PACKAGES="$(PACKAGES)" FILES="$(FILES)"
