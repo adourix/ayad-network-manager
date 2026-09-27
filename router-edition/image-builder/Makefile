@@ -26,7 +26,9 @@ PACKAGES := \
   procd-ujail \
   libsqlite3-0 \
   sqlite3-cli \
-  tcpdump-mini
+  tcpdump-mini \
+  sing-box \
+  kmod-tun
 
 .PHONY: image check
 
