@@ -248,7 +248,7 @@ function valid(command: string, args: string[]): boolean {
           ? /^[0-9a-fA-F]{2}(?::[0-9a-fA-F]{2}){5}$/.test(args[6] ?? "")
           : validIpv4(args[6] ?? "");
       }
-      if (args[2] === "ip" && args[3] === "ayad_nm" && args[4] === "vpn_blocked_ips") {
+      if (args[2] === "inet" && args[3] === "ayad_nm" && args[4] === "vpn_blocked_ips") {
         return args[5] === "{" && args[7] === "}" && validIpv4(args[6] ?? "");
       }
       return false;
