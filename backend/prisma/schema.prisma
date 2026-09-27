@@ -1,10 +1,14 @@
+// Router Edition variant of backend/prisma/schema.prisma.
+// The model definitions intentionally remain aligned with the core schema.
+// Only the datasource provider is overridden for OpenWrt.
+
 generator client {
   provider = "prisma-client"
   output   = "../src/infrastructure/database/generated/prisma"
 }
 
 datasource db {
-  provider = "postgresql"
+  provider = "sqlite"
 }
 
 model Device {
@@ -95,7 +99,7 @@ model Schedule {
   policies DevicePolicy[]
   rules ScheduleRule[]
   createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  updatedAt @updatedAt
   @@map("schedules")
 }
 
