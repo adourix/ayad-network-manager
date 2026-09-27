@@ -166,6 +166,9 @@ export const api = {
     method: "POST", body: JSON.stringify({ username, password }),
   }),
   logout: () => request<void>("/api/auth/logout", { method: "POST" }),
+  changePassword: (currentPassword: string, newPassword: string) => request<{ changed: boolean; mustChangePassword: boolean }>("/api/auth/password", {
+    method: "POST", body: JSON.stringify({ currentPassword, newPassword }),
+  }),
   devices: async () => mergeLiveStatus(await request<Device[]>("/api/devices")),
   device: async (mac: string) => {
     const device = await request<Device>(`/api/devices/${encodeURIComponent(mac)}`);
