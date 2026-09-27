@@ -28,6 +28,10 @@ Router Edition لا تحتوي ولا تستخدم install.sh. طريقة الت
 
 بعد الإقلاع لا يوجد LNCS installation wizard. OpenWrt/LuCI مسؤول عن WAN/LAN/Wi-Fi، وLNCS يقرأ UCI ويبدأ control plane مباشرة.
 
+### حساب الإدارة عند أول تشغيل
+
+الصورة تُنشئ تلقائيًا حساب الإدارة `admin` بكلمة المرور `admin`. عند أول تسجيل دخول تُجبر الواجهة المستخدم على تغيير كلمة المرور من Settings. بعد تغييرها لا تبقى كلمة المرور الافتراضية صالحة، ويتم حفظ كلمة المرور الجديدة كـscrypt hash داخل SQLite.
+
 ## أهم المسارات
 
 - backend/src/config.ts — اشتقاق LAN/WAN/subnet من UCI.
