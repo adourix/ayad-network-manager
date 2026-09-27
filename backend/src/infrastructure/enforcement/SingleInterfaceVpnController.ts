@@ -23,7 +23,7 @@ export class SingleInterfaceVpnController implements VpnEnforcement {
   }
 
   async getStatus(): Promise<{ enabled: boolean; connected: boolean }> {
-    const serviceActive = await this.safe("systemctl", ["is-active", "--quiet", "sing-box"]);
+    const serviceActive = await this.safe("sing-box-service", ["status"]);
     const tunnelPresent = serviceActive && await this.hasTunnelInterface();
     return { enabled: serviceActive, connected: serviceActive && tunnelPresent };
   }
@@ -31,12 +31,12 @@ export class SingleInterfaceVpnController implements VpnEnforcement {
   async apply(enabled: boolean): Promise<boolean> {
     if (!enabled) {
       await setVpnBlockedIpGuardEnabled(false);
-      await this.safe("systemctl", ["stop", "sing-box"]);
+      await this.safe("sing-box-service", ["stop"]);
       await this.setNat(false, false);
       return false;
     }
 
-    await this.safe("systemctl", ["restart", "sing-box"]);
+    await this.safe("sing-box-service", ["restart"]);
     const connected = await this.waitForReadiness();
     await setVpnBlockedIpGuardEnabled(true);
     await this.setNat(connected, true);
@@ -51,7 +51,7 @@ export class SingleInterfaceVpnController implements VpnEnforcement {
   private async waitForReadiness(): Promise<boolean> {
     const deadline = Date.now() + VPN_READINESS_TIMEOUT_MS;
     while (Date.now() < deadline) {
-      const serviceActive = await this.safe("systemctl", ["is-active", "--quiet", "sing-box"]);
+      const serviceActive = await this.safe("sing-box-service", ["status"]);
       if (serviceActive && await this.hasTunnelInterface()) return true;
       await new Promise((resolve) => setTimeout(resolve, VPN_READINESS_POLL_MS));
     }
@@ -386,7 +386,7 @@ export class SingleInterfaceVpnController implements VpnEnforcement {
   }
 
   private async setNat(vpnConnected: boolean, vpnEnabled: boolean): Promise<void> {
-    const natRules = await this.rules("nat", "POSTROUTING");
+    const natRules = await this.rules("fw4", "srcnat");
     for (const rule of natRules) {
       if (
         (rule.comment === "ayad_nm_single_interface_nat" || rule.comment === "ayad_nm_vpn_nat") &&
