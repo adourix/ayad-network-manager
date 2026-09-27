@@ -99,7 +99,7 @@ model Schedule {
   policies DevicePolicy[]
   rules ScheduleRule[]
   createdAt DateTime @default(now())
-  updatedAt @updatedAt
+  updatedAt DateTime @updatedAt
   @@map("schedules")
 }
 
