@@ -18,7 +18,7 @@ define Package/lncs-router-edition
   SECTION:=net
   CATEGORY:=Network
   TITLE:=Linux Network Control System Router Edition
-  DEPENDS:=+node +nftables +nftables-json +tc-full +ip-full +kmod-ifb +kmod-sched-core +kmod-sched-flower +dnsmasq +procd-ujail +libsqlite3-0
+  DEPENDS:=+node +nftables +nftables-json +tc-full +ip-full +kmod-ifb +kmod-sched-core +kmod-sched-flower +dnsmasq +procd-ujail +libsqlite3-0 +tcpdump-mini
 endef
 
 define Package/lncs-router-edition/description
