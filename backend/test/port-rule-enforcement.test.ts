@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 process.env.NODE_ENV ??= "test";
+process.env.SYSTEM_CONFIG_PATH = "/tmp/lncs-test-router.env";
 process.env.CLIENT_INTERFACE ??= "eno1";
 process.env.UPLINK_INTERFACE ??= "eno1";
 process.env.CLIENT_GATEWAY_IP ??= "192.168.1.254";
