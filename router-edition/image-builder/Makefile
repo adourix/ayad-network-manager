@@ -24,7 +24,8 @@ PACKAGES := \
   dnsmasq \
   procd-ujail \
   libsqlite3-0 \
-  sqlite3-cli
+  sqlite3-cli \
+  tcpdump-mini
 
 .PHONY: image check
 
