@@ -109,8 +109,8 @@ export function registerAuthentication(app: FastifyInstance): void {
       const admin = await prisma.authUser.findUnique({ where: { id: 1 } });
       const body = request.body ?? {};
       const valid =
-        Boolean(admin) &&
-        body.username === admin?.username &&
+        admin !== null &&
+        body.username === admin.username &&
         typeof body.password === "string" &&
         passwordMatches(body.password, admin.passwordHash, admin.passwordSalt);
 
