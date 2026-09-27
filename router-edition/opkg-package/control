@@ -1,0 +1,7 @@
+Package: lncs-router-edition
+Version: 0.1.0
+Section: net
+Architecture: all
+Depends: node, nftables, ip-full, dnsmasq
+Description: Linux Network Control System Router Edition for OpenWrt.
+Status: scaffold
