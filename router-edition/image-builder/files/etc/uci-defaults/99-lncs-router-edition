@@ -1,0 +1,12 @@
+#!/bin/sh
+
+# LNCS Router Edition uses OpenWrt's existing network/dhcp configuration.
+# Only add the LNCS DHCP hosts file hook; do not replace LAN/WAN UCI config.
+uci -q set dhcp.@dnsmasq[0].dhcphostsfile='/etc/lncs/dhcp-reservations.conf'
+uci -q commit dhcp
+
+mkdir -p /etc/lncs /var/run/network-control
+touch /etc/lncs/dhcp-reservations.conf
+chmod 600 /etc/lncs/router.env /etc/lncs/dhcp-reservations.conf 2>/dev/null || true
+
+exit 0
