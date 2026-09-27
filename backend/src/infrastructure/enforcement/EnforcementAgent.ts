@@ -217,6 +217,12 @@ function valid(command: string, args: string[]): boolean {
           args[11] === "filter" && args[12] === ";" && args[13] === "policy" &&
           args[14] === "accept" && args[15] === ";" && args[16] === "}";
       }
+      if (args[2] === "inet" && args[3] === "ayad_nm" && args[4] === "blocked_devices_prerouting") {
+        return args[5] === "{" && args[6] === "type" && args[7] === "filter" &&
+          args[8] === "hook" && args[9] === "prerouting" && args[10] === "priority" &&
+          args[11] === "-301" && args[12] === ";" && args[13] === "policy" &&
+          args[14] === "accept" && args[15] === ";" && args[16] === "}";
+      }
       return args[2] === "inet" && args[3] === "fw4" &&
         (args[4] === "ayad_nm_forward" || args[4] === "ayad_nm_input") &&
         args[5] === "{" && args[6] === "type" && args[7] === "filter" &&
@@ -280,7 +286,15 @@ async function executeVpnConfigWrite(args: string[]): Promise<{ stdout: string; 
   await fs.writeFile(vpnConfigStagePath, content, { mode: 0o600 });
   try {
     await local.execute("sing-box", ["check", "-c", vpnConfigStagePath]);
-    await local.execute("systemctl", ["start", vpnConfigInstallUnit]);
+    await new Promise<void>((resolve, reject) => {
+      const child = require("node:child_process").execFile("/etc/init.d/sing-box", ["restart"], { timeout: 15_000 }, (error: Error | null, _stdout: string, stderr: string) => {
+        if (error) {
+          reject(new Error(`sing-box restart failed: ${stderr?.trim() || error.message}`));
+          return;
+        }
+        resolve();
+      });
+    });
   } catch (error) {
     try { await fs.unlink(vpnConfigStagePath); } catch { /* best effort */ }
     throw error;
