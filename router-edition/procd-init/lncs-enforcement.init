@@ -1,31 +1,36 @@
 #!/bin/sh /etc/rc.common
-# LNCS Router Edition enforcement agent.
-# Target paths are package-owned and can be overridden by environment/config.
-# Capability support must be verified on the target procd version before release.
 
 START=95
 STOP=10
 USE_PROCD=1
 
-START_DEPENDS="network firewall"
+PROG="/usr/bin/node"
+ENTRY="/usr/lib/lncs/backend/dist/infrastructure/enforcement/EnforcementAgent.js"
+ENV_FILE="/etc/lncs/router.env"
+CAP_FILE="/etc/capabilities/lncs-enforcement.json"
 
 start_service() {
-    . /etc/rc.common
-    [ -f /etc/lncs/router.env ] && . /etc/lncs/router.env
+    [ -x "$PROG" ] || return 1
+    [ -f "$ENTRY" ] || return 1
+    . "$ENV_FILE" 2>/dev/null || true
 
-    procd_open_instance
-    procd_set_param command /usr/bin/node /usr/lib/lncs/backend/dist/infrastructure/enforcement/EnforcementAgent.js
-    procd_set_param env NODE_ENV=production
-    procd_set_param env SYSTEM_CONFIG_PATH=/etc/lncs/router.env
+    procd_open_instance "lncs-enforcement"
+    procd_set_param command "$PROG" "$ENTRY"
+    procd_set_param env NODE_ENV=production SYSTEM_CONFIG_PATH="$ENV_FILE"
     procd_set_param respawn 3600 5 5
+    procd_set_param stdout 1
+    procd_set_param stderr 1
 
-    # OpenWrt/procd capability syntax is target-version dependent.
-    # Keep this explicit and validate it on the first hardware target.
-    procd_set_param capabilities CAP_NET_ADMIN CAP_NET_RAW
+    if [ -x /sbin/ujail ] && [ -f "$CAP_FILE" ]; then
+        procd_add_jail lncs-enforcement
+        procd_set_param capabilities "$CAP_FILE"
+        procd_set_param no_new_privs 1
+    fi
 
     procd_close_instance
 }
 
 service_triggers() {
-    procd_add_reload_trigger firewall network
+    procd_add_interface_trigger "interface.*.up" lan /etc/init.d/lncs-enforcement reload
+    procd_add_interface_trigger "interface.*.up" wan /etc/init.d/lncs-enforcement reload
 }
