@@ -423,14 +423,14 @@ export class SingleInterfaceVpnController implements VpnEnforcement {
     await this.executor.execute("nft", ["-c", ...nat]);
     await this.executor.execute("nft", nat);
 
-    const forwardRules = await this.rules("filter", CONTROL_CHAIN);
+    const forwardRules = await this.rules("fw4", CONTROL_CHAIN);
     for (const rule of forwardRules) {
       if (rule.comment === "ayad_nm_vpn_fail_closed" && rule.handle !== null) {
         await this.executor.execute("nft", [
           "delete",
           "rule",
-          "ip",
-          "filter",
+          "inet",
+          "fw4",
           CONTROL_CHAIN,
           "handle",
           String(rule.handle),
