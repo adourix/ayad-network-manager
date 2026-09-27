@@ -22,7 +22,7 @@ const uplinkInterface = process.env.UPLINK_INTERFACE ?? "";
 const vpnTunInterface = process.env.VPN_TUN_INTERFACE ?? "";
 const clientSubnet = process.env.CLIENT_SUBNET ?? "";
 const allowedSystemctlUnits = new Set(["sing-box", "dnsmasq", "network-control-enforcement.service", "network-control-backend.service", vpnConfigInstallUnit]);
-const allowed = new Set(["nft", "tc", "ip", "sing-box", "write-sing-box-config"]);
+const allowed = new Set(["nft", "tc", "ip", "sing-box", "sing-box-service", "write-sing-box-config"]);
 const local = new LinuxSystemCommandExecutor(true);
 const backgroundRead = new LinuxSystemCommandExecutor(true, 30_000);
 type Request = { command: string; args: string[] };
@@ -154,6 +154,10 @@ function valid(command: string, args: string[]): boolean {
 
   if (command === "sing-box") {
     return args.length === 3 && args[0] === "check" && args[1] === "-c" && args[2] === vpnConfigStagePath;
+  }
+
+  if (command === "sing-box-service") {
+    return args.length === 1 && ["start", "stop", "restart", "status"].includes(args[0]!);
   }
 
   if (command === "ip") {
