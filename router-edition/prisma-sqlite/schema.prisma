@@ -4,7 +4,7 @@
 
 generator client {
   provider = "prisma-client"
-  output   = "../generated/prisma"
+  output   = "../src/infrastructure/database/generated/prisma"
 }
 
 datasource db {
@@ -248,6 +248,17 @@ model IpBinding {
   @@index([ip, active])
   @@unique([blockedDeviceId, ip, active])
   @@map("ip_bindings")
+}
+
+model AuthUser {
+  id Int @id @default(1)
+  username String @unique
+  passwordHash String
+  passwordSalt String
+  mustChangePassword Boolean @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@map("auth_users")
 }
 
 model AuthSession {
