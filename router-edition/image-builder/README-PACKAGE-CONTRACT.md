@@ -10,7 +10,7 @@ The package must install:
 - `/etc/capabilities/lncs-enforcement.json`
 - `/etc/init.d/lncs-enforcement`
 - `/etc/init.d/lncs-backend`
-- Prisma schema/migration assets required by the selected build process.
+- `/usr/lib/lncs/backend/schema.prisma` for build/runtime diagnostics; Router boot initializes the SQLite schema from the packaged SQL file.
 
 The package build is target-specific because Prisma's SQLite adapter uses a
 native SQLite driver. The resulting Node native addon must match the router's
