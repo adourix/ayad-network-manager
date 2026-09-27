@@ -1,2 +1,31 @@
 #!/bin/sh /etc/rc.common
-exec /etc/init.d/lncs-enforcement "$@"
+# LNCS Router Edition enforcement agent.
+# Target paths are package-owned and can be overridden by environment/config.
+# Capability support must be verified on the target procd version before release.
+
+START=95
+STOP=10
+USE_PROCD=1
+
+START_DEPENDS="network firewall"
+
+start_service() {
+    . /etc/rc.common
+    [ -f /etc/lncs/router.env ] && . /etc/lncs/router.env
+
+    procd_open_instance
+    procd_set_param command /usr/bin/node /usr/lib/lncs/backend/dist/infrastructure/enforcement/EnforcementAgent.js
+    procd_set_param env NODE_ENV=production
+    procd_set_param env SYSTEM_CONFIG_PATH=/etc/lncs/router.env
+    procd_set_param respawn 3600 5 5
+
+    # OpenWrt/procd capability syntax is target-version dependent.
+    # Keep this explicit and validate it on the first hardware target.
+    procd_set_param capabilities CAP_NET_ADMIN CAP_NET_RAW
+
+    procd_close_instance
+}
+
+service_triggers() {
+    procd_add_reload_trigger firewall network
+}
