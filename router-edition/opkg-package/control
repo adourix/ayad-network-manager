@@ -2,7 +2,7 @@ Package: lncs-router-edition
 Version: 0.2.0
 Section: net
 Architecture: all
-Depends: node, nftables, nftables-json, tc-full, ip-full, kmod-ifb, kmod-sched-core, kmod-sched-flower, dnsmasq, procd-ujail, libsqlite3-0, tcpdump-mini
+Depends: node, nftables, nftables-json, tc-full, ip-full, kmod-ifb, kmod-sched-core, kmod-sched-flower, dnsmasq, procd-ujail, libsqlite3-0, tcpdump-mini, sing-box, kmod-tun
 Description: Linux Network Control System Router Edition.
  This package is intended to be baked into an OpenWrt firmware image.
  It does not contain or invoke an LNCS installer.
