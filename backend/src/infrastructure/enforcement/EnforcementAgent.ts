@@ -5,6 +5,7 @@ import { resolve } from "node:path";
 import { execFile } from "node:child_process";
 import dotenv from "dotenv";
 import { LinuxSystemCommandExecutor } from "./LinuxSystemCommandExecutor.js";
+import { config } from "../../config.js";
 
 dotenv.config();
 dotenv.config({
@@ -17,10 +18,10 @@ const vpnConfigPath = process.env.SING_BOX_CONFIG_PATH ?? "/etc/sing-box/config.
 const vpnConfigStagePath = process.env.SING_BOX_STAGE_PATH ?? "/run/network-control/sing-box-config.json";
 const setupSnapshotDir = resolve(process.env.SETUP_SNAPSHOT_DIR ?? "/var/lib/network-control/backups");
 const nftablesConfigPath = resolve(process.env.NFTABLES_CONFIG_PATH ?? "/etc/nftables.d/network-control-system.nft");
-const clientInterface = process.env.CLIENT_INTERFACE ?? "";
-const uplinkInterface = process.env.UPLINK_INTERFACE ?? "";
-const vpnTunInterface = process.env.VPN_TUN_INTERFACE ?? "";
-const clientSubnet = process.env.CLIENT_SUBNET ?? "";
+const clientInterface = config.network.clientInterface;
+const uplinkInterface = config.network.uplinkInterface;
+const vpnTunInterface = config.network.vpnTunnelInterface;
+const clientSubnet = config.network.clientSubnet;
 const allowed = new Set(["nft", "tc", "ip", "sing-box", "sing-box-service", "write-sing-box-config"]);
 const local = new LinuxSystemCommandExecutor(true);
 const backgroundRead = new LinuxSystemCommandExecutor(true, 30_000);
