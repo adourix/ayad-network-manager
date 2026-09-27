@@ -6,9 +6,7 @@ loadDotenv();
 const systemConfigPath = process.env.SYSTEM_CONFIG_PATH ?? "/etc/lncs/router.env";
 loadDotenv({ path: systemConfigPath, override: true });
 
-function optional(name: string): string {
-  return process.env[name] ?? "";
-}
+function optional(name: string): string { return process.env[name] ?? ""; }
 
 function numberFromEnv(name: string, fallback: number): number {
   const value = process.env[name];
@@ -37,8 +35,7 @@ function deriveSubnet(ip: string, netmask: string): string {
   const ipParts = ip.split(".").map(Number);
   const maskParts = netmask.split(".").map(Number);
   if (
-    ipParts.length !== 4 ||
-    maskParts.length !== 4 ||
+    ipParts.length !== 4 || maskParts.length !== 4 ||
     ipParts.some((n) => !Number.isInteger(n) || n < 0 || n > 255) ||
     maskParts.some((n) => !Number.isInteger(n) || n < 0 || n > 255)
   ) {
@@ -63,9 +60,8 @@ const clientInterface = optional("CLIENT_INTERFACE") || uciGet("network.lan.devi
 const uplinkInterface = optional("UPLINK_INTERFACE") || uciGet("network.wan.device", "network.wan.ifname");
 const clientGatewayIp = optional("CLIENT_GATEWAY_IP") || uciGet("network.lan.ipaddr");
 const clientNetmask = uciGet("network.lan.netmask");
-const clientSubnet = optional("CLIENT_SUBNET") || (
-  clientGatewayIp && clientNetmask ? deriveSubnet(clientGatewayIp, clientNetmask) : ""
-);
+const clientSubnet = optional("CLIENT_SUBNET") ||
+  (clientGatewayIp && clientNetmask ? deriveSubnet(clientGatewayIp, clientNetmask) : "");
 
 if (!clientInterface || !uplinkInterface || !clientGatewayIp || !clientSubnet) {
   throw new Error(
@@ -86,6 +82,9 @@ function networkModeFromEnv(): "dual-interface" | "single-interface-ifb" {
 
 const dnsServers = (process.env.DNS_SERVERS ?? "1.1.1.1,8.8.8.8")
   .split(",").map((value) => value.trim()).filter(Boolean);
+if (dnsServers.length === 0) throw new Error("DNS_SERVERS must contain at least one server");
+
+export const setupComplete = true;
 
 export const config = {
   nodeEnv: process.env.NODE_ENV ?? "production",
@@ -121,7 +120,20 @@ export const config = {
   },
   database: {
     url: process.env.DATABASE_URL ?? "file:/etc/lncs/lncs.db",
+    user: optional("DATABASE_USER"),
+    password: optional("DATABASE_PASSWORD"),
+    name: optional("DATABASE_NAME"),
+    host: optional("DATABASE_HOST"),
+    port: numberFromEnv("DATABASE_PORT", 0),
   },
 } as const;
 
-export const setupComplete = true;
+if (
+  config.nodeEnv === "production" &&
+  (!process.env.ADMIN_PASSWORD_HASH ||
+    !process.env.ADMIN_PASSWORD_SALT ||
+    process.env.ADMIN_PASSWORD === "change-me" ||
+    process.env.ADMIN_PASSWORD === "change-me-before-production")
+) {
+  throw new Error("Production requires ADMIN_PASSWORD_HASH and ADMIN_PASSWORD_SALT; default credentials are forbidden");
+}
