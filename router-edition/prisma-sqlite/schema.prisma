@@ -68,7 +68,9 @@ model DevicePolicy {
   quotaAction String?
   quotaEnforcedAction String?
   profileId Int?
+  profile Profile? @relation(fields: [profileId], references: [id], onDelete: SetNull)
   scheduleId Int?
+  schedule Schedule? @relation(fields: [scheduleId], references: [id], onDelete: SetNull)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   @@index([profileId])
