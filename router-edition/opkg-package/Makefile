@@ -37,6 +37,7 @@ endef
 
 define Package/lncs-router-edition/install
 	$(INSTALL_DIR) $(1)/usr/lib/lncs/backend
+	$(INSTALL_DIR) $(1)/usr/lib/lncs/database
 	$(INSTALL_DIR) $(1)/usr/lib/lncs/frontend
 	$(INSTALL_DIR) $(1)/etc/lncs
 	$(INSTALL_DIR) $(1)/etc/init.d
@@ -48,6 +49,8 @@ define Package/lncs-router-edition/install
 	$(CP) $(LNCS_RUNTIME_DIR)/backend/prisma $(1)/usr/lib/lncs/backend/
 	$(INSTALL_DATA) ./../router.env.example $(1)/etc/lncs/router.env
 	$(INSTALL_BIN) ./files/lncs-enforcement.init $(1)/etc/init.d/lncs-enforcement
+	$(INSTALL_BIN) ./../procd-init/lncs-db-init.init $(1)/etc/init.d/lncs-db-init
+	$(INSTALL_DATA) ./../database/init.sql $(1)/usr/lib/lncs/database/init.sql
 	$(INSTALL_BIN) ./files/lncs-backend.init $(1)/etc/init.d/lncs-backend
 	$(INSTALL_DATA) ./../procd-init/lncs-enforcement.capabilities.json $(1)/etc/capabilities/lncs-enforcement.json
 endef
