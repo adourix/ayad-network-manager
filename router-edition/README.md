@@ -1,53 +1,59 @@
 # LNCS Router Edition — OpenWrt
 
-This directory is the OpenWrt deployment fork of Ayad Network Manager (LNCS).
+هذه شجرة Router Edition منفصلة عن main. الـcore Debian/Ubuntu deployment لا يتغير.
 
-The core Debian/Ubuntu implementation remains authoritative for everything that this
-fork does not explicitly override. Router Edition does not replace or modify the
-core deployment path.
+## ما تم تحويله
 
-## Explicit Router Edition changes
+- PostgreSQL/Prisma runtime -> SQLite/Prisma adapter.
+- systemd/setup wizard -> OpenWrt procd.
+- DHCP leases -> /tmp/dhcp.leases.
+- LAN/WAN authority -> UCI/netifd.
+- firewall enforcement -> inet fw4 مع chains/sets خاصة بـLNCS.
+- NAT -> inet fw4 / srcnat.
+- traffic shaping -> نفس single-interface-IFB التصميم، مع tc-full وIFB/flower.
+- frontend -> Fastify مباشرة بدون nginx/uhttpd.
+- SQLite DB -> /etc/lncs/lncs.db، مع schema initialization عند boot.
+- privileged enforcement process -> procd + capability profile لـCAP_NET_ADMIN وCAP_NET_RAW.
 
-- PostgreSQL -> SQLite + Prisma
-- systemd -> OpenWrt procd
-- Debian dnsmasq leases -> `/tmp/dhcp.leases`
-- Network configuration source -> OpenWrt UCI/netifd
-- Setup networking -> LuCI/UCI, with an LNCS policy onboarding step
-- libc target -> OpenWrt musl
+## لا يوجد installer
 
-The enforcement contract and single-interface-IFB traffic design remain unchanged in
-intent.
+Router Edition لا تحتوي ولا تستخدم install.sh. طريقة التوزيع المقصودة:
 
-## Validation status
+1. اختيار OpenWrt release/target/device profile الصحيح.
+2. بناء runtime bundle متوافق مع CPU/ABI/musl.
+3. بناء lncs-router-edition package.
+4. دمج package + overlay داخل OpenWrt ImageBuilder.
+5. إنتاج firmware image.
+6. حرق/flash الصورة على الراوتر.
 
-This fork is scaffolded, but it is **not declared hardware-validated**.
+بعد الإقلاع لا يوجد LNCS installation wizard. OpenWrt/LuCI مسؤول عن WAN/LAN/Wi-Fi، وLNCS يقرأ UCI ويبدأ control plane مباشرة.
 
-The first blocking validation is:
+## أهم المسارات
 
-1. Flash stock OpenWrt on the chosen target.
-2. Confirm Node 22 starts on the target architecture/libc.
-3. Confirm a compatible Prisma SQLite runtime exists.
-4. Only then continue with backend migration and enforcement integration.
+- backend/src/config.ts — اشتقاق LAN/WAN/subnet من UCI.
+- backend/src/server.ts — Router control plane.
+- backend/src/infrastructure/database/prisma.ts — SQLite adapter.
+- backend/src/infrastructure/network/OpenWrtDhcpLeaseReader.ts.
+- backend/src/infrastructure/network/OpenWrtDnsmasqReloader.ts.
+- backend/src/infrastructure/enforcement/NftEnforcer.ts — fw4 integration.
+- backend/src/infrastructure/enforcement/EnforcementAgent.ts — privileged boundary.
+- router-edition/database/init.sql — SQLite schema.
+- router-edition/procd-init/ — boot services.
+- router-edition/image-builder/ — firmware assembly.
+- router-edition/opkg-package/ — target package.
 
-Do not treat successful TypeScript compilation on a development host as proof that
-the target router is supported.
+## الحالة الحالية
 
-## Target hardware floor
+الكود أصبح Router-oriented بدل scaffold، لكن لم يتم إعلان hardware validation بعد.
+أول target فعلي يجب أن يثبت:
 
-Initial target: >=128 MB RAM and >=16 MB flash. Prefer >=256 MB RAM / >=128 MB
-flash until real resource measurements justify a smaller target.
+- Node 22 على نفس architecture/libc.
+- SQLite adapter/native dependency على نفس target.
+- Prisma Client queries على DB حقيقية.
+- fw4 reload بدون فقدان state بعد reconciliation.
+- IFB + flower + mirred + HTB بمرور traffic حقيقي.
+- procd respawn/reload.
+- reboot persistence.
+- flash -> boot -> configure UCI -> enforce end-to-end.
 
-64 MB-class routers are explicitly out of scope for the first hardware bring-up.
-
-## Layout
-
-- `prisma-sqlite/` — SQLite schema variant
-- `procd-init/` — OpenWrt service supervision
-- `dhcp-lease-reader-patch/` — OpenWrt dnsmasq lease reader
-- `uci-onboarding/` — derive LNCS network values from UCI
-- `opkg-package/` — initial package metadata/build skeleton
-
-## First hardware milestone
-
-The repository should not claim Router Edition is working until a real OpenWrt
-device completes the documented flash -> boot -> configure -> enforce cycle.
+لا نعتبر TypeScript/build على جهاز التطوير دليلًا على دعم router معيّن.
