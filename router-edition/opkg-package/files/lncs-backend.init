@@ -1,0 +1,2 @@
+#!/bin/sh /etc/rc.common
+exec /etc/init.d/lncs-backend "$@"
