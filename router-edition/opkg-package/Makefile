@@ -47,7 +47,7 @@ define Package/lncs-router-edition/install
 	$(CP) $(LNCS_RUNTIME_DIR)/backend/dist $(1)/usr/lib/lncs/backend/
 	$(CP) $(LNCS_RUNTIME_DIR)/backend/node_modules $(1)/usr/lib/lncs/backend/
 	$(CP) $(LNCS_RUNTIME_DIR)/frontend/dist $(1)/usr/lib/lncs/frontend/
-	$(CP) $(LNCS_RUNTIME_DIR)/backend/prisma $(1)/usr/lib/lncs/backend/
+	$(INSTALL_DATA) $(LNCS_RUNTIME_DIR)/backend/prisma/schema.prisma $(1)/usr/lib/lncs/backend/schema.prisma
 	$(INSTALL_DATA) ./../router.env.example $(1)/etc/lncs/router.env
 	$(INSTALL_BIN) ./files/lncs-enforcement.init $(1)/etc/init.d/lncs-enforcement
 	$(INSTALL_BIN) ./../procd-init/lncs-db-init.init $(1)/etc/init.d/lncs-db-init
