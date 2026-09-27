@@ -2,6 +2,7 @@ import { createServer } from "node:net";
 import { promises as fs } from "node:fs";
 import { unlinkSync } from "node:fs";
 import { resolve } from "node:path";
+import { execFile } from "node:child_process";
 import dotenv from "dotenv";
 import { LinuxSystemCommandExecutor } from "./LinuxSystemCommandExecutor.js";
 
@@ -14,7 +15,6 @@ dotenv.config({
 const socketPath = process.env.ENFORCEMENT_SOCKET_PATH ?? "/run/network-control/enforcement.sock";
 const vpnConfigPath = process.env.SING_BOX_CONFIG_PATH ?? "/etc/sing-box/config.json";
 const vpnConfigStagePath = process.env.SING_BOX_STAGE_PATH ?? "/run/network-control/sing-box-config.json";
-const vpnConfigInstallUnit = process.env.SING_BOX_CONFIG_INSTALL_UNIT ?? "network-control-sing-box-config.service";
 const setupSnapshotDir = resolve(process.env.SETUP_SNAPSHOT_DIR ?? "/var/lib/network-control/backups");
 const nftablesConfigPath = resolve(process.env.NFTABLES_CONFIG_PATH ?? "/etc/nftables.d/network-control-system.nft");
 const clientInterface = process.env.CLIENT_INTERFACE ?? "";
@@ -287,7 +287,7 @@ async function executeVpnConfigWrite(args: string[]): Promise<{ stdout: string; 
   try {
     await local.execute("sing-box", ["check", "-c", vpnConfigStagePath]);
     await new Promise<void>((resolve, reject) => {
-      const child = require("node:child_process").execFile("/etc/init.d/sing-box", ["restart"], { timeout: 15_000 }, (error: Error | null, _stdout: string, stderr: string) => {
+      const child = execFile("/etc/init.d/sing-box", ["restart"], { timeout: 15_000 }, (error: Error | null, _stdout: string, stderr: string) => {
         if (error) {
           reject(new Error(`sing-box restart failed: ${stderr?.trim() || error.message}`));
           return;
