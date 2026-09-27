@@ -395,9 +395,9 @@ export class SingleInterfaceVpnController implements VpnEnforcement {
         await this.executor.execute("nft", [
           "delete",
           "rule",
-          "ip",
-          "nat",
-          "POSTROUTING",
+          "inet",
+          "fw4",
+          "srcnat",
           "handle",
           String(rule.handle),
         ]);
@@ -442,8 +442,8 @@ export class SingleInterfaceVpnController implements VpnEnforcement {
       const drop = [
         "insert",
         "rule",
-        "ip",
-        "filter",
+        "inet",
+        "fw4",
         CONTROL_CHAIN,
         "position",
         "3",
