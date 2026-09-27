@@ -23,8 +23,8 @@ async function execNft(args: string[]): Promise<{ stdout: string; stderr: string
   }
 }
 
-const TABLE_FAMILY = "ip";
-const TABLE_NAME = "filter";
+const TABLE_FAMILY = "inet";
+const TABLE_NAME = "fw4";
 const VPN_TABLE_NAME = "ayad_nm";
 const VPN_PREROUTING_CHAIN = "blocked_devices_prerouting";
 const VPN_IP_SET_NAME = "vpn_blocked_ips";
@@ -38,6 +38,7 @@ const MAC_BLOCK_COMMENT = "ayad_nm_blocked_macs";
 const IP_BLOCK_COMMENT = "ayad_nm_blocked_ips";
 const VPN_IP_BLOCK_COMMENT = "ayad_nm_vpn_blocked_ips";
 const NAT_COMMENT = "ayad_nm_single_interface_nat";
+const NAT_CHAIN = "srcnat";
 const SSH_ALLOW_COMMENT = "ayad_nm_allow_ssh_management";
 const DASHBOARD_ALLOW_COMMENT = "ayad_nm_allow_dashboard_management";
 
@@ -179,10 +180,10 @@ export async function ensureFirewallState(): Promise<void> {
 export async function ensureSingleInterfaceNat(clientSubnet: string): Promise<void> {
   if (!validSubnet(clientSubnet)) throw new Error(`Invalid client subnet: ${clientSubnet}`);
   await withMutationLock(async () => {
-    const rules = await getRulesInChain("nat", "POSTROUTING");
+    const rules = await getRulesInChain(TABLE_NAME, NAT_CHAIN);
     const existing = rules.find((rule) => rule.comment === NAT_COMMENT);
-    const args = ["add", "rule", TABLE_FAMILY, "nat", "POSTROUTING", "ip", "saddr", clientSubnet, "oifname", config.network.uplinkInterface, "masquerade", "comment", NAT_COMMENT];
-    if (existing) await execNft(["delete", "rule", TABLE_FAMILY, "nat", "POSTROUTING", "handle", String(existing.handle)]);
+    const args = ["add", "rule", TABLE_FAMILY, TABLE_NAME, NAT_CHAIN, "ip", "saddr", clientSubnet, "oifname", config.network.uplinkInterface, "masquerade", "comment", NAT_COMMENT];
+    if (existing) await execNft(["delete", "rule", TABLE_FAMILY, TABLE_NAME, NAT_CHAIN, "handle", String(existing.handle)]);
     await execNft(args);
   });
 }
