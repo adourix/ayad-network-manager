@@ -52,7 +52,7 @@ check:
 	@cp "$(LNCS_IPK)" "$(IMAGEBUILDER)/packages/"
 	@sed -i "s|^ADMIN_USERNAME=.*|ADMIN_USERNAME=$(ADMIN_USERNAME)|" "$(BUILD_FILES)/etc/lncs/router.env"
 	@sed -i "s|^ADMIN_PASSWORD_HASH=.*|ADMIN_PASSWORD_HASH=$(ADMIN_PASSWORD_HASH)|" "$(BUILD_FILES)/etc/lncs/router.env"
-	@sed -i "s|^ADMIN_PASSWORD_SALT=.*|ADMIN_PASSWORD_SALT=$(ADMIN_PASSWORD_SALT)|" "$(FILES)/etc/lncs/router.env"
+	@sed -i "s|^ADMIN_PASSWORD_SALT=.*|ADMIN_PASSWORD_SALT=$(ADMIN_PASSWORD_SALT)|" "$(BUILD_FILES)/etc/lncs/router.env"
 
 image: check
 	$(IMAGEBUILDER)/make image PROFILE="$(PROFILE)" PACKAGES="$(PACKAGES)" FILES="$(BUILD_FILES)"
