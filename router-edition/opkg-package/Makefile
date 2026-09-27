@@ -3,6 +3,7 @@ include $(TOPDIR)/rules.mk
 PKG_NAME:=lncs-router-edition
 PKG_VERSION:=0.2.0
 PKG_RELEASE:=1
+PKGARCH:=all
 
 include $(INCLUDE_DIR)/package.mk
 
