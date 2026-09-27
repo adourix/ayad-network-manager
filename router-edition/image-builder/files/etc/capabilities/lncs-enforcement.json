@@ -1,0 +1,7 @@
+{
+  "cap.keep": [
+    "cap_net_admin",
+    "cap_net_raw"
+  ],
+  "cap.drop": []
+}
