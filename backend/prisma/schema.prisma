@@ -250,6 +250,17 @@ model IpBinding {
   @@map("ip_bindings")
 }
 
+model AuthUser {
+  id Int @id @default(1)
+  username String @unique
+  passwordHash String
+  passwordSalt String
+  mustChangePassword Boolean @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@map("auth_users")
+}
+
 model AuthSession {
   id BigInt @id @default(autoincrement())
   tokenHash String @unique
