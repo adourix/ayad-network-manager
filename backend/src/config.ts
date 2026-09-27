@@ -56,28 +56,28 @@ function deriveSubnet(ip: string, netmask: string): string {
   return `${networkIp}/${prefix}`;
 }
 
+const networkMode = (() => {
+  const value = (process.env.NETWORK_MODE ?? "single-interface-ifb").trim().toLowerCase();
+  if (value === "single_iface_ifb" || value === "single-iface-ifb") return "single-interface-ifb" as const;
+  if (value === "dual_iface" || value === "dual_iface_ifb") return "dual-interface" as const;
+  if (value === "dual-interface" || value === "single-interface-ifb") return value;
+  throw new Error("Invalid NETWORK_MODE: " + process.env.NETWORK_MODE);
+})();
 const clientInterface = optional("CLIENT_INTERFACE") || uciGet("network.lan.device", "network.lan.ifname");
-const uplinkInterface = optional("UPLINK_INTERFACE") || uciGet("network.wan.device", "network.wan.ifname");
+const uplinkInterface = networkMode === "single-interface-ifb"
+  ? (optional("UPLINK_INTERFACE") || clientInterface)
+  : (optional("UPLINK_INTERFACE") || uciGet("network.wan.device", "network.wan.ifname"));
 const clientGatewayIp = optional("CLIENT_GATEWAY_IP") || uciGet("network.lan.ipaddr");
 const clientNetmask = uciGet("network.lan.netmask");
 const clientSubnet = optional("CLIENT_SUBNET") ||
   (clientGatewayIp && clientNetmask ? deriveSubnet(clientGatewayIp, clientNetmask) : "");
 
-if (!clientInterface || !uplinkInterface || !clientGatewayIp || !clientSubnet) {
+if (!clientInterface || !clientGatewayIp || !clientSubnet || (networkMode === "dual-interface" && !uplinkInterface)) {
   throw new Error(
-    "LNCS Router Edition could not derive LAN/WAN configuration from UCI. " +
-    "Check network.lan and network.wan before starting the backend.",
+    networkMode === "single-interface-ifb"
+      ? "LNCS Router Edition could not derive the LAN interface/subnet from UCI. Check network.lan before starting the backend."
+      : "LNCS Router Edition could not derive LAN/WAN configuration from UCI. Check network.lan and network.wan before starting the backend.",
   );
-}
-
-function networkModeFromEnv(): "dual-interface" | "single-interface-ifb" {
-  const value = (process.env.NETWORK_MODE ?? "single-interface-ifb").trim().toLowerCase();
-  if (value === "single_iface_ifb" || value === "single-iface-ifb") return "single-interface-ifb";
-  if (value === "dual_iface" || value === "dual_iface_ifb") return "dual-interface";
-  if (value !== "dual-interface" && value !== "single-interface-ifb") {
-    throw new Error(`Invalid NETWORK_MODE: ${process.env.NETWORK_MODE}`);
-  }
-  return value;
 }
 
 const dnsServers = (process.env.DNS_SERVERS ?? "1.1.1.1,8.8.8.8")
@@ -97,7 +97,7 @@ export const config = {
   network: {
     clientInterface,
     uplinkInterface,
-    networkMode: networkModeFromEnv(),
+    networkMode,
     lanInterface: clientInterface,
     wanInterface: uplinkInterface,
     clientGatewayIp,
