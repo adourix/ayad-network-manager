@@ -24,6 +24,7 @@ import { TrafficAccountingService } from "./application/monitoring/TrafficAccoun
 import { LiveMonitoringService } from "./application/monitoring/LiveMonitoringService.js";
 import { DevicePolicyService } from "./application/policies/DevicePolicyService.js";
 import { OpenWrtDhcpLeaseReader } from "./infrastructure/network/OpenWrtDhcpLeaseReader.js";
+import { OpenWrtDnsmasqReloader } from "./infrastructure/network/OpenWrtDnsmasqReloader.js";
 import { LinuxNeighborTableReader } from "./infrastructure/network/LinuxNeighborTableReader.js";
 import { DhcpNeighborIdentityValidator } from "./infrastructure/network/DhcpNeighborIdentityValidator.js";
 import { BroadcastCaptureReader } from "./infrastructure/network/BroadcastCaptureReader.js";
@@ -124,7 +125,7 @@ const neighborTableReader = new LinuxNeighborTableReader(systemCommandExecutor);
   const portRuleEnforcer = new NftPortRuleEnforcer(systemCommandExecutor, operationsRepository); await policyCatalogRoutes(app, new PolicyCatalogService(policyCatalogRepository, deviceRepository, portRuleEnforcer));
   await operationsRoutes(app, new OperationsService(operationsRepository));
   const vpnService = new VpnService(new PrismaVpnRepository(), new SingleInterfaceVpnController(systemCommandExecutor, config.network.vpnTunnelInterface), operationsRepository); await vpnRoutes(app, vpnService);
-  const dhcpReservationService = new DhcpReservationService(deviceRepository, policyRepository, config.setup.dhcpReservationsPath, { reload: async () => { const { execFile } = await import("node:child_process"); await new Promise<void>((resolve, reject) => execFile("/etc/init.d/dnsmasq", ["reload"], { timeout: 10_000 }, (error) => error ? reject(error) : resolve())); } });
+  const dhcpReservationService = new DhcpReservationService(deviceRepository, policyRepository, config.setup.dhcpReservationsPath, new OpenWrtDnsmasqReloader());
   const scheduleEnforcementService = new ScheduleEnforcementService(deviceRepository, policyRepository, policyCatalogRepository, trafficEnforcementService, deviceBlocker, operationsRepository);
   const trafficRetentionService = new TrafficRetentionService();
   const profileEnforcementService = new ProfileEnforcementService(deviceRepository, policyRepository, policyCatalogRepository, trafficEnforcementService);
