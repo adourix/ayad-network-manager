@@ -10,8 +10,6 @@
 IMAGEBUILDER ?= ./openwrt-imagebuilder
 PROFILE ?=
 LNCS_IPK ?=
-ADMIN_PASSWORD_HASH ?=
-ADMIN_PASSWORD_SALT ?=
 ADMIN_USERNAME ?= admin
 SOURCE_FILES := $(CURDIR)/files
 BUILD_FILES := $(CURDIR)/.image-files
@@ -43,16 +41,12 @@ check:
 	@test -n "$(PROFILE)" || (echo "PROFILE is required"; exit 2)
 	@test -x "$(IMAGEBUILDER)/make" || (echo "IMAGEBUILDER/make not found"; exit 2)
 	@test -n "$(LNCS_IPK)" || (echo "LNCS_IPK must point to the target-built lncs-router-edition package"; exit 2)
-	@test -n "$(ADMIN_PASSWORD_HASH)" || (echo "ADMIN_PASSWORD_HASH is required"; exit 2)
-	@test -n "$(ADMIN_PASSWORD_SALT)" || (echo "ADMIN_PASSWORD_SALT is required"; exit 2)
 	@test -f "$(LNCS_IPK)" || (echo "LNCS_IPK not found: $(LNCS_IPK)"; exit 2)
 	@rm -rf "$(BUILD_FILES)"
 	@cp -a "$(SOURCE_FILES)" "$(BUILD_FILES)"
 	@mkdir -p "$(IMAGEBUILDER)/packages"
 	@cp "$(LNCS_IPK)" "$(IMAGEBUILDER)/packages/"
 	@sed -i "s|^ADMIN_USERNAME=.*|ADMIN_USERNAME=$(ADMIN_USERNAME)|" "$(BUILD_FILES)/etc/lncs/router.env"
-	@sed -i "s|^ADMIN_PASSWORD_HASH=.*|ADMIN_PASSWORD_HASH=$(ADMIN_PASSWORD_HASH)|" "$(BUILD_FILES)/etc/lncs/router.env"
-	@sed -i "s|^ADMIN_PASSWORD_SALT=.*|ADMIN_PASSWORD_SALT=$(ADMIN_PASSWORD_SALT)|" "$(BUILD_FILES)/etc/lncs/router.env"
 
 image: check
 	$(IMAGEBUILDER)/make image PROFILE="$(PROFILE)" PACKAGES="$(PACKAGES)" FILES="$(BUILD_FILES)"
