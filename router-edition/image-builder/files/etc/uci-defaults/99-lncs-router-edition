@@ -7,6 +7,10 @@ uci -q commit dhcp
 
 mkdir -p /etc/lncs /var/run/network-control
 touch /etc/lncs/dhcp-reservations.conf
+
+/etc/init.d/lncs-db-init enable 2>/dev/null || true
+/etc/init.d/lncs-enforcement enable 2>/dev/null || true
+/etc/init.d/lncs-backend enable 2>/dev/null || true
 chmod 600 /etc/lncs/router.env /etc/lncs/dhcp-reservations.conf 2>/dev/null || true
 
 exit 0
