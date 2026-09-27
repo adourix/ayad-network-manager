@@ -10,7 +10,6 @@ import type {
 const execFileAsync = promisify(execFile);
 
 const COMMAND_TIMEOUT_MS = 30_000;
-const SYSTEMCTL_TIMEOUT_MS = 20_000;
 const REMOTE_RESPONSE_GRACE_MS = 5_000;
 const REMOTE_CONNECT_RETRIES = 20;
 const REMOTE_CONNECT_RETRY_DELAY_MS = 250;
@@ -66,11 +65,11 @@ export class LinuxSystemCommandExecutor implements SystemCommandExecutor {
         ? "/usr/sbin/tc"
         : command === "nft"
           ? "/usr/sbin/nft"
-          : command;
+          : command === "sing-box-service"
+            ? "/etc/init.d/sing-box"
+            : command;
 
-    const timeout = command === "systemctl"
-      ? Math.max(this.timeoutMs, SYSTEMCTL_TIMEOUT_MS)
-      : this.timeoutMs;
+    const timeout = this.timeoutMs;
 
     try {
       const { stdout, stderr } = await execFileAsync(executable, args, {
