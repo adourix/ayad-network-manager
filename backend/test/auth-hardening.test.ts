@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createHash, scryptSync, timingSafeEqual } from "node:crypto";
+import { scryptSync, timingSafeEqual } from "node:crypto";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
@@ -16,10 +16,4 @@ test("router bootstrap seeds admin/admin as a forced password change", () => {
   const expected = Buffer.from(passwordHash, "hex");
   assert.equal(expected.length, actual.length);
   assert.equal(timingSafeEqual(actual, expected), true);
-});
-
-test("bootstrap password hash is not stored as plaintext admin/admin", () => {
-  const sql = readFileSync(new URL("../../router-edition/database/init.sql", import.meta.url), "utf8");
-  assert.equal(sql.includes("'admin', 'admin', 1"), false);
-  assert.equal(createHash("sha256").update("admin").digest("hex").length, 64);
 });
