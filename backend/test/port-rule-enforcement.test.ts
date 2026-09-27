@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+process.env.NODE_ENV ??= "test";
 process.env.CLIENT_INTERFACE ??= "eno1";
 process.env.UPLINK_INTERFACE ??= "eno1";
 process.env.CLIENT_GATEWAY_IP ??= "192.168.1.254";
@@ -11,11 +12,9 @@ process.env.SING_BOX_CONFIG_PATH ??= "/tmp/sing-box.json";
 process.env.VPN_TUN_ADDRESS ??= "172.19.0.1/30";
 process.env.DHCP_RESERVATIONS_PATH ??= "/tmp/dnsmasq-hosts";
 process.env.DHCP_LEASES_PATH ??= "/tmp/dnsmasq.leases";
-process.env.DATABASE_URL ??= "postgresql://test:test@localhost:5432/test";
-process.env.DATABASE_USER ??= "test";
-process.env.DATABASE_PASSWORD ??= "test";
-process.env.DATABASE_NAME ??= "test";
-process.env.DATABASE_HOST ??= "localhost";
+process.env.DATABASE_URL ??= "file:/tmp/lncs-test.db";
+process.env.ADMIN_PASSWORD_HASH ??= "test-hash";
+process.env.ADMIN_PASSWORD_SALT ??= "test-salt";
 
 const { NftPortRuleEnforcer } = await import("../src/infrastructure/enforcement/NftPortRuleEnforcer.js");
 
@@ -25,7 +24,7 @@ test("port rules install upload and return-direction nft rules after mandatory f
   const enforcer = new NftPortRuleEnforcer(executor);
   await enforcer.apply({ mac: "aa:bb:cc:dd:ee:ff", ip: "192.168.1.42" }, { id: 7, deviceId: 3, name: "HTTPS", protocol: "tcp", port: 443, action: "allow", enabled: true });
   assert.equal(calls.length, 4);
-  assert.deepEqual(calls[0].slice(0, 7), ["-c", "insert", "rule", "ip", "filter", "ayad_nm_forward", "position"]);
+  assert.deepEqual(calls[0].slice(0, 7), ["-c", "insert", "rule", "inet", "fw4", "ayad_nm_forward", "position"]);
   assert.equal(calls[0][7], "4");
   assert.ok(calls[2].includes("dport"));
   assert.ok(calls[3].includes("sport"));
