@@ -407,9 +407,9 @@ export class SingleInterfaceVpnController implements VpnEnforcement {
     const nat = [
       "add",
       "rule",
-      "ip",
-      "nat",
-      "POSTROUTING",
+      "inet",
+      "fw4",
+      "srcnat",
       "ip",
       "saddr",
       config.network.clientSubnet,
@@ -471,7 +471,7 @@ export class SingleInterfaceVpnController implements VpnEnforcement {
       "-a",
       "list",
       "chain",
-      "ip",
+      "inet",
       table,
       chain,
     ]);
