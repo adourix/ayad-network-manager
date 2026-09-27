@@ -5,7 +5,7 @@ interface AuthContextValue {
   token: string | null;
   isAuthenticated: boolean;
   mustChangePassword: boolean;
-  login: (username: string, password: string) => Promise<void>;
+  login: (username: string, password: string) => Promise<boolean>;
   changePassword: (currentPassword: string, newPassword: string) => Promise<void>;
   logout: () => Promise<void>;
 }
@@ -35,6 +35,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       sessionStorage.setItem("nm_must_change_password", response.mustChangePassword ? "1" : "0");
       setToken(response.token);
       setMustChangePassword(response.mustChangePassword);
+      return response.mustChangePassword;
     },
     async changePassword(currentPassword, newPassword) {
       await api.changePassword(currentPassword, newPassword);
