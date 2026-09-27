@@ -67,3 +67,13 @@ must pass:
 - procd respawn/reload behavior.
 - reboot persistence and DB durability.
 
+
+
+## Initial administrator credentials
+
+The image seeds the first administrator account as:
+
+- Username: `admin`
+- Password: `admin`
+
+On the first login, LNCS forces the administrator to change the password from **Settings**. The replacement password is stored as a scrypt hash in the persistent SQLite database. No password hash or salt needs to be supplied to the ImageBuilder.
