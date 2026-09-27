@@ -1,8 +1,8 @@
 import type { Device, HistorySample, LoginResponse, Policy, Quota, VpnStatus } from "../types/api";
 
-// Production is served by the same Fastify origin as the API. The API base URL is configurable only for Vite development builds.
+// Empty base URL uses the same Fastify origin; VITE_API_BASE_URL allows the same PWA build to target another gateway during app-first testing.
 const configuredBaseUrl = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, "") ?? "";
-const baseUrl = import.meta.env.DEV ? configuredBaseUrl : "";
+const baseUrl = configuredBaseUrl;
 
 export class ApiError extends Error {
   public readonly status: number;
