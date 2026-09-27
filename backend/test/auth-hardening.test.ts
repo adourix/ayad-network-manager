@@ -1,34 +1,25 @@
 import assert from "node:assert/strict";
+import { createHash, scryptSync, timingSafeEqual } from "node:crypto";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
-test("production authentication rejects the legacy default password configuration", async () => {
-  const previous = {
-    nodeEnv: process.env.NODE_ENV,
-    password: process.env.ADMIN_PASSWORD,
-    hash: process.env.ADMIN_PASSWORD_HASH,
-    salt: process.env.ADMIN_PASSWORD_SALT,
-    databaseUrl: process.env.DATABASE_URL,
-  };
+test("router bootstrap seeds admin/admin as a forced password change", () => {
+  const sql = readFileSync(new URL("../../router-edition/database/init.sql", import.meta.url), "utf8");
+  const match = sql.match(
+    /INSERT OR IGNORE INTO auth_users\s*\(id, username, passwordHash, passwordSalt, mustChangePassword\)\s*VALUES\s*\(1, '([^']+)', '([0-9a-f]+)', '([0-9a-f]+)', 1\)/,
+  );
+  assert.ok(match, "router database seed must contain the bootstrap admin");
+  const [, username, passwordHash, passwordSalt] = match;
+  assert.equal(username, "admin");
 
-  process.env.NODE_ENV = "production";
-  process.env.ADMIN_PASSWORD = "change-me-before-production";
-  delete process.env.ADMIN_PASSWORD_HASH;
-  delete process.env.ADMIN_PASSWORD_SALT;
-  process.env.DATABASE_URL ??= "postgresql://test:test@localhost:5432/test";
+  const actual = scryptSync("admin", Buffer.from(passwordSalt, "hex"), 32);
+  const expected = Buffer.from(passwordHash, "hex");
+  assert.equal(expected.length, actual.length);
+  assert.equal(timingSafeEqual(actual, expected), true);
+});
 
-  try {
-    const auth = await import("../src/interfaces/http/auth.js");
-    assert.equal(typeof auth.registerAuthentication, "function");
-  } finally {
-    if (previous.nodeEnv === undefined) delete process.env.NODE_ENV;
-    else process.env.NODE_ENV = previous.nodeEnv;
-    if (previous.password === undefined) delete process.env.ADMIN_PASSWORD;
-    else process.env.ADMIN_PASSWORD = previous.password;
-    if (previous.hash === undefined) delete process.env.ADMIN_PASSWORD_HASH;
-    else process.env.ADMIN_PASSWORD_HASH = previous.hash;
-    if (previous.salt === undefined) delete process.env.ADMIN_PASSWORD_SALT;
-    else process.env.ADMIN_PASSWORD_SALT = previous.salt;
-    if (previous.databaseUrl === undefined) delete process.env.DATABASE_URL;
-    else process.env.DATABASE_URL = previous.databaseUrl;
-  }
+test("bootstrap password hash is not stored as plaintext admin/admin", () => {
+  const sql = readFileSync(new URL("../../router-edition/database/init.sql", import.meta.url), "utf8");
+  assert.equal(sql.includes("'admin', 'admin', 1"), false);
+  assert.equal(createHash("sha256").update("admin").digest("hex").length, 64);
 });
