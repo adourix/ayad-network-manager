@@ -5,5 +5,5 @@ export interface BlockedDeviceRepository {
   activeIps(deviceId: number): Promise<string[]>;
   /** Return every active binding so IP changes can be reconciled by device identity. */
   activeBindings(): Promise<Array<{ deviceId: number; ip: string }>>;
-  releaseIp?(ip: string, reason: string): Promise<void>;
+  releaseIp?(deviceId: number, ip: string, reason: string): Promise<void>;
 }
