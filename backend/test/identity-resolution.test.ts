@@ -198,3 +198,30 @@ test("proxy mismatch becomes PROXY_UNCONFIRMED only after three cycles and DHCP 
   assert.equal(result.identityValidated, false);
   assert.equal(result.deferred, true);
 });
+
+
+test("administratively accepted proxy upgrades to confirmed proxy when direct evidence returns", () => {
+  const existing = {
+    id: 1,
+    mac: MacAddress.create(dhcpChaddr),
+    ip: IpAddress.create("192.168.1.64"),
+    hostname: "iphone",
+    l2Visible: false,
+    proxyMac: MacAddress.create(proxyMac),
+    identityValidated: true,
+    identitySource: "PROXY_ACCEPTED_BY_ADMIN" as const,
+    firstSeen: new Date(0),
+    lastSeen: new Date(0),
+  };
+  const confirmed = new DhcpNeighborIdentityValidator("192.168.1.0/24", false)
+    .validate(
+      [{ ...lease, mac: dhcpChaddr, ip: "192.168.1.64" }],
+      [{ ip: "192.168.1.64", mac: proxyMac, state: "REACHABLE" }],
+      [capture(dhcpChaddr, "192.168.1.64")],
+    )[0]!;
+  const reconciled = reconcileIdentityObservation(existing, confirmed);
+  assert.equal(reconciled.identitySource, "DHCP_CONFIRMED_PROXY");
+  assert.equal(reconciled.identityValidated, true);
+  assert.equal(reconciled.l2Visible, false);
+  assert.equal(reconciled.proxyMac, proxyMac);
+});
