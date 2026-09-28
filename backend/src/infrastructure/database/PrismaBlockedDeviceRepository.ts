@@ -89,14 +89,34 @@ export class PrismaBlockedDeviceRepository implements BlockedDeviceRepository {
       });
 
       for (const binding of bindings) {
-        await tx.ipBinding.update({
-          where: { id: binding.id },
-          data: {
-            active: false,
-            releasedAt: new Date(),
-            releaseReason: reason,
+        const releasedAt = new Date();
+        const existingReleased = await tx.ipBinding.findUnique({
+          where: {
+            blockedDeviceId_ip_active: {
+              blockedDeviceId: record.id,
+              ip,
+              active: false,
+            },
           },
         });
+
+        if (existingReleased) {
+          await tx.ipBinding.update({
+            where: { id: existingReleased.id },
+            data: { releasedAt, releaseReason: reason },
+          });
+          await tx.ipBinding.delete({ where: { id: binding.id } });
+        } else {
+          await tx.ipBinding.update({
+            where: { id: binding.id },
+            data: {
+              active: false,
+              releasedAt,
+              releaseReason: reason,
+            },
+          });
+        }
       }
     });
-  }}
+  }
+}}
