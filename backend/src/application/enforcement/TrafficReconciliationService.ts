@@ -69,6 +69,20 @@ export class TrafficReconciliationService {
       }
       const quotaThrottleBits = BigInt(Math.round(this.quotaThrottleMbps * 1_000_000));
 
+      // Build desired class IDs from durable policy state before mutating
+      // the kernel. A transient tc failure must not make a valid desired
+      // class look stale and cause it to be deleted in the same cycle.
+      for (const { device, policy } of enforceablePolicies) {
+        if (!policy || !device.ip) continue;
+        const throttled = policy.quotaEnforcedAction === "throttle";
+        if (policy.downloadLimit !== null || throttled) {
+          expectedDownloadClasses.add(TcClassId.fromMac(device.mac.toString(), "download"));
+        }
+        if (policy.uploadLimit !== null || throttled) {
+          expectedUploadClasses.add(TcClassId.fromMac(device.mac.toString(), "upload"));
+        }
+      }
+
       for (const { device, policy } of enforceablePolicies) {
         try {
           if (!policy || !device.ip) continue;
@@ -76,10 +90,6 @@ export class TrafficReconciliationService {
           const throttled = policy.quotaEnforcedAction === "throttle";
 
           if (policy.downloadLimit !== null || throttled) {
-            expectedDownloadClasses.add(
-              TcClassId.fromMac(device.mac.toString(), "download"),
-            );
-
             if (throttled) {
               await this.trafficEnforcer.limitDownloadBits(device, quotaThrottleBits);
             } else {
@@ -90,10 +100,6 @@ export class TrafficReconciliationService {
           }
 
           if (policy.uploadLimit !== null || throttled) {
-            expectedUploadClasses.add(
-              TcClassId.fromMac(device.mac.toString(), "upload"),
-            );
-
             if (throttled) {
               await this.trafficEnforcer.limitUploadBits(device, quotaThrottleBits);
             } else {
