@@ -50,23 +50,28 @@ export class IpBindingLifecycleService {
           this.blockedDeviceRepository.activeBindings(),
         ]);
 
-        const deviceById = new Map(
-          devices.map((device) => [device.id, device]),
-        );
-
+        const deviceById = new Map(devices.map((device) => [device.id, device]));
         const nowSeconds = Math.floor(Date.now() / 1000);
 
+        const activeLeases = leases.filter(
+          (lease) => lease.expiry === 0 || lease.expiry > nowSeconds,
+        );
+
         const leaseIpByMac = new Map(
-          leases
-            .filter(
-              (lease) =>
-                lease.expiry === 0 ||
-                lease.expiry > nowSeconds,
-            )
-            .map((lease) => [
-              lease.mac.trim().toLowerCase(),
-              lease.ip.trim(),
-            ]),
+          activeLeases.map((lease) => [
+            lease.mac.trim().toLowerCase(),
+            lease.ip.trim(),
+          ]),
+        );
+
+        // Positive IP-reuse evidence is an active DHCP lease for a DIFFERENT
+        // MAC at the binding's IP. Absence of the original lease is not enough
+        // to release a binding.
+        const leaseMacByIp = new Map(
+          activeLeases.map((lease) => [
+            lease.ip.trim(),
+            lease.mac.trim().toLowerCase(),
+          ]),
         );
 
         for (const binding of bindings) {
@@ -83,11 +88,35 @@ export class IpBindingLifecycleService {
             continue;
           }
 
-          const currentIp = leaseIpByMac.get(
-            device.mac.toString().toLowerCase(),
-          );
+          const deviceMac = device.mac.toString().toLowerCase();
+          const bindingIp = binding.ip;
+          const claimantMac = leaseMacByIp.get(bindingIp);
 
-          if (!currentIp || currentIp === binding.ip) continue;
+          // Case 1: a different DHCP client positively claims the old IP.
+          // Release only this device's binding. Keep the kernel IP block
+          // until no active binding remains for that IP.
+          if (claimantMac && claimantMac !== deviceMac) {
+            await this.blockedDeviceRepository.releaseIp?.(
+              device.id,
+              bindingIp,
+              "ip_reassigned_to_other_mac:" + claimantMac,
+            );
+
+            const remainingBindings = await this.blockedDeviceRepository.activeBindings();
+            if (
+              this.deviceBlocker.unblockIp &&
+              !remainingBindings.some((candidate) => candidate.ip === bindingIp)
+            ) {
+              await this.deviceBlocker.unblockIp(bindingIp);
+            }
+            continue;
+          }
+
+          // Case 2: the same device received a new DHCP IP. This is a
+          // deliberate follow-the-device rebind, not an absence-based
+          // inference.
+          const currentIp = leaseIpByMac.get(deviceMac);
+          if (!currentIp || currentIp === bindingIp) continue;
 
           if (!this.deviceBlocker.blockIp) {
             throw new Error("IP blocking is not available");
@@ -106,12 +135,16 @@ export class IpBindingLifecycleService {
             "ip-enforced-proxy",
           );
 
-          await this.deviceBlocker.unblockIp(binding.ip);
-
           await this.blockedDeviceRepository.releaseIp?.(
-            binding.ip,
-            `device ${device.id} moved to ${currentIp}`,
+            device.id,
+            bindingIp,
+            "device " + device.id + " moved to " + currentIp,
           );
+
+          const remainingBindings = await this.blockedDeviceRepository.activeBindings();
+          if (!remainingBindings.some((candidate) => candidate.ip === bindingIp)) {
+            await this.deviceBlocker.unblockIp(bindingIp);
+          }
         }
       });
     } catch (error) {
@@ -122,5 +155,4 @@ export class IpBindingLifecycleService {
     } finally {
       this.running = false;
     }
-  }
-}
+  }}
