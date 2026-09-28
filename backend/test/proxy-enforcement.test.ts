@@ -44,3 +44,19 @@ test("unconfirmed identity requires the exact risk acknowledgment", async () => 
   assert.equal(updates[0].identitySource, "PROXY_ACCEPTED_BY_ADMIN");
   assert.equal(calls.length, 0);
 });
+
+
+test("admin-accepted proxy block remains IP-only", async () => {
+  const calls: string[] = [];
+  const device = {
+    id: 1,
+    mac: { toString: () => real },
+    ip: { toString: () => ip },
+    l2Visible: false,
+    identityValidated: true,
+    identitySource: "PROXY_ACCEPTED_BY_ADMIN",
+    proxyMac: { toString: () => proxy },
+  };
+  await service(device, calls).blockDevice(real);
+  assert.deepEqual(calls, [`ip:${ip}`]);
+});
