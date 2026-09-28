@@ -77,37 +77,26 @@ export class PrismaBlockedDeviceRepository implements BlockedDeviceRepository {
     });
   }
 
-  async releaseIp(ip: string, reason: string): Promise<void> {
+  async releaseIp(deviceId: number, ip: string, reason: string): Promise<void> {
     await prisma.$transaction(async (tx) => {
-      const activeBindings = await tx.ipBinding.findMany({
-        where: { ip, active: true },
+      const record = await tx.blockedDevice.findUnique({
+        where: { deviceId },
+      });
+      if (!record) return;
+
+      const bindings = await tx.ipBinding.findMany({
+        where: { blockedDeviceId: record.id, ip, active: true },
       });
 
-      for (const binding of activeBindings) {
-        const releasedAt = new Date();
-        const existingReleased = await tx.ipBinding.findUnique({
-          where: {
-            blockedDeviceId_ip_active: {
-              blockedDeviceId: binding.blockedDeviceId,
-              ip: binding.ip,
-              active: false,
-            },
+      for (const binding of bindings) {
+        await tx.ipBinding.update({
+          where: { id: binding.id },
+          data: {
+            active: false,
+            releasedAt: new Date(),
+            releaseReason: reason,
           },
         });
-
-        if (existingReleased) {
-          await tx.ipBinding.update({
-            where: { id: existingReleased.id },
-            data: { releasedAt, releaseReason: reason },
-          });
-          await tx.ipBinding.delete({ where: { id: binding.id } });
-        } else {
-          await tx.ipBinding.update({
-            where: { id: binding.id },
-            data: { active: false, releasedAt, releaseReason: reason },
-          });
-        }
       }
     });
-  }
-}
+  }}
