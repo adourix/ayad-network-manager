@@ -62,19 +62,41 @@ test("root and device classes parse rates and ceilings", async () => {
   ]);
 });
 
-test("device filters parse textual and hexadecimal IPv4 matches", async () => {
+test("kernel-normalized class ids match zero-padded command ids", async () => {
   const output = [
-    "filter pref 120 protocol ip flower",
-    "  dst 192.168.1.115/32",
-    "  flowid 1:2",
-    "filter pref 121 protocol ip u32",
+    "class htb 1:1 root rate 1000Mbit ceil 1000Mbit",
+    "class htb 1:46d parent 1:1 prio 0 rate 9700Kbit ceil 9700Kbit",
+  ].join("\n");
+  const reader = new LinuxTcStateReader(new FakeExecutor(() => result(output)));
+
+  assert.deepEqual(await reader.getClassState("eno1", "046d"), {
+    exists: true,
+    rate: "9700Kbit",
+    ceil: "9700Kbit",
+  });
+  assert.deepEqual(await reader.getDeviceClasses("eno1"), [
+    { classId: "46d", rate: "9700Kbit", ceil: "9700Kbit" },
+  ]);
+});
+
+test("device filters normalize zero-padded flowids and decode hexadecimal IPv4 matches", async () => {
+  const output = [
+    "filter pref 120 protocol ip u32",
     "  match c0a80174/ffffffff at 16",
-    "  flowid 1:a",
+    "  flowid 1:0002",
+    "filter pref 121 protocol ip u32",
+    "  match c0a8016c/ffffffff at 16",
+    "  flowid 1:046d",
   ].join("\n");
   const reader = new LinuxTcStateReader(new FakeExecutor(() => result(output)));
 
   assert.deepEqual(await reader.getDeviceFilters("eno1"), [
-    { classId: "2", priority: 120, ip: "192.168.1.115" },
-    { classId: "a", priority: 121, ip: "192.168.1.116" },
+    { classId: "2", priority: 120, ip: "192.168.1.116" },
+    { classId: "46d", priority: 121, ip: "192.168.1.108" },
   ]);
+  assert.deepEqual(await reader.getFilterState("eno1", "046d"), {
+    exists: true,
+    ip: "192.168.1.108",
+    priority: 121,
+  });
 });
