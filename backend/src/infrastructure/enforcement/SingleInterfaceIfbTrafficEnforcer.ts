@@ -25,7 +25,14 @@ export class SingleInterfaceIfbTrafficEnforcer implements TrafficEnforcer {
   ) {}
 
   async initializeBaseState(): Promise<void> {
-    await this.removeLegacyIfbState();
+    /*
+     * Do not tear down IFB here. Reconciliation runs every 10 seconds and
+     * IFB is part of the active upload data path. Removing it on every cycle
+     * would interrupt upload shaping and recreate the redirect repeatedly.
+     *
+     * Legacy download-redirect cleanup is handled by the current
+     * reconciliation model instead of destructively deleting the shared IFB.
+     */
     await this.ensureRootState(this.lanInterface);
   }
 
@@ -44,14 +51,9 @@ export class SingleInterfaceIfbTrafficEnforcer implements TrafficEnforcer {
     }
   }
 
-  private async removeLegacyIfbState(): Promise<void> {
-    if (!(await this.ifbManager.exists())) return;
-    await this.ifbManager.remove(this.lanInterface);
-  }
-
   private getFilterPriority(classId: string): number {
     const value = Number.parseInt(classId, 16);
-    return Math.min(value + 100, 65535);
+    return 100 + (value % 32000);
   }
 
   private async ensureRootState(interfaceName: string): Promise<void> {
@@ -73,37 +75,116 @@ export class SingleInterfaceIfbTrafficEnforcer implements TrafficEnforcer {
 
   private async ensureDeviceClass(interfaceName: string, classId: string, rate: string): Promise<void> {
     const classState = await this.tcStateReader.getClassState(interfaceName, classId);
+
     if (!classState.exists) {
-      await this.executor.execute("tc", TcBuilder.addClass(interfaceName, classId, rate).args);
-      return;
+      try {
+        await this.executor.execute("tc", TcBuilder.addClass(interfaceName, classId, rate).args);
+      } catch (error) {
+        /*
+         * A concurrent reconciliation/setup operation may have created the
+         * class after the state read. Treat only the kernel's "already exists"
+         * response as a benign race, then re-read and converge the rate.
+         */
+        if (!this.isAlreadyExistsTcObjectError(error)) throw error;
+
+        const refreshed = await this.tcStateReader.getClassState(interfaceName, classId);
+        if (!refreshed.exists) throw error;
+
+        if (refreshed.rate !== rate || refreshed.ceil !== rate) {
+          await this.executor.execute("tc", TcBuilder.changeClassRate(interfaceName, classId, rate).args);
+        }
+        return;
+      }
     }
+
     if (classState.rate !== rate || classState.ceil !== rate) {
       await this.executor.execute("tc", TcBuilder.changeClassRate(interfaceName, classId, rate).args);
     }
   }
 
-  private async ensureFilter(interfaceName: string, ip: string, classId: string, direction: TcTrafficDirection): Promise<void> {
-    const priority = this.getFilterPriority(classId);
+  private async ensureFilter(
+    interfaceName: string,
+    ip: string,
+    classId: string,
+    direction: TcTrafficDirection,
+  ): Promise<void> {
     const filterState = await this.tcStateReader.getFilterState(interfaceName, classId);
 
-    if (!filterState.exists) {
-      const command = direction === "download"
-        ? TcBuilder.addDownloadFilterByIp(interfaceName, ip, classId, priority)
-        : TcBuilder.addUploadFilterByIp(interfaceName, ip, classId, priority);
-      await this.executor.execute("tc", command.args);
-      return;
-    }
+    /*
+     * Once a filter for this class already matches the desired IP, its
+     * existing priority is valid. Do not churn it merely because the
+     * deterministic priority function changed or another class owns the
+     * preferred priority.
+     */
+    if (filterState.exists && filterState.ip === ip) return;
 
-    if (filterState.ip === ip && filterState.priority === priority) return;
+    const basePriority = this.getFilterPriority(classId);
+    const priority = await this.findAvailableFilterPriority(
+      interfaceName,
+      basePriority,
+      filterState.priority,
+    );
 
-    if (filterState.priority !== null) {
-      await this.executor.execute("tc", TcBuilder.deleteFilter(interfaceName, filterState.priority).args);
+    if (filterState.exists && filterState.priority !== null) {
+      await this.executor.execute(
+        "tc",
+        TcBuilder.deleteFilter(interfaceName, filterState.priority).args,
+      );
     }
 
     const command = direction === "download"
       ? TcBuilder.addDownloadFilterByIp(interfaceName, ip, classId, priority)
       : TcBuilder.addUploadFilterByIp(interfaceName, ip, classId, priority);
-    await this.executor.execute("tc", command.args);
+
+    try {
+      await this.executor.execute("tc", command.args);
+    } catch (error) {
+      if (!this.isAlreadyExistsTcObjectError(error)) throw error;
+
+      /*
+       * The priority may have been claimed between the read and add. Re-read
+       * state; if this class is already present with the desired IP, the
+       * operation is complete. Otherwise retry once with a freshly probed
+       * priority.
+       */
+      const refreshed = await this.tcStateReader.getFilterState(interfaceName, classId);
+      if (refreshed.exists && refreshed.ip === ip) return;
+
+      const retryPriority = await this.findAvailableFilterPriority(
+        interfaceName,
+        priority + 1,
+        refreshed.priority,
+      );
+      const retryCommand = direction === "download"
+        ? TcBuilder.addDownloadFilterByIp(interfaceName, ip, classId, retryPriority)
+        : TcBuilder.addUploadFilterByIp(interfaceName, ip, classId, retryPriority);
+
+      await this.executor.execute("tc", retryCommand.args);
+    }
+  }
+
+  private async findAvailableFilterPriority(
+    interfaceName: string,
+    basePriority: number,
+    ignoredPriority: number | null,
+  ): Promise<number> {
+    const filters = await this.tcStateReader.getDeviceFilters(interfaceName);
+    const used = new Set(
+      filters
+        .map((filter) => filter.priority)
+        .filter((priority) => priority !== ignoredPriority),
+    );
+
+    const minPriority = 100;
+    const maxPriority = 65535;
+    const span = maxPriority - minPriority + 1;
+
+    for (let offset = 0; offset < span; offset += 1) {
+      const priority = minPriority + ((basePriority - minPriority + offset) % span);
+      if (!used.has(priority)) return priority;
+    }
+
+    throw new Error(`No available tc filter priority on ${interfaceName}`);
   }
 
   private getClassId(device: Device, direction: TcTrafficDirection): string {
@@ -213,11 +294,13 @@ export class SingleInterfaceIfbTrafficEnforcer implements TrafficEnforcer {
       actualClasses.map((classState) => classState.classId.trim().toLowerCase()),
     );
 
-    // A filter is only valid when both its class exists in the kernel and its
-    // class is part of the desired state. This also removes orphan filters
-    // left behind by an interrupted/partial tc mutation or a previous class-ID
-    // mapping. An orphan filter must never survive reconciliation merely
-    // because its class-id happens to be expected by the DB.
+    /*
+     * A filter is only valid when both its class exists in the kernel and its
+     * class is part of the desired state. This also removes orphan filters
+     * left behind by an interrupted/partial tc mutation or a previous class-ID
+     * mapping. An orphan filter must never survive reconciliation merely
+     * because its class-id happens to be expected by the DB.
+     */
     for (const filter of actualFilters) {
       const classId = filter.classId.trim().toLowerCase();
       if (actualClassIds.has(classId) && expectedClassIds.has(classId)) continue;
@@ -239,11 +322,22 @@ export class SingleInterfaceIfbTrafficEnforcer implements TrafficEnforcer {
     }
   }
 
+  private isAlreadyExistsTcObjectError(error: unknown): boolean {
+    const message = this.errorMessage(error).toLowerCase();
+    return message.includes("file exists") ||
+      message.includes("already exists");
+  }
+
   private isMissingTcObjectError(error: unknown): boolean {
-    const message = error instanceof Error ? error.message : String(error);
-    const normalized = message.toLowerCase();
-    return normalized.includes("cannot find") ||
-      normalized.includes("no such file or directory") ||
-      normalized.includes("not found");
+    const message = this.errorMessage(error).toLowerCase();
+    return message.includes("cannot find") ||
+      message.includes("no such file or directory") ||
+      message.includes("not found");
+  }
+
+  private errorMessage(error: unknown): string {
+    if (error instanceof Error) return error.message;
+    if (typeof error === "string") return error;
+    return String(error);
   }
 }
