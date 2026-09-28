@@ -48,8 +48,58 @@ class FakeReader implements TcStateReader {
 
 const device = { mac: { toString: () => "60:81:10:02:3b:f1" }, ip: { toString: () => "192.168.1.115" } } as unknown as Device;
 
+test("initializeBaseState preserves the active IFB data path", async () => {
+  const executor = new FakeExecutor();
+  const ifb = new FakeIfb();
+  ifb.ensured = true;
+  const reader = new FakeReader();
+  const enforcer = new SingleInterfaceIfbTrafficEnforcer(100n, "eno1", executor, ifb, reader);
+
+  await enforcer.initializeBaseState();
+
+  assert.equal(ifb.removed, false);
+  assert.equal(ifb.ensured, true);
+  assert.equal(executor.calls.some((call) => call.command === "ip" && call.args.includes("delete")), false);
+});
+
 test("corrects physical download root class rate and ceil", async () => { const executor = new FakeExecutor(); const reader = new FakeReader(); reader.rootClass = { exists: true, rate: "50000000bit", ceil: "50000000bit" }; const enforcer = new SingleInterfaceIfbTrafficEnforcer(100n, "eno1", executor, new FakeIfb(), reader); await enforcer.initializeBaseState(); const changes = executor.calls.filter((call) => call.command === "tc" && call.args[0] === "class" && call.args[1] === "change"); assert.equal(changes.length, 1); assert.ok(changes.every((call) => call.args.includes("100000000bit"))); });
 test("download uses physical egress HTB with destination classifier", async () => { const executor = new FakeExecutor(); const reader = new FakeReader(); const ifb = new FakeIfb(); const enforcer = new SingleInterfaceIfbTrafficEnforcer(100n, "eno1", executor, ifb, reader); await enforcer.limitDownloadBits(device, 5000000n); const classAdd = executor.calls.find((call) => call.command === "tc" && call.args[0] === "class" && call.args[1] === "add" && call.args.includes("eno1") && call.args.includes(`1:${TcClassId.fromMac(device.mac.toString(), "download")}`)); assert.ok(classAdd); const filterAdd = executor.calls.find((call) => call.command === "tc" && call.args[0] === "filter" && call.args[1] === "add"); assert.ok(filterAdd); assert.ok(filterAdd.args.includes("eno1")); assert.ok(filterAdd.args.includes("dst")); assert.ok(filterAdd.args.includes("192.168.1.115/32")); assert.equal(ifb.ensured, false); });
+test("download filter priority probes around a collision", async () => {
+  const executor = new FakeExecutor();
+  const reader = new FakeReader();
+  const ifb = new FakeIfb();
+  const classId = TcClassId.fromMac(device.mac.toString(), "download");
+  const basePriority = 100 + (Number.parseInt(classId, 16) % 32000);
+  reader.filters = [{ classId: "dead", priority: basePriority, ip: "192.168.1.99" }];
+
+  const enforcer = new SingleInterfaceIfbTrafficEnforcer(100n, "eno1", executor, ifb, reader);
+  await enforcer.limitDownloadBits(device, 5000000n);
+
+  const filterAdd = executor.calls.find(
+    (call) => call.command === "tc" && call.args[0] === "filter" && call.args[1] === "add",
+  );
+  assert.ok(filterAdd);
+  const priorityIndex = filterAdd.args.indexOf("prio");
+  assert.notEqual(filterAdd.args[priorityIndex + 1], String(basePriority));
+});
+
+test("existing filter with the desired IP is not churned", async () => {
+  const executor = new FakeExecutor();
+  const reader = new FakeReader();
+  const ifb = new FakeIfb();
+  const classId = TcClassId.fromMac(device.mac.toString(), "download");
+  reader.classes = [{ classId, rate: "5000000bit", ceil: "5000000bit" }];
+  reader.filters = [{ classId, priority: 999, ip: "192.168.1.115" }];
+
+  const enforcer = new SingleInterfaceIfbTrafficEnforcer(100n, "eno1", executor, ifb, reader);
+  await enforcer.limitDownloadBits(device, 5000000n);
+
+  assert.equal(
+    executor.calls.some((call) => call.command === "tc" && call.args[0] === "filter" && ["add", "del"].includes(call.args[1] ?? "")),
+    false,
+  );
+});
+
 test("upload redirects physical ingress to IFB and shapes IFB egress by source", async () => { const executor = new FakeExecutor(); const reader = new FakeReader(); const ifb = new FakeIfb(); const enforcer = new SingleInterfaceIfbTrafficEnforcer(100n, "eno1", executor, ifb, reader); await enforcer.limitUploadBits(device, 7000000n); const ifbClassAdd = executor.calls.find((call) => call.command === "tc" && call.args[0] === "class" && call.args[1] === "add" && call.args.includes("ifb0")); assert.ok(ifbClassAdd); const ifbFilterAdd = executor.calls.find((call) => call.command === "tc" && call.args[0] === "filter" && call.args[1] === "add" && call.args.includes("ifb0")); assert.ok(ifbFilterAdd); assert.ok(ifbFilterAdd.args.includes("src")); assert.ok(ifbFilterAdd.args.includes("192.168.1.115/32")); assert.equal(ifb.redirects.includes("192.168.1.115"), true); });
 test("reconcile removes stale download state from physical egress", async () => { const executor = new FakeExecutor(); const reader = new FakeReader(); reader.classes = [{ classId: "2", rate: "500000bit", ceil: "500000bit" }]; reader.filters = [{ classId: "2", priority: 102, ip: "192.168.1.115" }]; const enforcer = new SingleInterfaceIfbTrafficEnforcer(100n, "eno1", executor, new FakeIfb(), reader); await enforcer.reconcileDownloadState(new Set()); const deletes = executor.calls.filter((call) => call.command === "tc" && call.args[0] === "filter" && call.args[1] === "del"); assert.equal(deletes.length, 1); assert.deepEqual(deletes[0]?.args.slice(-2), ["pref", "102"]); assert.equal(executor.calls.filter((call) => call.command === "tc" && call.args[0] === "class" && call.args[1] === "del").length, 1); });
 test("reconcile removes stale upload state from IFB and redirects", async () => { const executor = new FakeExecutor(); const reader = new FakeReader(); const ifb = new FakeIfb(); ifb.ensured = true; ifb.redirects = ["192.168.1.115", "192.168.1.116"]; reader.classes = [{ classId: "2", rate: "500000bit", ceil: "500000bit" }]; reader.filters = [{ classId: "2", priority: 102, ip: "192.168.1.115" }]; const enforcer = new SingleInterfaceIfbTrafficEnforcer(100n, "eno1", executor, ifb, reader); await enforcer.reconcileUploadState(new Set()); assert.deepEqual(ifb.redirects, []); assert.equal(executor.calls.filter((call) => call.command === "tc" && call.args[0] === "filter" && call.args[1] === "del").length, 1); assert.equal(executor.calls.filter((call) => call.command === "tc" && call.args[0] === "class" && call.args[1] === "del").length, 1); });
