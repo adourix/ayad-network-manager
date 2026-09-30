@@ -53,6 +53,40 @@ export class PrismaTrafficSampleRepository implements TrafficSampleRepository {
     return toDomain(row);
   }
 
+  async accumulateBucket(data: {
+    deviceId: number;
+    timestamp: Date;
+    downloadBytes: bigint;
+    uploadBytes: bigint;
+    downloadRate?: bigint | null;
+    uploadRate?: bigint | null;
+  }): Promise<TrafficSample> {
+    const row = await prisma.trafficSample.upsert({
+      where: {
+        deviceId_timestamp: {
+          deviceId: data.deviceId,
+          timestamp: data.timestamp,
+        },
+      },
+      create: {
+        deviceId: data.deviceId,
+        timestamp: data.timestamp,
+        downloadBytes: data.downloadBytes,
+        uploadBytes: data.uploadBytes,
+        downloadRate: data.downloadRate ?? null,
+        uploadRate: data.uploadRate ?? null,
+      },
+      update: {
+        downloadBytes: { increment: data.downloadBytes },
+        uploadBytes: { increment: data.uploadBytes },
+        downloadRate: data.downloadRate ?? null,
+        uploadRate: data.uploadRate ?? null,
+      },
+    });
+
+    return toDomain(row);
+  }
+
   async findHistory(data: {
     deviceId?: number;
     from: Date;
