@@ -262,7 +262,7 @@ export class TrafficAccountingService {
       bucket.lastTimestamp.getTime() - bucket.firstTimestamp.getTime(),
     );
 
-    await this.trafficSampleRepository.create({
+    await this.trafficSampleRepository.accumulateBucket({
       deviceId,
       timestamp: bucket.bucketStart,
       downloadBytes: bucket.downloadBytes,
