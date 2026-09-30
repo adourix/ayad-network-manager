@@ -155,4 +155,5 @@ export class IpBindingLifecycleService {
     } finally {
       this.running = false;
     }
-  }}
+  }
+}
