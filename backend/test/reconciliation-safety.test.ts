@@ -109,17 +109,17 @@ test("tc class identity is canonical across padded and kernel-rendered hexadecim
 });
 
 test("traffic reconciliation removes stale enforcement for an unvalidated identity but keeps the durable policy", async () => {
-  const reconciledDownload: string[][] = [];
+  let clearBaseStateCalls = 0;
   const enforcer = {
     initializeBaseState: async () => {},
-    clearBaseState: async () => {},
+    clearBaseState: async () => { clearBaseStateCalls += 1; },
     limitDownload: async () => {},
     limitUpload: async () => {},
     limitDownloadBits: async () => {},
     limitUploadBits: async () => {},
     clearDownload: async () => {},
     clearUpload: async () => {},
-    reconcileDownloadState: async (ids: Set<string>) => reconciledDownload.push([...ids]),
+    reconcileDownloadState: async () => {},
     reconcileUploadState: async () => {},
   };
   const unvalidated = { ...device(), identityValidated: false, identitySource: "PROXY_UNCONFIRMED" };
@@ -132,6 +132,6 @@ test("traffic reconciliation removes stale enforcement for an unvalidated identi
 
   await service.reconcile();
 
-  assert.deepEqual(reconciledDownload, [[]]);
+  assert.equal(clearBaseStateCalls, 1);
   assert.equal(policy.downloadLimit, 10n);
 });
