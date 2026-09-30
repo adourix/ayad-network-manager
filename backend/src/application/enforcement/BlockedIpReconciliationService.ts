@@ -127,7 +127,7 @@ export class BlockedIpReconciliationService {
             // Positive DHCP evidence says this blocked proxy-backed device moved.
             // Release the old IP here; the next expected-state pass installs the
             // new address without relying on absence from discovery.
-            await this.releaseIp(blockedIp, `device ${boundDevice.id} moved to ${currentIp}`);
+            await this.releaseIp(blockedIp, `device ${boundDevice.id} moved to ${currentIp}`, boundDevice.id);
             continue;
           }
         }
@@ -137,7 +137,7 @@ export class BlockedIpReconciliationService {
         // triggers.
         const dhcpOwner = activeDhcpMacByIp.get(blockedIp);
         if (dhcpOwner && (!boundDevice || dhcpOwner !== normalizeMac(boundDevice.mac.toString()))) {
-          await this.releaseIp(blockedIp, `DHCP reassigned to ${dhcpOwner}`);
+          await this.releaseIp(blockedIp, `DHCP reassigned to ${dhcpOwner}`, binding?.deviceId);
         }
       }
 
@@ -164,9 +164,9 @@ export class BlockedIpReconciliationService {
     }
   }
 
-  private async releaseIp(ip: string, reason: string): Promise<void> {
+  private async releaseIp(ip: string, reason: string, deviceId?: number): Promise<void> {
     await this.deviceBlocker!.unblockIp!(ip);
-    await this.blockedDeviceRepository?.releaseIp?.(ip, reason);
+    if (deviceId !== undefined) {\n      await this.blockedDeviceRepository?.releaseIp?.(deviceId, ip, reason);\n    }
     console.log(`[blocked-ip] removed ${ip}: ${reason}`);
   }
 }
