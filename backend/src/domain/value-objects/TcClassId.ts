@@ -8,6 +8,11 @@ export type TcTrafficDirection = "download" | "upload";
  * value object only provides a deterministic, topology-independent identity.
  */
 export class TcClassId {
+  static normalize(classId: string): string {
+    const normalized = classId.trim().toLowerCase().replace(/^0+(?=[0-9a-f])/i, "");
+    return normalized || "0";
+  }
+
   static fromMac(mac: string, direction: TcTrafficDirection = "upload"): string {
     const normalized = mac.trim().toLowerCase();
     const hash = createHash("sha256").update(`${direction}:${normalized}`).digest("hex");
@@ -16,6 +21,6 @@ export class TcClassId {
     const value = Number.parseInt(hash.slice(0, 4), 16) || 2;
     const normalizedValue = value === 1 ? 2 : value;
 
-    return normalizedValue.toString(16).padStart(4, "0");
+    return normalizedValue.toString(16);
   }
 }
