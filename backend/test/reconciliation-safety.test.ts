@@ -51,6 +51,7 @@ test("traffic reconciliation retains desired tc class after a transient apply fa
 test("IP binding is not released merely because the original DHCP lease disappears", async () => {
   const released: string[] = [];
   const unblocked: string[] = [];
+  let bindings: Array<{ deviceId: number; ip: string }> = [{ deviceId: 1, ip }];
   const service = new IpBindingLifecycleService(
     { findAll: async () => [device()] } as any,
     { findByDeviceId: async () => ({ blocked: true }) } as any,
@@ -98,4 +99,39 @@ test("IP binding is released only after positive evidence that another DHCP MAC 
 
   assert.deepEqual(released, [ip]);
   assert.deepEqual(unblocked, [ip]);
+});
+
+
+test("tc class identity is canonical across padded and kernel-rendered hexadecimal forms", () => {
+  assert.equal(TcClassId.normalize("046d"), "46d");
+  assert.equal(TcClassId.normalize("1"), "1");
+  assert.equal(TcClassId.normalize("0"), "0");
+});
+
+test("traffic reconciliation removes stale enforcement for an unvalidated identity but keeps the durable policy", async () => {
+  const reconciledDownload: string[][] = [];
+  const enforcer = {
+    initializeBaseState: async () => {},
+    clearBaseState: async () => {},
+    limitDownload: async () => {},
+    limitUpload: async () => {},
+    limitDownloadBits: async () => {},
+    limitUploadBits: async () => {},
+    clearDownload: async () => {},
+    clearUpload: async () => {},
+    reconcileDownloadState: async (ids: Set<string>) => reconciledDownload.push([...ids]),
+    reconcileUploadState: async () => {},
+  };
+  const unvalidated = { ...device(), identityValidated: false, identitySource: "PROXY_UNCONFIRMED" };
+  const policy = { downloadLimit: 10n, uploadLimit: null, quotaEnforcedAction: null };
+  const service = new TrafficReconciliationService(
+    { findAll: async () => [unvalidated] } as any,
+    { findByDeviceId: async () => policy } as any,
+    enforcer as any,
+  );
+
+  await service.reconcile();
+
+  assert.deepEqual(reconciledDownload, [[]]);
+  assert.equal(policy.downloadLimit, 10n);
 });
