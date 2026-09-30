@@ -76,10 +76,10 @@ export class TrafficReconciliationService {
         if (!policy || !device.ip) continue;
         const throttled = policy.quotaEnforcedAction === "throttle";
         if (policy.downloadLimit !== null || throttled) {
-          expectedDownloadClasses.add(TcClassId.fromMac(device.mac.toString(), "download"));
+          expectedDownloadClasses.add(TcClassId.normalize(TcClassId.fromMac(device.mac.toString(), "download")));
         }
         if (policy.uploadLimit !== null || throttled) {
-          expectedUploadClasses.add(TcClassId.fromMac(device.mac.toString(), "upload"));
+          expectedUploadClasses.add(TcClassId.normalize(TcClassId.fromMac(device.mac.toString(), "upload")));
         }
       }
 
