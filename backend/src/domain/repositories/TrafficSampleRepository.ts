@@ -10,6 +10,15 @@ export interface TrafficSampleRepository {
     uploadRate?: bigint | null;
   }): Promise<TrafficSample>;
 
+  accumulateBucket(data: {
+    deviceId: number;
+    timestamp: Date;
+    downloadBytes: bigint;
+    uploadBytes: bigint;
+    downloadRate?: bigint | null;
+    uploadRate?: bigint | null;
+  }): Promise<TrafficSample>;
+
   findHistory(data: {
     deviceId?: number;
     from: Date;
