@@ -166,7 +166,9 @@ export class BlockedIpReconciliationService {
 
   private async releaseIp(ip: string, reason: string, deviceId?: number): Promise<void> {
     await this.deviceBlocker!.unblockIp!(ip);
-    if (deviceId !== undefined) {\n      await this.blockedDeviceRepository?.releaseIp?.(deviceId, ip, reason);\n    }
+    if (deviceId !== undefined) {
+      await this.blockedDeviceRepository?.releaseIp?.(deviceId, ip, reason);
+    }
     console.log(`[blocked-ip] removed ${ip}: ${reason}`);
   }
 }
