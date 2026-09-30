@@ -85,8 +85,8 @@ test("IP binding is released only after positive evidence that another DHCP MAC 
     { findByDeviceId: async () => ({ blocked: true }) } as any,
     { read: async () => [{ expiry: 0, mac: otherMac, ip, hostname: null, clientId: null }] } as any,
     {
-      activeBindings: async () => [{ deviceId: 1, ip }],
-      releaseIp: async (_deviceId: number, bindingIp: string) => released.push(bindingIp),
+      activeBindings: async () => bindings,
+      releaseIp: async (_deviceId: number, bindingIp: string) => { released.push(bindingIp); bindings = []; },
       activeIps: async () => [],
       recordBlock: async () => {},
       releaseBlock: async () => {},
