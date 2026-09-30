@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { TrafficReconciliationService } from "../src/application/enforcement/TrafficReconciliationService.js";
 import { IpBindingLifecycleService } from "../src/application/enforcement/IpBindingLifecycleService.js";
+import { TcClassId } from "../src/domain/value-objects/TcClassId.js";
 
 const mac = "90:2e:16:4c:e0:fd";
 const ip = "192.168.1.98";
@@ -44,7 +45,7 @@ test("traffic reconciliation retains desired tc class after a transient apply fa
   await service.reconcile();
 
   assert.equal(expected.length, 1);
-  assert.ok(expected[0].has("46d"));
+  assert.ok(expected[0].has(TcClassId.fromMac(mac, "download")));
 });
 
 test("IP binding is not released merely because the original DHCP lease disappears", async () => {
@@ -55,8 +56,11 @@ test("IP binding is not released merely because the original DHCP lease disappea
     { findByDeviceId: async () => ({ blocked: true }) } as any,
     { read: async () => [] } as any,
     {
-      activeBindings: async () => [{ deviceId: 1, ip }],
-      releaseIp: async (_deviceId: number, bindingIp: string) => released.push(bindingIp),
+      activeBindings: async () => bindings,
+      releaseIp: async (_deviceId: number, bindingIp: string) => {
+        released.push(bindingIp);
+        bindings = [];
+      },
       activeIps: async () => [ip],
       recordBlock: async () => {},
       releaseBlock: async () => {},
@@ -74,6 +78,7 @@ test("IP binding is released only after positive evidence that another DHCP MAC 
   const released: string[] = [];
   const unblocked: string[] = [];
   const otherMac = "aa:bb:cc:dd:ee:ff";
+  let bindings: Array<{ deviceId: number; ip: string }> = [{ deviceId: 1, ip }];
 
   const service = new IpBindingLifecycleService(
     { findAll: async () => [device()] } as any,
