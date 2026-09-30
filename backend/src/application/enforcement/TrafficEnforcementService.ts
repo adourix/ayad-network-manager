@@ -49,8 +49,12 @@ export class TrafficEnforcementService {
     if (!device.identityValidated) throw new Error(`Device identity is not validated: ${mac}`);
     this.trafficPolicyValidator.validate(device, input);
     try {
-      await this.trafficEnforcer.limitDownload(device, input);
+      // PostgreSQL is the durable desired state. Persist it before touching
+      // the kernel so a successful API request cannot be lost if the process
+      // dies after tc mutation, and a failed tc operation remains retryable
+      // through background reconciliation.
       await this.policyRepository.upsert(device.id, { downloadLimit: input.rateMbps });
+      await this.trafficEnforcer.limitDownload(device, input);
       await this.operationsRepository?.audit({ action: "set-download-limit", mac: device.mac.toString(), deviceId: device.id, details: { rateMilliMbps: input.rateMbps.toString(), result: "success" } });
     } catch (error) {
       await this.operationsRepository?.audit({ action: "set-download-limit", mac: device.mac.toString(), deviceId: device.id, details: { result: "failure", error: error instanceof Error ? error.message : String(error) } });
@@ -64,8 +68,10 @@ export class TrafficEnforcementService {
     if (!device.identityValidated) throw new Error(`Device identity is not validated: ${mac}`);
     this.trafficPolicyValidator.validate(device, input);
     try {
-      await this.trafficEnforcer.limitUpload(device, input);
+      // Persist desired state first; reconciliation repairs actual kernel
+      // state if the immediate tc operation fails.
       await this.policyRepository.upsert(device.id, { uploadLimit: input.rateMbps });
+      await this.trafficEnforcer.limitUpload(device, input);
       await this.operationsRepository?.audit({ action: "set-upload-limit", mac: device.mac.toString(), deviceId: device.id, details: { rateMilliMbps: input.rateMbps.toString(), result: "success" } });
     } catch (error) {
       await this.operationsRepository?.audit({ action: "set-upload-limit", mac: device.mac.toString(), deviceId: device.id, details: { result: "failure", error: error instanceof Error ? error.message : String(error) } });
@@ -77,8 +83,10 @@ export class TrafficEnforcementService {
     const device = await resolveDeviceIdentifier(this.deviceRepository, mac);
     if (!device) throw new Error(`Device not found: ${mac}`);
     try {
-      await this.trafficEnforcer.clearDownload(device);
+      // Remove the desired limit first. If tc cleanup fails, the next
+      // reconciliation cycle will converge the kernel to the cleared state.
       await this.policyRepository.upsert(device.id, { downloadLimit: null });
+      await this.trafficEnforcer.clearDownload(device);
       await this.clearBaseStateWhenUnused();
       await this.operationsRepository?.audit({ action: "clear-download-limit", mac: device.mac.toString(), deviceId: device.id, details: { result: "success" } });
     } catch (error) {
@@ -91,8 +99,8 @@ export class TrafficEnforcementService {
     const device = await resolveDeviceIdentifier(this.deviceRepository, mac);
     if (!device) throw new Error(`Device not found: ${mac}`);
     try {
-      await this.trafficEnforcer.clearUpload(device);
       await this.policyRepository.upsert(device.id, { uploadLimit: null });
+      await this.trafficEnforcer.clearUpload(device);
       await this.clearBaseStateWhenUnused();
       await this.operationsRepository?.audit({ action: "clear-upload-limit", mac: device.mac.toString(), deviceId: device.id, details: { result: "success" } });
     } catch (error) {
