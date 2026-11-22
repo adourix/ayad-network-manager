@@ -13,8 +13,8 @@ RUN npm run build
 # Enforcement runs compiled JavaScript only. Dev dependencies and Prisma CLI
 # are intentionally excluded from its production dependency layer.
 FROM node:22-bookworm-slim AS production-deps
-WORKDIR /src/backend
-COPY backend/package*.json ./
+WORKDIR /src/enforcement
+COPY backend/deploy/enforcement/package*.json ./
 RUN --mount=type=cache,target=/root/.npm npm ci --omit=dev --ignore-scripts
 
 FROM node:22-bookworm-slim
@@ -30,7 +30,7 @@ RUN apt-get update \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
-COPY --from=production-deps /src/backend/node_modules ./node_modules
+COPY --from=production-deps /src/enforcement/node_modules ./node_modules
 COPY --from=build /src/backend/package.json ./package.json
 COPY --from=build /src/backend/dist ./dist
 
