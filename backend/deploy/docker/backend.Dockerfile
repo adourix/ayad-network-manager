@@ -1,4 +1,3 @@
-# Build the frontend independently so its toolchain never enters the runtime image.
 FROM node:22-bookworm-slim AS frontend-build
 WORKDIR /src/frontend
 COPY frontend/package*.json ./
@@ -6,7 +5,6 @@ RUN npm ci
 COPY frontend/ ./
 RUN npm run build
 
-# Build the backend and generate Prisma Client against the locked schema.
 FROM node:22-bookworm-slim AS backend-build
 WORKDIR /src/backend
 COPY backend/package*.json ./
@@ -14,14 +12,20 @@ RUN npm ci
 COPY backend/ ./
 RUN npm run build
 
-# Keep Prisma CLI and build tooling out of the runtime dependency tree.
+# CLI-only stage for one-shot schema deployment; not included in backend runtime.
+FROM node:22-bookworm-slim AS migration
+WORKDIR /app
+COPY --from=backend-build /src/backend/package*.json ./
+COPY --from=backend-build /src/backend/node_modules ./node_modules
+COPY --from=backend-build /src/backend/prisma ./prisma
+CMD ["./node_modules/.bin/prisma", "migrate", "deploy", "--schema=./prisma/schema.prisma"]
+
 FROM node:22-bookworm-slim AS backend-production-deps
 WORKDIR /src/backend
 COPY backend/package*.json ./
 RUN npm ci --omit=dev --ignore-scripts \
     && npm cache clean --force
 
-# Runtime image: production node_modules, compiled code, migrations and assets only.
 FROM node:22-bookworm-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production \
@@ -41,6 +45,4 @@ RUN mkdir -p /etc/network-control-system /run/network-control /var/lib/network-c
 
 USER node
 EXPOSE 5000
-
-# Migrations run in a dedicated deployment step, not on every restart.
 CMD ["node", "dist/bootstrap.js"]
