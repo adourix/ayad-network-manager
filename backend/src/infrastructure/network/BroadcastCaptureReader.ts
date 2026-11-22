@@ -22,12 +22,12 @@ export class BroadcastCaptureReader {
     if (this.process) return; this.lastError = null; this.process = spawn("tcpdump", buildBroadcastCaptureArgs(this.iface));
     this.process.stdout.on("data", (chunk: Buffer) => {
       this.stdoutRemainder += chunk.toString();
-      if (this.stdoutRemainder.length > MAX_TCPDUMP_LINE_BYTES && !this.stdoutRemainder.includes("\\n")) {
+      if (this.stdoutRemainder.length > MAX_TCPDUMP_LINE_BYTES && !this.stdoutRemainder.includes("\n")) {
         this.stdoutRemainder = "";
         this.packetLines = [];
         return;
       }
-      const lines = this.stdoutRemainder.split("\\n");
+      const lines = this.stdoutRemainder.split("\n");
       this.stdoutRemainder = lines.pop() ?? "";
       if (this.stdoutRemainder.length > MAX_TCPDUMP_LINE_BYTES) {
         this.stdoutRemainder = "";
