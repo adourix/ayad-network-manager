@@ -3,6 +3,8 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 export interface CapturedIdentity { mac: string; ethernetSource?: string; sourceIp?: string; capturedAt: Date; }
 export interface LastDhcpMetadata { messageType: string | null; clientMac: string | null; ethernetSource: string | null; sourceIp: string | null; capturedAt: Date; }
 export interface BroadcastCaptureStatus { running: boolean; interface: string; packetsSeen: number; dhcpPacketsSeen: number; identitiesRecorded: number; lastPacketAt: Date | null; lastError: string | null; lastDhcp: LastDhcpMetadata | null; }
+const MAX_TCPDUMP_LINE_BYTES = 16 * 1024;
+const MAX_PACKET_LINES = 128;
 const MAC_REGEX = /^([0-9a-f]{2}:){5}[0-9a-f]{2}$/i;
 const IPV4_REGEX = /^(?:\d{1,3}\.){3}\d{1,3}$/;
 const ETHERNET_HEADER_REGEX = /([0-9a-f]{2}(?::[0-9a-f]{2}){5})\s+>\s+([0-9a-f]{2}(?::[0-9a-f]{2}){5})/i;
@@ -18,12 +20,12 @@ export class BroadcastCaptureReader {
   constructor(private readonly iface: string) {}
   start(): void {
     if (this.process) return; this.lastError = null; this.process = spawn("tcpdump", buildBroadcastCaptureArgs(this.iface));
-    this.process.stdout.on("data", (chunk: Buffer) => { this.stdoutRemainder += chunk.toString(); const lines = this.stdoutRemainder.split("\n"); this.stdoutRemainder = lines.pop() ?? ""; for (const line of lines) this.acceptTcpdumpLine(line); });
+    this.process.stdout.on("data", (chunk: Buffer) => { this.stdoutRemainder += chunk.toString(); if (this.stdoutRemainder.length > MAX_TCPDUMP_LINE_BYTES && !this.stdoutRemainder.includes("\n")) { this.stdoutRemainder = ""; this.packetLines = []; return; } const lines = this.stdoutRemainder.split("\n"); this.stdoutRemainder = lines.pop() ?? ""; if (this.stdoutRemainder.length > MAX_TCPDUMP_LINE_BYTES) this.stdoutRemainder = ""; for (const line of lines) this.acceptTcpdumpLine(line); });
     this.process.stdout.on("end", () => { if (this.stdoutRemainder) this.acceptTcpdumpLine(this.stdoutRemainder); this.flushPacket(); this.stdoutRemainder = ""; });
     this.process.stderr.on("data", (chunk: Buffer) => { const message = chunk.toString().trim(); if (message && !/tcpdump: listening on /i.test(message)) this.lastError = message; });
     this.process.once("error", (error) => { this.lastError = error.message; this.process = undefined; }); this.process.once("close", () => { this.flushPacket(); this.process = undefined; });
   }
-  private acceptTcpdumpLine(line: string): void { if (ETHERNET_HEADER_REGEX.test(line)) { this.flushPacket(); this.packetsSeen += 1; this.lastPacketAt = new Date(); this.packetLines = [line]; return; } if (this.packetLines.length > 0) this.packetLines.push(line); }
+  private acceptTcpdumpLine(line: string): void { if (ETHERNET_HEADER_REGEX.test(line)) { this.flushPacket(); this.packetsSeen += 1; this.lastPacketAt = new Date(); this.packetLines = [line]; return; } if (this.packetLines.length > 0) { if (this.packetLines.length < MAX_PACKET_LINES) this.packetLines.push(line); else this.packetLines = []; } }
   private flushPacket(): void { if (this.packetLines.length === 0) return; const lines = this.packetLines; this.packetLines = []; const identity = this.parsePacket(lines); if (identity) { this.identities.push(identity); if (this.identities.length > 512) this.identities.shift(); } }
   parsePacket(packet: string | string[]): CapturedIdentity | null {
     const text = Array.isArray(packet) ? packet.join("\n") : packet; const ethernetMac = text.match(ETHERNET_HEADER_REGEX)?.[1]?.toLowerCase(); const isDhcp = /\b(?:BOOTP|DHCP)\b/i.test(text); if (!ethernetMac || !MAC_REGEX.test(ethernetMac)) return null; const capturedAt = new Date();
