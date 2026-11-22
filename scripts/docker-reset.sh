@@ -34,6 +34,7 @@ reset_database() {
   docker volume rm "$db_volume"
   docker compose up -d db
   docker compose --profile migrate run --rm migrate
+  docker image rm ayad-network-manager:migrate >/dev/null 2>&1 || true
 }
 
 MODE="${1:-}"
