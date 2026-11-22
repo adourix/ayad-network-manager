@@ -64,7 +64,7 @@ function validRequestShape(value: unknown): value is Request {
     && candidate.args.every((arg) => typeof arg === "string" && arg.length <= 512 && !arg.includes("\\0"));
 }
 async function drain(): Promise<void> { if (running) return; running = true; try { while (priority.length || background.length) { const job = priority.shift() ?? background.shift(); if (job) await job(); } } finally { running = false; } }
-function schedule(job: Job, isBackground: boolean): void { if (isBackground) { if (background.length >= maxBackgroundQueue) throw new Error("background enforcement queue overloaded"); background.push(job); } else priority.push(job); void drain(); }
+function schedule(job: Job, isBackground: boolean): void { if (isBackground) { if (background.length >= maxBackgroundQueue) throw new Error("background enforcement queue overloaded"); background.push(job); } else { if (priority.length >= maxPriorityQueue) throw new Error("priority enforcement queue overloaded"); priority.push(job); } void drain(); }
 async function executeVpnConfigWrite(args: string[]): Promise<{ stdout: string; stderr: string }> {
   const content = args.slice(1).join("");
   if (!content || content.length > 32_000) throw new Error("sing-box config payload is invalid");
