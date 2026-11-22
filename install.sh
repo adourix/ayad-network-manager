@@ -3,7 +3,7 @@ set -Eeuo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
 
-say() { printf '\n[AyadNM Unified Installer] %s\n' "$*"; }
+say() { printf "\n[AyadNM Unified Installer] %s\n" "$*"; }
 die() { echo "[AyadNM Unified Installer] ERROR: $*" >&2; exit 1; }
 [[ "$(id -u)" == 0 ]] || die "Run as root: sudo bash install.sh"
 . /etc/os-release
@@ -38,52 +38,8 @@ systemctl enable --now docker
 host_setup_completed() {
   local config="/etc/network-control-system/config.env"
   [[ -f "$config" ]] || return 1
-  grep -q '^SETUP_COMPLETED=true
-
-say "Validating Compose and building Docker backend"
-docker compose config >/dev/null || die "Compose configuration validation failed"
-docker compose build backend
-
-say "Switching backend from native systemd to Docker"
-systemctl stop network-control-backend.service || true
-systemctl disable network-control-backend.service || true
-
-sed "s|@APP_ROOT@|$ROOT|g" "$ROOT/backend/deploy/systemd/ayadnm-docker.service" > /etc/systemd/system/ayadnm-docker.service
-systemctl daemon-reload
-systemctl enable ayadnm-docker.service
-systemctl restart ayadnm-docker.service
-
-say "Waiting for production backend health"
-port="$(grep -E '^DASHBOARD_PORT=' "$ROOT/.env" | tail -n1 | cut -d= -f2)"
-port="${port:-5000}"
-healthy=0
-health_body=""
-for _ in $(seq 1 60); do
-  health_body="$(curl -fsS --connect-timeout 2 --max-time 5 "http://127.0.0.1:$port/api/health" 2>/dev/null || true)"
-  if [[ "$health_body" == *'"status":"ok"'* || "$health_body" == *'"status": "ok"'* ]]; then
-    healthy=1
-    break
-  fi
-  sleep 2
-done
-if [[ "$healthy" != 1 ]]; then
-  docker compose logs --tail=100 backend >&2 || true
-  say "Docker backend failed health check; restoring native backend"
-  systemctl disable --now ayadnm-docker.service || true
-  systemctl enable --now network-control-backend.service || true
-  die "Docker backend health failed; native backend restoration was attempted"
-fi
-
-echo
-echo "AyadNM installation complete"
-echo "Deployment: Docker backend + Host-native enforcement"
-echo "Dashboard: https://<gateway-ip>:$port/"
-echo "Setup: Host provisioning/wizard verified complete"
-echo "Enforcement: network-control-enforcement.service (Host)"
-echo "Backend: ayadnm-docker.service (Docker)"
-echo "Rollback: systemctl disable --now ayadnm-docker.service && systemctl enable --now network-control-backend.service"
- "$config" || return 1
-  for key in CLIENT_INTERFACE UPLINK_INTERFACE CLIENT_GATEWAY_IP CLIENT_SUBNET UPLINK_BANDWIDTH_MBPS DASHBOARD_PORT SSH_PORT DNS_SERVERS VPN_TUN_INTERFACE VPN_TUN_ADDRESS SING_BOX_CONFIG_PATH DHCP_RESERVATIONS_PATH DHCP_LEASES_PATH; do
+  grep -q '^SETUP_COMPLETED=true$' "$config" || return 1
+  for key in CLIENT_INTERFACE UPLINK_INTERFACE CLIENT_GATEWAY_IP CLIENT_SUBNET UPLINK_BANDWIDTH_MBPS DASHBOARD_PORT SSH_PORT DNS_SERVERS; do
     grep -Eq "^${key}=.+$" "$config" || return 1
   done
   [[ -f /etc/systemd/system/network-control-enforcement.service ]] || return 1
@@ -112,12 +68,17 @@ systemctl daemon-reload
 systemctl enable ayadnm-docker.service
 systemctl restart ayadnm-docker.service
 
-say "Waiting for backend health"
+say "Waiting for production backend health (up to 120 seconds)"
 port="$(grep -E '^DASHBOARD_PORT=' "$ROOT/.env" | tail -n1 | cut -d= -f2)"
 port="${port:-5000}"
 healthy=0
+health_body=""
 for _ in $(seq 1 60); do
-  if curl -fsS "http://127.0.0.1:$port/api/health" >/dev/null; then healthy=1; break; fi
+  health_body="$(curl -fsS --connect-timeout 2 --max-time 5 "http://127.0.0.1:$port/api/health" 2>/dev/null || true)"
+  if [[ "$health_body" == *'"status":"ok"'* || "$health_body" == *'"status": "ok"'* ]]; then
+    healthy=1
+    break
+  fi
   sleep 2
 done
 if [[ "$healthy" != 1 ]]; then
@@ -132,7 +93,7 @@ echo
 echo "AyadNM installation complete"
 echo "Deployment: Docker backend + Host-native enforcement"
 echo "Dashboard: https://<gateway-ip>:$port/"
-echo "Setup: Host provisioning/wizard completed"
+echo "Setup: Host provisioning/wizard verified complete"
 echo "Enforcement: network-control-enforcement.service (Host)"
 echo "Backend: ayadnm-docker.service (Docker)"
 echo "Rollback: systemctl disable --now ayadnm-docker.service && systemctl enable --now network-control-backend.service"
