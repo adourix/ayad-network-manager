@@ -13,3 +13,11 @@ certs
 *.log
 coverage
 .DS_Store
+
+# Files not required by container builds
+**/*.md
+backend/test
+backend/.agents
+frontend/electron
+frontend/release
+frontend/.oxlintrc.json
