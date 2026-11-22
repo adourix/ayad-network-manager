@@ -37,6 +37,10 @@ jobs:
         run: |
           npm audit --json > dependency-audit.json || true
           node -e 'const r=require("./dependency-audit.json"); console.log(JSON.stringify(r.metadata?.vulnerabilities||{},null,2)); for(const [name,v] of Object.entries(r.vulnerabilities||{})) console.log(name+" | "+v.severity+" | fix="+JSON.stringify(v.fixAvailable))'
+      - name: Require zero dependency audit findings
+        run: |
+          node -e 'const r=require("./dependency-audit.json"); const v=r.metadata?.vulnerabilities||{}; const total=(v.high||0)+(v.critical||0); console.log("High + critical:",total); if(total>0) process.exit(1)'
+
       - name: Commit tested lockfile updates
         run: |
           git config user.name "github-actions[bot]"
@@ -50,6 +54,7 @@ jobs:
           fi
 
       - name: Upload updated package metadata
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: backend-dependency-update-preview
