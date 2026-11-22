@@ -48,3 +48,13 @@ test("tc read probes are excluded from audit while tc mutations are recorded", a
   await wrapped.execute("tc", ["qdisc", "add", "dev", "br-lan", "root", "htb"]);
   assert.equal(audit.entries.length, 2);
 });
+
+test("sing-box configuration audit redacts the configuration payload", async () => {
+  const executor = new FakeExecutor(); const audit = new FakeAudit();
+  const wrapped = new AuditedSystemCommandExecutor(executor, audit as unknown as OperationsRepository);
+  const secretPayload = JSON.stringify({ outbound: { password: "super-secret-token" } });
+  await wrapped.execute("write-sing-box-config", ["/etc/sing-box/config.json", secretPayload]);
+  const before = audit.entries[0]?.details as { args?: string[] } | undefined;
+  assert.deepEqual(before?.args, ["/etc/sing-box/config.json", `payload-bytes=${Buffer.byteLength(secretPayload, "utf8")}`]);
+  assert.equal(JSON.stringify(audit.entries).includes("super-secret-token"), false);
+});
