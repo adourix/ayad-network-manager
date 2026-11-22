@@ -3,7 +3,7 @@ FROM node:22-bookworm-slim AS build
 WORKDIR /src/backend
 COPY backend/package*.json ./
 RUN --mount=type=cache,target=/root/.npm npm ci
-COPY backend/prisma ./prisma
+COPY backend/prisma/schema.prisma ./prisma/schema.prisma
 COPY backend/prisma.config.ts ./prisma.config.ts
 COPY backend/tsconfig.json ./tsconfig.json
 COPY backend/src ./src
