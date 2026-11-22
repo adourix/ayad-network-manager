@@ -28,6 +28,31 @@ export class PrismaNeighborObservationRepository implements NeighborObservationR
     return rows[0]?.consecutiveCount ?? 1;
   }
 
+  async observeMany(observations: Array<{ mac: string; ip: string; state: string }>, seenAt: Date): Promise<Map<string, number>> {
+    if (observations.length === 0) return new Map();
+    const macs = observations.map((item) => item.mac);
+    const ips = observations.map((item) => item.ip);
+    const states = observations.map((item) => item.state);
+    const timestamps = observations.map(() => seenAt);
+    const rows = await prisma.$queryRaw<Array<{ mac: string; ip: string; consecutiveCount: number }>>`
+      INSERT INTO "neighbor_observations"
+        ("mac", "ip", "neighborState", "consecutiveCount", "lastSeen")
+      SELECT mac, ip, state, 1, seen_at
+      FROM unnest(${macs}::text[], ${ips}::text[], ${states}::text[], ${timestamps}::timestamptz[])
+        AS input(mac, ip, state, seen_at)
+      ON CONFLICT ("mac", "ip") DO UPDATE SET
+        "neighborState" = EXCLUDED."neighborState",
+        "consecutiveCount" = CASE
+          WHEN "neighbor_observations"."neighborState" = EXCLUDED."neighborState"
+            AND "neighbor_observations"."lastSeen" < EXCLUDED."lastSeen"
+          THEN "neighbor_observations"."consecutiveCount" + 1
+          ELSE 1
+        END,
+        "lastSeen" = EXCLUDED."lastSeen"
+      RETURNING "mac", "ip", "consecutiveCount"
+    `;
+    return new Map(rows.map((row) => [`${row.mac}|${row.ip}`, row.consecutiveCount]));
+  }
   async resetMissing(_keys: string[], seenAt: Date): Promise<void> {
     // Current neighbors are upserted with seenAt before this method runs.
     // This timestamp update replaces a full table read and JS-side scan.
