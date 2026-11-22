@@ -5,8 +5,6 @@ import type { DeviceDiscoveryService } from "../devices/DeviceDiscoveryService.j
 import type { TrafficUsageReader } from "./TrafficUsageReader.js";
 import type { QuotaService } from "../quota/QuotaService.js";
 
-import { MacAddress } from "../../domain/value-objects/MacAddress.js";
-
 interface PreviousUsage {
   downloadBytes: bigint;
   uploadBytes: bigint;
@@ -292,9 +290,5 @@ export class TrafficAccountingService {
   private calculateRate(bytes: bigint, elapsedMs: number): bigint | null {
     if (elapsedMs <= 0) return null;
     return (bytes * 1000n) / BigInt(elapsedMs);
-  }
-
-  private createMacAddress(mac: string): MacAddress {
-    return MacAddress.create(mac);
   }
 }
