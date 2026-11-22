@@ -22,6 +22,7 @@ function floorToDay(timestampMs: number): Date {
  */
 export class TrafficRetentionService {
   private timer: NodeJS.Timeout | undefined;
+  private running = false;
 
   constructor(
     private readonly intervalMs = HOUR_MS,
@@ -32,7 +33,9 @@ export class TrafficRetentionService {
   async start(): Promise<void> {
     if (this.timer) return;
     await this.run();
-    this.timer = setInterval(() => void this.run(), this.intervalMs);
+    this.timer = setInterval(() => {
+      if (!this.running) void this.run();
+    }, this.intervalMs);
   }
 
   stop(): void {
@@ -42,6 +45,9 @@ export class TrafficRetentionService {
   }
 
   async run(): Promise<void> {
+    if (this.running) return;
+    this.running = true;
+    try {
     const now = Date.now();
 
     // Align retention boundaries to bucket boundaries. This prevents a
@@ -63,7 +69,6 @@ export class TrafficRetentionService {
         sum("uploadBytes")
       FROM "traffic_samples"
       WHERE "timestamp" < ${rawCutoff}
-        AND "timestamp" >= ${hourlyCutoff}
       GROUP BY "deviceId", date_trunc('hour', "timestamp")
       ON CONFLICT ("deviceId", "bucketStart", "granularity")
       DO UPDATE SET
@@ -105,5 +110,10 @@ export class TrafficRetentionService {
         bucketStart: { lt: hourlyCutoff },
       },
     });
+    } catch (error) {
+      console.error("Traffic retention/rollup job failed; keeping data for a later retry:", error);
+    } finally {
+      this.running = false;
+    }
   }
 }
