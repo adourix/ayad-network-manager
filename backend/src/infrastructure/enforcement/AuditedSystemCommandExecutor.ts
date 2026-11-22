@@ -16,7 +16,7 @@ export class AuditedSystemCommandExecutor implements SystemCommandExecutor {
 
   async execute(command: string, args: string[]): Promise<SystemCommandResult> {
     const shouldAudit = this.isMutation(command, args);
-    const details = shouldAudit ? { command, args: args.slice(0, 32), actor: this.actor } : undefined;
+    const details = shouldAudit ? { command, args: command === "write-sing-box-config" ? [args[0] ?? "", `payload-bytes=${Buffer.byteLength(args.slice(1).join(""), "utf8")}`] : args.slice(0, 32), actor: this.actor } : undefined;
 
     if (shouldAudit) {
       await this.audit.audit({ action: "enforcement-command-before", actor: this.actor, details });
