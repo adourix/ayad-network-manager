@@ -106,17 +106,32 @@ export class TrafficAccountingService {
         this.lastAccountingReconcileAt = nowMs;
       }
 
+      // Fetch persisted devices once and read nft counters in one batch.
+      // The previous N-device loop performed N full named-counter dumps and N
+      // database lookups every sampling tick.
+      const knownDevices = await this.deviceRepository.findAll();
+      const knownByMac = new Map(knownDevices.map((device) => [device.mac.toString().toLowerCase(), device]));
       const activeDeviceIds = new Set<number>();
+      const requestedMacs = discoveredDevices.map((device) => device.mac.toLowerCase());
+      let usageByMac: Map<string, { downloadBytes: bigint; uploadBytes: bigint }> | null = null;
+
+      if (this.trafficUsageReader.readDevicesUsage) {
+        try {
+          usageByMac = await this.trafficUsageReader.readDevicesUsage(requestedMacs);
+        } catch (error) {
+          console.error("Batched traffic counter read failed; falling back to per-device reads:", error);
+        }
+      }
 
       for (const discovered of discoveredDevices) {
         try {
-          const device = await this.deviceRepository.findByMac(
-            this.createMacAddress(discovered.mac),
-          );
+          const mac = discovered.mac.toLowerCase();
+          const device = knownByMac.get(mac);
           if (!device) continue;
 
+          const current = usageByMac?.get(mac) ?? await this.trafficUsageReader.readDeviceUsage(mac);
           activeDeviceIds.add(device.id);
-          await this.collectDevice(device, discovered.ip, now);
+          await this.collectDevice(device, current, now);
         } catch (error) {
           console.error(`Traffic accounting failed for ${discovered.mac}:`, error);
         }
@@ -139,12 +154,10 @@ export class TrafficAccountingService {
     }
   }
 
-  private async collectDevice(device: Device, _currentIp: string, timestamp: Date): Promise<void> {
+  private async collectDevice(device: Device, current: { downloadBytes: bigint; uploadBytes: bigint }, timestamp: Date): Promise<void> {
     const mac = device.mac.toString();
 
-    // reconcileDeviceAccounting() is the single writer of accounting rules.
-    // Sampling only reads the already-installed named counters.
-    const current = await this.trafficUsageReader.readDeviceUsage(mac);
+    // Sampling reads the batch snapshot; enforcement reconciles named counters separately.
     const previous = this.previous.get(device.id);
 
     if (!previous) {
