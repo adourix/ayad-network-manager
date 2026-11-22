@@ -3,6 +3,10 @@ import type { NeighborObservationRepository } from "../../domain/repositories/Ne
 import type { DeviceIdentityValidator, ValidatedDeviceIdentity } from "../../domain/services/DeviceIdentityValidator.js";
 
 export class DeviceDiscoveryService {
+  private cacheAt = 0;
+  private cachedObservations: ValidatedDeviceIdentity[] | null = null;
+  private inFlight: Promise<ValidatedDeviceIdentity[]> | null = null;
+  private readonly cacheWindowMs = 1_000;
   constructor(
     private readonly dhcpLeaseReader: DhcpLeaseReader,
     private readonly neighborTableReader: NeighborTableReader,
@@ -13,6 +17,21 @@ export class DeviceDiscoveryService {
   ) {}
 
   async discover(): Promise<ValidatedDeviceIdentity[]> {
+    const now = Date.now();
+    if (this.inFlight) return this.inFlight;
+    if (this.cachedObservations && now - this.cacheAt < this.cacheWindowMs) return this.cachedObservations;
+
+    this.inFlight = this.discoverFresh().then((observations) => {
+      this.cachedObservations = observations;
+      this.cacheAt = Date.now();
+      return observations;
+    }).finally(() => {
+      this.inFlight = null;
+    });
+    return this.inFlight;
+  }
+
+  private async discoverFresh(): Promise<ValidatedDeviceIdentity[]> {
     const [leases, neighbors] = await Promise.all([
       this.dhcpLeaseReader.read(),
       this.neighborTableReader.read(this.lanInterface),
