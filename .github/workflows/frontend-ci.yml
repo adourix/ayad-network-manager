@@ -35,5 +35,11 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Dependency vulnerability report
+        run: |
+          npm audit --json > npm-audit.json || true
+          node -e 'const r=require("./npm-audit.json"); const v=r.vulnerabilities||{}; for(const [name,x] of Object.entries(v)) console.log(name+" | "+x.severity+" | fix="+JSON.stringify(x.fixAvailable)+" | "+(x.via||[]).map(y=>typeof y==="string"?y:y.title).join("; ")); console.log("Totals:",JSON.stringify(r.metadata?.vulnerabilities||{}))'
+        continue-on-error: true
+
       - name: Build
         run: npm run build
