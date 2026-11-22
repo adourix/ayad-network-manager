@@ -26,9 +26,16 @@ function stopProductionBackendForSetup(): void {
   }
 }
 
+const deploymentMode = (process.env.AYADNM_DEPLOYMENT_MODE ?? "native").trim().toLowerCase();
+
 if (setupComplete) {
   await import("./server.js");
 } else {
+  if (deploymentMode === "docker") {
+    console.error("AyadNM Docker backend cannot run the privileged first-run Setup Wizard. Run the unified installer and complete Host/Natively provisioned setup before switching to Docker.");
+    process.exit(1);
+  }
+
   stopProductionBackendForSetup();
 
   const app = Fastify({ logger: true, bodyLimit: 64 * 1024 });
