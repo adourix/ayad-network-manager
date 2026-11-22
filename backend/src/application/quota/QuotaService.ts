@@ -57,9 +57,12 @@ function calculatePeriod(periodType: string, now: Date): { start: Date; end: Dat
 
 export class QuotaService {
   private readonly notifiedThresholds = new Set<string>();
+  private lastThresholdPruneAt = 0;
 
   private pruneThresholdKeys(now: Date): void {
-    if (this.notifiedThresholds.size < 2_000) return;
+    const nowMs = now.getTime();
+    if (this.notifiedThresholds.size < 2_000 || nowMs - this.lastThresholdPruneAt < 60 * 60 * 1000) return;
+    this.lastThresholdPruneAt = nowMs;
     const cutoff = now.getTime() - 90 * 24 * 60 * 60 * 1000;
     for (const key of this.notifiedThresholds) {
       const match = key.match(/^\d+:(.+):(80|90|100)$/);
