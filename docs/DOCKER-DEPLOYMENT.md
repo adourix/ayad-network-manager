@@ -67,3 +67,16 @@ Image/Compose CI does not prove host-network functionality. Before production:
 - [ ] Traffic retention and identity-safety tests remain green.
 
 Until the setup broker gates pass, use the supported bare-metal installer for real gateway deployment; use Compose only for build and integration development.
+
+## Additional first-install requirement: administrator bootstrap
+
+The current bare-metal installer creates the administrator password hash and salt interactively before starting the temporary setup server. The Docker environment example does not yet implement an equivalent first-run administrator bootstrap lifecycle.
+
+Before Docker is used for a clean deployment, add one of the following explicitly designed paths:
+
+- A one-time bootstrap secret supplied through a Docker secret, consumed only when no administrator credential exists, and removed/invalidated after successful account creation; or
+- A setup wizard step that creates the first admin with a secure password and stores only a password hash plus salt through a narrowly scoped backend operation.
+
+Do not ship a default username/password, store the plaintext admin password in a persistent `.env`, or reuse a credential from the development/bare-metal installation.
+
+Also verify that a completely new PostgreSQL volume has a path to create the first authenticated admin. `prisma migrate deploy` creates schema objects; it does not create the application administrator or seed an admin account by itself.
