@@ -43,9 +43,22 @@ export class NftTrafficUsageReader implements TrafficUsageReader {
   async readDeviceUsage(mac: string): Promise<TrafficUsage> {
     const normalizedMac = validateMac(mac);
     const counters = await this.readCounters();
+    return this.usageFromCounters(normalizedMac, counters);
+  }
+
+  async readDevicesUsage(macs: string[]): Promise<Map<string, TrafficUsage>> {
+    const normalizedMacs = [...new Set(macs.map(validateMac))];
+    if (normalizedMacs.length === 0) return new Map();
+
+    // One nftables JSON dump per sample tick, rather than one dump per device.
+    const counters = await this.readCounters();
+    return new Map(normalizedMacs.map((mac) => [mac, this.usageFromCounters(mac, counters)]));
+  }
+
+  private usageFromCounters(mac: string, counters: Map<string, bigint>): TrafficUsage {
     return {
-      downloadBytes: counters.get(this.counterName(normalizedMac, "download")) ?? 0n,
-      uploadBytes: counters.get(this.counterName(normalizedMac, "upload")) ?? 0n,
+      downloadBytes: counters.get(this.counterName(mac, "download")) ?? 0n,
+      uploadBytes: counters.get(this.counterName(mac, "upload")) ?? 0n,
     };
   }
 
