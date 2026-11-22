@@ -43,6 +43,7 @@ jobs:
           file: backend/deploy/docker/backend.Dockerfile
           target: runtime
           push: false
+          load: true
           tags: ayad-network-manager:ci
       - name: Build Prisma migration target
         uses: docker/build-push-action@v6
@@ -51,6 +52,7 @@ jobs:
           file: backend/deploy/docker/backend.Dockerfile
           target: migration
           push: false
+          load: true
           tags: ayad-network-manager-migrate:ci
       - name: Build enforcement image
         uses: docker/build-push-action@v6
@@ -58,4 +60,8 @@ jobs:
           context: .
           file: backend/deploy/enforcement/Dockerfile
           push: false
+          load: true
           tags: ayad-network-manager-enforcement:ci
+      - name: Report built image sizes
+        run: |
+          docker image inspect ayad-network-manager:ci ayad-network-manager-migrate:ci ayad-network-manager-enforcement:ci --format '{{.RepoTags}}: {{.Size}} bytes' 
