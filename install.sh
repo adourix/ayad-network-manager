@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
 
 say() { printf "\n[AyadNM Unified Installer] %s\n" "$*"; }
 die() { echo "[AyadNM Unified Installer] ERROR: $*" >&2; exit 1; }
+
 [[ "$(id -u)" == 0 ]] || die "Run as root: sudo bash install.sh"
 . /etc/os-release
 [[ "$ID" == debian || "$ID" == ubuntu ]] || die "Debian/Ubuntu required (found $ID)"
@@ -17,13 +19,17 @@ if [[ -z "$MODE" ]]; then
   echo "  2) Docker backend (Host provisioning + native enforcement + Docker app)"
   read -r -p "Choose deployment [1/2]: " MODE
 fi
+
 case "$MODE" in
   1|native|bare-metal)
     say "Starting original Bare-metal installer"
     exec bash "$ROOT/backend/deploy/bare-metal/install.sh"
     ;;
-  2|docker) ;;
-  *) die "Unknown mode. Use 1/native or 2/docker." ;;
+  2|docker)
+    ;;
+  *)
+    die "Unknown mode. Use 1/native or 2/docker."
+    ;;
 esac
 
 say "Installing Docker Engine and Compose"
@@ -38,116 +44,64 @@ systemctl enable --now docker
 host_setup_completed() {
   local config="/etc/network-control-system/config.env"
   [[ -f "$config" ]] || return 1
-  grep -q '^SETUP_COMPLETED=true
-
-say "Validating Compose and building Docker backend"
-docker compose config >/dev/null || die "Compose configuration validation failed"
-docker compose build backend
-
-say "Switching backend from native systemd to Docker"
-systemctl stop network-control-backend.service || true
-systemctl disable network-control-backend.service || true
-
-sed "s|@APP_ROOT@|$ROOT|g" "$ROOT/backend/deploy/systemd/ayadnm-docker.service" > /etc/systemd/system/ayadnm-docker.service
-systemctl daemon-reload
-systemctl enable ayadnm-docker.service
-systemctl restart ayadnm-docker.service
-
-say "Waiting for production backend health (up to 120 seconds)"
-port="$(grep -E '^DASHBOARD_PORT=' "$ROOT/.env" | tail -n1 | cut -d= -f2)"
-port="${port:-5000}"
-healthy=0
-health_body=""
-for _ in $(seq 1 60); do
-  health_body="$(curl -fsS --connect-timeout 2 --max-time 5 "http://127.0.0.1:$port/api/health" 2>/dev/null || true)"
-  if [[ "$health_body" == *'"status":"ok"'* || "$health_body" == *'"status": "ok"'* ]]; then
-    healthy=1
-    break
-  fi
-  sleep 2
-done
-if [[ "$healthy" != 1 ]]; then
-  docker compose logs --tail=100 backend >&2 || true
-  say "Docker backend failed health check; restoring native backend"
-  systemctl disable --now ayadnm-docker.service || true
-  systemctl enable --now network-control-backend.service || true
-  die "Docker backend health failed; native backend restoration was attempted"
-fi
-
-echo
-echo "AyadNM installation complete"
-echo "Deployment: Docker backend + Host-native enforcement"
-echo "Dashboard: https://<gateway-ip>:$port/"
-echo "Setup: Host provisioning/wizard verified complete"
-echo "Enforcement: network-control-enforcement.service (Host)"
-echo "Backend: ayadnm-docker.service (Docker)"
-echo "Rollback: systemctl disable --now ayadnm-docker.service && systemctl enable --now network-control-backend.service"
- "$config" || return 1
+  grep -q '^SETUP_COMPLETED=true$' "$config" || return 1
   for key in CLIENT_INTERFACE UPLINK_INTERFACE CLIENT_GATEWAY_IP CLIENT_SUBNET UPLINK_BANDWIDTH_MBPS DASHBOARD_PORT SSH_PORT DNS_SERVERS; do
-    grep -Eq "^${key}=.+$" "$config" || return 1
+    grep -Eq "^\${key}=.+$" "$config" || return 1
   done
   [[ -f /etc/systemd/system/network-control-enforcement.service ]] || return 1
   [[ -f /etc/systemd/system/network-control-backend.service ]] || return 1
 }
 
-database_environment_complete() {
-  local env_file="$ROOT/.env"
-  [[ -f "$env_file" ]] || return 1
-  for key in DATABASE_URL DATABASE_USER DATABASE_PASSWORD DATABASE_NAME DATABASE_HOST ADMIN_PASSWORD_HASH ADMIN_PASSWORD_SALT; do
-    grep -Eq "^${key}=.+$" "$env_file" || return 1
-  done
-}
-
 if host_setup_completed; then
-  database_environment_complete || die "Host setup is already marked complete, but required DB/auth variables are missing from .env. Refusing to rerun provisioning or rotate credentials automatically."
   say "Existing completed Host setup detected; preserving PostgreSQL, admin credentials, and network configuration"
   systemctl enable --now network-control-enforcement.service
 else
   say "Host setup is incomplete; running Native Host/Gateway provisioning and wizard first"
   bash "$ROOT/backend/deploy/bare-metal/install.sh"
-  host_setup_completed || die "Host setup wizard returned but required config is incomplete; Docker backend will not be installed"
-  database_environment_complete || die "Required DB/auth variables were not written to .env; Docker backend will not be installed"
+  host_setup_completed || die "Host setup wizard returned but required Host config is incomplete; Docker backend will not be installed"
 fi
 
-say "Validating Compose and building Docker backend"
+say "Validating Compose configuration"
 docker compose config >/dev/null || die "Compose configuration validation failed"
+
+say "Building Docker backend"
 docker compose build backend
 
 say "Switching backend from native systemd to Docker"
 systemctl stop network-control-backend.service || true
 systemctl disable network-control-backend.service || true
 
-sed "s|@APP_ROOT@|$ROOT|g" "$ROOT/backend/deploy/systemd/ayadnm-docker.service" > /etc/systemd/system/ayadnm-docker.service
+SERVICE_FILE="/etc/systemd/system/ayadnm-docker.service"
+sed "s|@APP_ROOT@|$ROOT|g" "$ROOT/backend/deploy/systemd/ayadnm-docker.service" > "$SERVICE_FILE"
 systemctl daemon-reload
 systemctl enable ayadnm-docker.service
 systemctl restart ayadnm-docker.service
 
-say "Waiting for production backend health (up to 120 seconds)"
-port="$(grep -E '^DASHBOARD_PORT=' "$ROOT/.env" | tail -n1 | cut -d= -f2)"
+say "Waiting for backend HTTP health (up to 120 seconds)"
+port="$(grep -E '^DASHBOARD_PORT=' /etc/network-control-system/config.env | tail -n1 | cut -d= -f2 || true)"
 port="${port:-5000}"
 healthy=0
-health_body=""
 for _ in $(seq 1 60); do
-  health_body="$(curl -fsS --connect-timeout 2 --max-time 5 "http://127.0.0.1:$port/api/health" 2>/dev/null || true)"
-  if [[ "$health_body" == *'"status":"ok"'* || "$health_body" == *'"status": "ok"'* ]]; then
+  if curl -fsS --connect-timeout 2 --max-time 5 "http://127.0.0.1:$port/api/health" >/dev/null 2>&1; then
     healthy=1
     break
   fi
   sleep 2
 done
+
 if [[ "$healthy" != 1 ]]; then
   docker compose logs --tail=100 backend >&2 || true
-  say "Docker backend failed health check; restoring native backend"
+  say "Docker backend failed health check; attempting rollback to native backend"
   systemctl disable --now ayadnm-docker.service || true
   systemctl enable --now network-control-backend.service || true
-  die "Docker backend health failed; native backend restoration was attempted"
+  die "Docker backend health check failed. Native backend rollback was attempted."
 fi
 
 echo
 echo "AyadNM installation complete"
 echo "Deployment: Docker backend + Host-native enforcement"
 echo "Dashboard: https://<gateway-ip>:$port/"
-echo "Setup: Host provisioning/wizard verified complete"
+echo "Setup: Host provisioning/setup verified"
 echo "Enforcement: network-control-enforcement.service (Host)"
 echo "Backend: ayadnm-docker.service (Docker)"
 echo "Rollback: systemctl disable --now ayadnm-docker.service && systemctl enable --now network-control-backend.service"
