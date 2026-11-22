@@ -36,7 +36,6 @@ export class TrafficAccountingService {
   private readonly previous = new Map<number, PreviousUsage>();
   private readonly pendingBuckets = new Map<number, PendingBucket>();
   private timer: NodeJS.Timeout | undefined;
-  private running = false;
   private inFlight: Promise<void> | null = null;
   private readonly live = new Map<string, LiveTraffic>();
   private lastAccountingReconcileAt = 0;
@@ -89,9 +88,7 @@ export class TrafficAccountingService {
 
   private collect(): Promise<void> {
     if (this.inFlight) return this.inFlight;
-    this.running = true;
     this.inFlight = this.collectCycle().finally(() => {
-      this.running = false;
       this.inFlight = null;
     });
     return this.inFlight;
@@ -157,8 +154,6 @@ export class TrafficAccountingService {
       for (const mac of this.live.keys()) {
         if (!activeMacs.has(mac)) this.live.delete(mac);
       }
-    } catch (error) {
-      console.error("Traffic accounting collection failed:", error);
     } catch (error) {
       console.error("Traffic accounting collection failed:", error);
     }
