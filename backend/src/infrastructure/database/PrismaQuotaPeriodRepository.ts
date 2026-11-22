@@ -36,8 +36,15 @@ export class PrismaQuotaPeriodRepository implements QuotaPeriodRepository {
   }
 
   async create(data: { deviceId: number; periodType: string; periodStart: Date; periodEnd: Date }): Promise<QuotaPeriodData> {
-    const row = await prisma.quotaPeriod.create({
-      data: {
+    const row = await prisma.quotaPeriod.upsert({
+      where: {
+        deviceId_periodType_periodStart: {
+          deviceId: data.deviceId,
+          periodType: data.periodType,
+          periodStart: data.periodStart,
+        },
+      },
+      create: {
         deviceId: data.deviceId,
         periodType: data.periodType,
         periodStart: data.periodStart,
@@ -45,6 +52,7 @@ export class PrismaQuotaPeriodRepository implements QuotaPeriodRepository {
         usedDownloadBytes: 0n,
         usedUploadBytes: 0n,
       },
+      update: {},
     });
     return toDomain(row);
   }
