@@ -9,6 +9,9 @@ on:
       - "frontend/package-lock.json"
       - ".github/workflows/frontend-dependency-update-preview.yml"
 
+permissions:
+  contents: write
+
 jobs:
   preview:
     runs-on: ubuntu-24.04
@@ -25,14 +28,30 @@ jobs:
       - name: Install and apply non-breaking audit fixes
         run: |
           npm install
-          npm audit fix || echo "Some advisories may require manual overrides or upstream releases"
+          npm audit fix --legacy-peer-deps || echo "Some advisories may require manual overrides or upstream releases"
       - name: Build
         run: npm run build
       - name: Produce dependency audit report
         run: |
           npm audit --json > dependency-audit.json || true
           node -e 'const r=require("./dependency-audit.json"); console.log(JSON.stringify(r.metadata?.vulnerabilities||{},null,2)); for(const [name,v] of Object.entries(r.vulnerabilities||{})) console.log(name+" | "+v.severity+" | fix="+JSON.stringify(v.fixAvailable))'
+      - name: Require zero high/critical audit findings
+        run: |
+          node -e 'const r=require("./dependency-audit.json"); const v=r.metadata?.vulnerabilities||{}; const total=(v.high||0)+(v.critical||0); console.log("High + critical:",total); if(total>0) process.exit(1)'
+      - name: Commit tested dependency updates
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package.json package-lock.json
+          if git diff --cached --quiet; then
+            echo "No dependency changes to commit."
+          else
+            git commit -m "chore(deps): apply tested frontend audit fixes"
+            git push origin HEAD:${GITHUB_REF_NAME}
+          fi
+
       - name: Upload updated package metadata
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: frontend-dependency-update-preview
