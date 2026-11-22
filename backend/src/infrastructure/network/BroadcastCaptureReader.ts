@@ -20,7 +20,27 @@ export class BroadcastCaptureReader {
   constructor(private readonly iface: string) {}
   start(): void {
     if (this.process) return; this.lastError = null; this.process = spawn("tcpdump", buildBroadcastCaptureArgs(this.iface));
-    this.process.stdout.on("data", (chunk: Buffer) => { this.stdoutRemainder += chunk.toString(); if (this.stdoutRemainder.length > MAX_TCPDUMP_LINE_BYTES && !this.stdoutRemainder.includes("\n")) { this.stdoutRemainder = ""; this.packetLines = []; return; } const lines = this.stdoutRemainder.split("\n"); this.stdoutRemainder = lines.pop() ?? ""; if (this.stdoutRemainder.length > MAX_TCPDUMP_LINE_BYTES) this.stdoutRemainder = ""; for (const line of lines) this.acceptTcpdumpLine(line); });
+    this.process.stdout.on("data", (chunk: Buffer) => {
+      this.stdoutRemainder += chunk.toString();
+      if (this.stdoutRemainder.length > MAX_TCPDUMP_LINE_BYTES && !this.stdoutRemainder.includes("\\n")) {
+        this.stdoutRemainder = "";
+        this.packetLines = [];
+        return;
+      }
+      const lines = this.stdoutRemainder.split("\\n");
+      this.stdoutRemainder = lines.pop() ?? "";
+      if (this.stdoutRemainder.length > MAX_TCPDUMP_LINE_BYTES) {
+        this.stdoutRemainder = "";
+        this.packetLines = [];
+      }
+      for (const line of lines) {
+        if (line.length > MAX_TCPDUMP_LINE_BYTES) {
+          this.packetLines = [];
+          continue;
+        }
+        this.acceptTcpdumpLine(line);
+      }
+    });
     this.process.stdout.on("end", () => { if (this.stdoutRemainder) this.acceptTcpdumpLine(this.stdoutRemainder); this.flushPacket(); this.stdoutRemainder = ""; });
     this.process.stderr.on("data", (chunk: Buffer) => { const message = chunk.toString().trim(); if (message && !/tcpdump: listening on /i.test(message)) this.lastError = message; });
     this.process.once("error", (error) => { this.lastError = error.message; this.process = undefined; }); this.process.once("close", () => { this.flushPacket(); this.process = undefined; });
