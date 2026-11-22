@@ -116,10 +116,12 @@ export class TrafficAccountingService {
       // Fetch persisted devices once and read nft counters in one batch.
       // The previous N-device loop performed N full named-counter dumps and N
       // database lookups every sampling tick.
-      const knownDevices = await this.deviceRepository.findAll();
+      const requestedMacs = discoveredDevices.map((device) => device.mac.toLowerCase());
+      const knownDevices = this.deviceRepository.findByMacs
+        ? await this.deviceRepository.findByMacs(requestedMacs)
+        : await this.deviceRepository.findAll();
       const knownByMac = new Map(knownDevices.map((device) => [device.mac.toString().toLowerCase(), device]));
       const activeDeviceIds = new Set<number>();
-      const requestedMacs = discoveredDevices.map((device) => device.mac.toLowerCase());
       let usageByMac: Map<string, { downloadBytes: bigint; uploadBytes: bigint }> | null = null;
 
       if (this.trafficUsageReader.readDevicesUsage) {
