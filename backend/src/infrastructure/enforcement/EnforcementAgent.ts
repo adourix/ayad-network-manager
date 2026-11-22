@@ -1,6 +1,6 @@
 import { createServer } from "node:net";
 import { promises as fs } from "node:fs";
-import { unlinkSync } from "node:fs";
+import { unlinkSync, chmodSync, chownSync } from "node:fs";
 import { resolve } from "node:path";
 import dotenv from "dotenv";
 import { LinuxSystemCommandExecutor } from "./LinuxSystemCommandExecutor.js";
@@ -52,6 +52,17 @@ function send(socket: import("node:net").Socket, payload: unknown): void { socke
 const priority: Job[] = [], background: Job[] = [];
 let running = false;
 const maxBackgroundQueue = 8;
+const maxPriorityQueue = 64;
+const maxSocketLineBytes = 40 * 1024;
+const socketGroupId = Number(process.env.ENFORCEMENT_SOCKET_GID ?? 1000);
+if (!Number.isInteger(socketGroupId) || socketGroupId < 0) throw new Error("ENFORCEMENT_SOCKET_GID must be a non-negative integer");
+function validRequestShape(value: unknown): value is Request {
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value as Record<string, unknown>;
+  return typeof candidate.command === "string" && Array.isArray(candidate.args)
+    && candidate.args.length <= 64
+    && candidate.args.every((arg) => typeof arg === "string" && arg.length <= 512 && !arg.includes("\\0"));
+}
 async function drain(): Promise<void> { if (running) return; running = true; try { while (priority.length || background.length) { const job = priority.shift() ?? background.shift(); if (job) await job(); } } finally { running = false; } }
 function schedule(job: Job, isBackground: boolean): void { if (isBackground) { if (background.length >= maxBackgroundQueue) throw new Error("background enforcement queue overloaded"); background.push(job); } else priority.push(job); void drain(); }
 async function executeVpnConfigWrite(args: string[]): Promise<{ stdout: string; stderr: string }> {
@@ -83,7 +94,43 @@ async function executeRequest(socket: import("node:net").Socket, request: Reques
     send(socket, { ok: true, ...result });
   } catch (error) { send(socket, { ok: false, error: error instanceof Error ? error.message : String(error) }); }
 }
-const server = createServer((socket) => { let buffer = ""; socket.setEncoding("utf8"); socket.on("data", (chunk) => { buffer += chunk; let newline = buffer.indexOf("\n"); while (newline >= 0) { const line = buffer.slice(0, newline).trim(); buffer = buffer.slice(newline + 1); newline = buffer.indexOf("\n"); if (!line) continue; let request: Request; try { request = JSON.parse(line) as Request; } catch { send(socket, { ok: false, error: "invalid JSON request" }); continue; } if (!valid(request.command, request.args)) { send(socket, { ok: false, error: "command rejected by enforcement agent" }); continue; } try { schedule(() => executeRequest(socket, request), isBackgroundRead(request.command, request.args)); } catch (error) { send(socket, { ok: false, error: error instanceof Error ? error.message : String(error) }); } } }); socket.on("error", () => undefined); });
+const server = createServer((socket) => {
+  let buffer = "";
+  socket.setEncoding("utf8");
+  socket.on("data", (chunk) => {
+    buffer += chunk;
+    if (Buffer.byteLength(buffer, "utf8") > maxSocketLineBytes) {
+      send(socket, { ok: false, error: "request buffer limit exceeded" });
+      socket.destroy();
+      buffer = "";
+      return;
+    }
+    let newline = buffer.indexOf("\n");
+    while (newline >= 0) {
+      const line = buffer.slice(0, newline).trim();
+      buffer = buffer.slice(newline + 1);
+      newline = buffer.indexOf("\n");
+      if (!line) continue;
+      let parsed: unknown;
+      try { parsed = JSON.parse(line); } catch { send(socket, { ok: false, error: "invalid JSON request" }); continue; }
+      if (!validRequestShape(parsed)) { send(socket, { ok: false, error: "invalid request shape" }); continue; }
+      const request = parsed;
+      if (!valid(request.command, request.args)) { send(socket, { ok: false, error: "command rejected by enforcement agent" }); continue; }
+      try { schedule(() => executeRequest(socket, request), isBackgroundRead(request.command, request.args)); }
+      catch (error) { send(socket, { ok: false, error: error instanceof Error ? error.message : String(error) }); }
+    }
+  });
+  socket.on("error", () => undefined);
+});
 await fs.mkdir(resolve(socketPath, ".."), { recursive: true });
 try { unlinkSync(socketPath); } catch { /* socket absent */ }
-server.listen(socketPath, () => undefined);
+server.listen(socketPath, () => {
+  try {
+    chmodSync(socketPath, 0o660);
+    chownSync(socketPath, 0, socketGroupId);
+  } catch (error) {
+    console.error("Failed to set enforcement socket ownership/mode:", error);
+    server.close();
+    process.exitCode = 1;
+  }
+});
