@@ -45,6 +45,7 @@ import { SingleInterfaceVpnController } from "./infrastructure/enforcement/Singl
 import { vpnRoutes } from "./interfaces/http/routes/vpn.js";
 import { ScheduleEnforcementService } from "./application/policies/ScheduleEnforcementService.js";
 import { TrafficRetentionService } from "./infrastructure/database/TrafficRetentionService.js";
+import { AuditRetentionService } from "./infrastructure/database/AuditRetentionService.js";
 import { NftPortRuleEnforcer } from "./infrastructure/enforcement/NftPortRuleEnforcer.js";
 import { ProfileEnforcementService } from "./application/policies/ProfileEnforcementService.js";
 import { SetupService } from "./application/setup/SetupService.js";
@@ -133,6 +134,7 @@ if (setupComplete) {
   const dhcpReservationService = new DhcpReservationService(deviceRepository, policyRepository, config.setup.dhcpReservationsPath, { reload: async () => { await systemCommandExecutor.execute("systemctl", ["restart", "dnsmasq"]); } });
   const scheduleEnforcementService = new ScheduleEnforcementService(deviceRepository, policyRepository, policyCatalogRepository, trafficEnforcementService, deviceBlocker, operationsRepository);
   const trafficRetentionService = new TrafficRetentionService();
+  const auditRetentionService = new AuditRetentionService(60 * 60 * 1000, Number(process.env.AUDIT_RETENTION_DAYS ?? 90));
   const profileEnforcementService = new ProfileEnforcementService(deviceRepository, policyRepository, policyCatalogRepository, trafficEnforcementService);
   app.get("/api/health", async () => ({ status: "ok", capture: broadcastCaptureReader.status() }));
   registerFrontend(app);
@@ -141,10 +143,10 @@ if (setupComplete) {
   for (const device of await deviceRepository.findAll()) { if (!device.ip) continue; for (const rule of await policyCatalogRepository.portRules(device.id)) if (rule.enabled) await portRuleEnforcer.apply({ mac: device.mac.toString(), ip: device.ip.toString() }, rule); }
   await trafficReconciliationService.reconcile(); await blockedIpReconciliationService.reconcile(); await ipBindingLifecycleService.reconcile(); await profileEnforcementService.reconcile(); await vpnService.reconcile();
   vpnService.startMonitor();
-  await scheduleEnforcementService.start(); await trafficAccountingService.start(); await trafficRetentionService.start(); await deviceDiscoverySyncService.start(); await liveMonitoringService.start(); await blockedIpReconciliationService.start(); await ipBindingLifecycleService.start(); await trafficReconciliationService.start(); await dhcpReservationService.start();
+  await scheduleEnforcementService.start(); await trafficAccountingService.start(); await trafficRetentionService.start(); await auditRetentionService.start(); await deviceDiscoverySyncService.start(); await liveMonitoringService.start(); await blockedIpReconciliationService.start(); await ipBindingLifecycleService.start(); await trafficReconciliationService.start(); await dhcpReservationService.start();
 
   process.on("SIGTERM", async () => {
-    vpnService.stopMonitor(); await trafficAccountingService.stop(); trafficRetentionService.stop(); deviceDiscoverySyncService.stop(); liveMonitoringService.stop(); blockedIpReconciliationService.stop(); ipBindingLifecycleService.stop(); trafficReconciliationService.stop(); scheduleEnforcementService.stop(); dhcpReservationService.stop(); broadcastCaptureReader.stop(); await app.close();
+    vpnService.stopMonitor(); await trafficAccountingService.stop(); trafficRetentionService.stop(); auditRetentionService.stop(); deviceDiscoverySyncService.stop(); liveMonitoringService.stop(); blockedIpReconciliationService.stop(); ipBindingLifecycleService.stop(); trafficReconciliationService.stop(); scheduleEnforcementService.stop(); dhcpReservationService.stop(); broadcastCaptureReader.stop(); await app.close();
   });
 } else {
   registerFrontend(app);
