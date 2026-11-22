@@ -2,38 +2,82 @@
 set -Eeuo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 cd "$ROOT"
-[[ "$(id -u)" == 0 ]] || { echo "Run with sudo"; exit 1; }
+say() { echo "[AyadNM Docker Installer] $*"; }
+die() { echo "[AyadNM Docker Installer] ERROR: $*" >&2; exit 1; }
+[[ "$(id -u)" == 0 ]] || die "Run as root: sudo bash docker-install.sh"
 . /etc/os-release
-[[ "$ID" == debian || "$ID" == ubuntu ]] || { echo "Debian/Ubuntu required"; exit 1; }
-if ! command -v docker >/dev/null || ! docker compose version >/dev/null 2>&1; then
-  apt-get update
+[[ "$ID" == debian || "$ID" == ubuntu ]] || die "Debian/Ubuntu required (found $ID)"
+export DEBIAN_FRONTEND=noninteractive
+say "Installing Docker/Compose and helper tools"
+apt-get update
+if ! command -v docker >/dev/null 2>&1 || ! docker compose version >/dev/null 2>&1; then
   apt-get install -y docker.io docker-compose-v2 || apt-get install -y docker.io docker-compose-plugin
 fi
+apt-get install -y curl ca-certificates openssl postgresql-client iproute2
+docker compose version >/dev/null 2>&1 || die "Docker Compose plugin missing"
 systemctl enable --now docker
-if [[ ! -f .env ]]; then cp .env.docker.example .env; chmod 600 .env; fi
-if grep -q "^POSTGRES_PASSWORD=replace-with-a-long-random-password$" .env; then
-  pw="$(openssl rand -hex 32)"
-  sed -i "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=$pw|" .env
-fi
+say "Configure Host PostgreSQL connection"
+read -r -p "DATABASE_URL [postgresql://ayad_nm@127.0.0.1:5432/ayad_nm]: " db_url
+db_url="${db_url:-postgresql://ayad_nm@127.0.0.1:5432/ayad_nm}"
+[[ "$db_url" == postgresql://* || "$db_url" == postgres://* ]] || die "DATABASE_URL must be a PostgreSQL URI"
+export DATABASE_URL="$db_url"
+say "Checking database connectivity/authentication"
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "SELECT current_database(), current_user;" >/dev/null || die "Database connection failed. Ensure database/role exists and local authentication allows this connection."
+say "Writing .env (existing file backed up)"
+[[ ! -f .env ]] || cp -a .env ".env.backup.$(date +%Y%m%d-%H%M%S)"
+cat > .env <<EOF
+DASHBOARD_PORT=5000
+HOST=0.0.0.0
+NODE_ENV=production
+DATABASE_URL=$DATABASE_URL
+AUDIT_RETENTION_DAYS=90
+SYSTEM_CONFIG_PATH=/etc/network-control-system/config.env
+ENFORCEMENT_SOCKET_PATH=/run/network-control/enforcement.sock
+ENFORCEMENT_SOCKET_GID=1000
+SETUP_SNAPSHOT_DIR=/var/lib/network-control/backups
+TLS_CERT_PATH=/etc/network-control-system/tls/server.crt
+TLS_KEY_PATH=/etc/network-control-system/tls/server.key
+CLIENT_INTERFACE=
+UPLINK_INTERFACE=
+CLIENT_SUBNET=
+CLIENT_GATEWAY_IP=
+DHCP_RANGE_START=
+DHCP_RANGE_END=
+DNS_SERVERS=1.1.1.1,8.8.8.8
+SSH_PORT=22
+UPLINK_BANDWIDTH_MBPS=
+NETWORK_MODE=single-interface-ifb
+VPN_TUN_INTERFACE=tun0
+EOF
+chmod 600 .env
+say "Checking dashboard port 5000"
+ss -ltn "( sport = :5000 )" | grep -q LISTEN && die "Port 5000 is in use; change DASHBOARD_PORT in .env and rerun"
+say "Preparing self-signed TLS certificate"
 mkdir -p certs && chmod 700 certs
 if [[ ! -s certs/server.key || ! -s certs/server.crt ]]; then
-  ipaddr="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}')"
-  ipaddr="${ipaddr:-127.0.0.1}"
-  openssl req -x509 -newkey rsa:3072 -nodes -days 825 -keyout certs/server.key -out certs/server.crt -subj "/CN=Ayad Network Manager" -addext "subjectAltName=IP:$ipaddr,IP:127.0.0.1,DNS:ayad-nm.local,DNS:localhost"
+  host_ip="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}' || true)"
+  host_ip="${host_ip:-127.0.0.1}"
+  openssl req -x509 -newkey rsa:3072 -nodes -days 825 -keyout certs/server.key -out certs/server.crt -subj "/CN=Ayad Network Manager" -addext "subjectAltName=IP:$host_ip,IP:127.0.0.1,DNS:ayad-nm.local,DNS:localhost"
   chmod 600 certs/server.key && chmod 644 certs/server.crt
 fi
-echo "Building images..."
+say "Validating Compose and building images"
+docker compose config >/dev/null || die "Compose validation failed"
 docker compose build backend enforcement
-echo "Starting DB and enforcement..."
-docker compose up -d db enforcement
+say "Starting enforcement and backend"
+docker compose up -d enforcement backend
 docker compose ps
-echo "Starting backend (migrations are intentionally skipped)..."
-docker compose up -d backend
-sleep 5
-docker compose ps
+say "Waiting for API health"
+healthy=0
+for _ in $(seq 1 45); do
+  if curl -fsS "http://127.0.0.1:5000/api/health" >/dev/null; then healthy=1; break; fi
+  sleep 2
+done
+[[ "$healthy" == 1 ]] || { docker compose logs --tail=100 backend >&2; die "Backend health check failed"; }
 echo
-echo "Dashboard: https://<server-ip>:$(grep -E "^DASHBOARD_PORT=" .env | cut -d= -f2 | tail -n1)/"
-echo "Setup wizard: /setup"
-echo "Note: this uses the compose PostgreSQL container, not host PostgreSQL."
-echo "Docker host network setup is not production-ready until host-setup broker work is complete."
-echo "Migrations were skipped. Backend requires an already-compatible schema."
+echo "Install/startup complete"
+echo "Dashboard: https://<server-ip>:5000/"
+echo "Setup Wizard: https://<server-ip>:5000/setup"
+echo "TLS certificate: $ROOT/certs/server.crt"
+echo "Host PostgreSQL: configured (no database container)"
+echo "Migrations: intentionally skipped"
+echo "WARNING: Docker host setup for DHCP/NAT/firewall/tc/services is not production-ready yet."
