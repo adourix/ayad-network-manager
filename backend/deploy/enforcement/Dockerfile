@@ -5,13 +5,8 @@ RUN npm ci
 COPY backend/ ./
 RUN npm run build
 
-# Enforcement executes compiled JavaScript only; do not ship tsx, TypeScript or Prisma CLI.
-FROM node:22-bookworm-slim AS production-deps
-WORKDIR /src/backend
-COPY backend/package*.json ./
-RUN npm ci --omit=dev --ignore-scripts \
-    && npm cache clean --force
-
+# The enforcement agent only imports dotenv and local executor code; it does not
+# use Prisma, Fastify, PostgreSQL, TypeScript or tsx at runtime.
 FROM node:22-bookworm-slim
 ENV NODE_ENV=production \
     ENFORCEMENT_SOCKET_PATH=/run/network-control/enforcement.sock \
@@ -21,15 +16,15 @@ WORKDIR /app
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-       ca-certificates dnsmasq-base nftables iproute2 ethtool tcpdump kmod \
+       ca-certificates nftables iproute2 \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
-COPY --from=production-deps /src/backend/node_modules ./node_modules
-COPY --from=build /src/backend/package.json ./package.json
-COPY --from=build /src/backend/dist ./dist
-
-RUN mkdir -p /run/network-control /etc/network-control-system /var/lib/network-control/backups
+COPY --from=build /src/backend/node_modules/dotenv ./node_modules/dotenv
+COPY --from=build /src/backend/dist/infrastructure/enforcement/EnforcementAgent.js ./dist/infrastructure/enforcement/EnforcementAgent.js
+COPY --from=build /src/backend/dist/infrastructure/enforcement/LinuxSystemCommandExecutor.js ./dist/infrastructure/enforcement/LinuxSystemCommandExecutor.js
+RUN printf '{"type":"module"}\n' > package.json \
+    && mkdir -p /run/network-control /etc/network-control-system /var/lib/network-control/backups
 
 # Compose grants only NET_ADMIN and NET_RAW; never use --privileged.
 CMD ["node", "dist/infrastructure/enforcement/EnforcementAgent.js"]
