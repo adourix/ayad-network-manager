@@ -58,6 +58,17 @@ function calculatePeriod(periodType: string, now: Date): { start: Date; end: Dat
 export class QuotaService {
   private readonly notifiedThresholds = new Set<string>();
 
+  private pruneThresholdKeys(now: Date): void {
+    if (this.notifiedThresholds.size < 2_000) return;
+    const cutoff = now.getTime() - 90 * 24 * 60 * 60 * 1000;
+    for (const key of this.notifiedThresholds) {
+      const match = key.match(/^\\d+:(.+):(80|90|100)$/);
+      if (!match) continue;
+      const periodStart = new Date(match[1]).getTime();
+      if (Number.isFinite(periodStart) && periodStart < cutoff) this.notifiedThresholds.delete(key);
+    }
+  }
+
   constructor(
     private readonly deviceRepository: DeviceRepository,
     private readonly policyRepository: DevicePolicyRepository,
@@ -219,6 +230,7 @@ export class QuotaService {
 
   private async notifyThresholds(deviceId: number, mac: string, quota: bigint, used: bigint, periodStart: Date): Promise<void> {
     if (quota <= 0n) return;
+    this.pruneThresholdKeys(new Date());
     for (const threshold of [80n, 90n, 100n]) {
       if (used * 100n < quota * threshold) continue;
       const key = `${deviceId}:${periodStart.toISOString()}:${threshold}`;
