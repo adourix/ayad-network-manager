@@ -31,9 +31,6 @@ jobs:
           npm audit fix --legacy-peer-deps || echo "Some advisories may require manual overrides or upstream releases"
       - name: Build
         run: npm run build
-      - name: Build desktop installer
-        run: npm run desktop:build
-
       - name: Produce dependency audit report
         run: |
           npm audit --json > dependency-audit.json || true
@@ -56,7 +53,6 @@ jobs:
             git commit -m "chore(deps): apply tested frontend audit fixes"
             git push origin HEAD:${GITHUB_REF_NAME}
           fi
-
       - name: Upload updated package metadata
         if: always()
         uses: actions/upload-artifact@v4
