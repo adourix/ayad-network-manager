@@ -8,6 +8,18 @@ const SESSION_COOKIE = "nm_session";
 const loginFailures = new Map<string, { count:number; resetAt:number }>();
 const LOGIN_WINDOW_MS = 5 * 60 * 1000;
 const LOGIN_MAX_FAILURES = 10;
+const MAX_LOGIN_FAILURE_TRACKED_IPS = 10_000;
+
+function pruneLoginFailureEntries(now: number): void {
+  for (const [ip, entry] of loginFailures) {
+    if (entry.resetAt <= now) loginFailures.delete(ip);
+  }
+  while (loginFailures.size >= MAX_LOGIN_FAILURE_TRACKED_IPS) {
+    const oldest = loginFailures.keys().next().value;
+    if (oldest === undefined) break;
+    loginFailures.delete(oldest);
+  }
+}
 
 function configured(name: string, fallback?: string): string {
   const value = process.env[name] ?? fallback;
@@ -115,6 +127,7 @@ export function registerAuthentication(app: FastifyInstance): void {
     async (request, reply) => {
       const source = request.ip;
       const now = Date.now();
+      pruneLoginFailureEntries(now);
       const failure = loginFailures.get(source);
       if (failure && failure.resetAt > now && failure.count >= LOGIN_MAX_FAILURES) {
         return reply.code(429).send({ error: "Too many login attempts" });
@@ -132,6 +145,9 @@ export function registerAuthentication(app: FastifyInstance): void {
       }
 
       loginFailures.delete(source);
+      // Successful logins are a low-frequency opportunity to prune expired
+      // sessions without adding a separate timer or per-request DB write.
+      await prisma.authSession.deleteMany({ where: { expiresAt: { lte: new Date(now) } } });
       const token = randomBytes(32).toString("base64url");
       await prisma.authSession.create({ data: { tokenHash: tokenHash(token), expiresAt: new Date(Date.now() + SESSION_TTL_MS) } });
 
