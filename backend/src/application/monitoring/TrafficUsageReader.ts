@@ -9,6 +9,9 @@ export interface TrafficUsageDevice {
 }
 
 export interface TrafficUsageReader {
+  /** Reads all requested device counters with one kernel query when supported. */
+  readDevicesUsage?(macs: string[]): Promise<Map<string, TrafficUsage>>;
+
   readDeviceUsage(
     mac: string,
   ): Promise<TrafficUsage>;
