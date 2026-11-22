@@ -24,6 +24,7 @@ services:
       - .env
     environment:
       NODE_ENV: production
+      AYADNM_DEPLOYMENT_MODE: docker
       HOST: 0.0.0.0
       DASHBOARD_PORT: ${DASHBOARD_PORT:-5000}
       DATABASE_URL: ${DATABASE_URL:?DATABASE_URL must be set in .env}
@@ -40,7 +41,7 @@ services:
       - /var/lib/network-control/backups:/var/lib/network-control/backups
       - /etc/network-control-system/tls:/etc/network-control-system/tls:ro
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:'+process.env.DASHBOARD_PORT+'/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:'+process.env.DASHBOARD_PORT+'/api/health').then(async r=>{const b=await r.json();process.exit(r.ok&&b.status==='ok'?0:1)}).catch(()=>process.exit(1))"]
       interval: 30s
       timeout: 5s
       retries: 3
