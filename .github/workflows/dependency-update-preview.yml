@@ -1,0 +1,43 @@
+name: Backend dependency update preview
+
+on:
+  push:
+    branches:
+      - chore/docker-production-hardening
+    paths:
+      - "backend/package.json"
+      - "backend/package-lock.json"
+      - ".github/workflows/dependency-update-preview.yml"
+
+jobs:
+  preview:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - name: Install and apply non-breaking audit fixes
+        run: npm ci && npm audit fix
+      - name: Test
+        run: npm test
+      - name: Build
+        run: npm run build
+      - name: Produce dependency audit report
+        run: |
+          npm audit --json > dependency-audit.json || true
+          node -e 'const r=require("./dependency-audit.json"); console.log(JSON.stringify(r.metadata?.vulnerabilities||{},null,2)); for(const [name,v] of Object.entries(r.vulnerabilities||{})) console.log(name+" | "+v.severity+" | fix="+JSON.stringify(v.fixAvailable))'
+      - name: Upload updated package metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-dependency-update-preview
+          path: |
+            backend/package.json
+            backend/package-lock.json
+            backend/dependency-audit.json
+          retention-days: 7
