@@ -14,6 +14,9 @@ export interface DeviceRepository {
 
   findAll(): Promise<Device[]>;
 
+  /** Optional bulk lookup to avoid one DB query per discovered device. */
+  findByMacs?(macs: string[]): Promise<Device[]>;
+
   upsert(data: {
     mac: MacAddress;
     ip: IpAddress;
