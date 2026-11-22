@@ -16,41 +16,50 @@ confirm_exact() {
 }
 
 volume_for() {
-  local logical="$1"
-  docker volume ls --format '{{.Name}}' | awk -v suffix="_${logical}" '$0 == logical || substr($0, length($0)-length(suffix)+1) == suffix { print; exit }'
+  local logical="$1" project
+  project="$(docker compose config --format json | python3 -c 'import json,sys; print(json.load(sys.stdin).get("name", ""))')"
+  [[ -n "$project" ]] || return 1
+  docker volume ls --format '{{.Name}}' | awk -v expected="${project}_${logical}" '$0 == expected { print; found=1; exit } END { if (!found) exit 1 }'
+}
+
+reset_database() {
+  local db_volume
+  db_volume="$(volume_for db-data)" || fail 'Could not identify the exact Compose db-data volume; no volume was deleted.'
+  docker compose stop backend db
+  docker compose rm -f backend db
+  docker volume rm "$db_volume"
+  docker compose up -d db
+  docker compose --profile migrate run --rm migrate
 }
 
 MODE="${1:-}"
 case "$MODE" in
   --db-only)
-    confirm_exact 'This permanently deletes all PostgreSQL data in the Compose db-data volume.' 'DELETE AYADNM DATABASE'
-    DB_VOLUME="$(volume_for db-data)"
-    [[ -n "$DB_VOLUME" ]] || fail 'Could not identify the db-data volume; nothing was deleted.'
-    docker compose stop backend migrate db enforcement
-    docker compose rm -f backend migrate db enforcement
-    docker volume rm "$DB_VOLUME"
-    docker compose up -d db enforcement
-    docker compose --profile migrate run --rm migrate
+    confirm_exact 'This permanently deletes all PostgreSQL data. Setup configuration will be preserved.' 'DELETE AYADNM DATABASE'
+    reset_database
     docker compose up -d backend
+    printf '\nDatabase recreated and migrations applied. Existing setup configuration was preserved.\n'
     ;;
   --full-state)
     confirm_exact 'This permanently deletes DB, setup config, setup snapshots and runtime socket state.' 'DELETE ALL AYADNM STATE'
-    mapfile -t VOLUMES < <(for suffix in db-data config-data setup-state runtime-socket; do volume_for "$suffix"; done | awk 'NF && !seen[$0]++')
-    [[ "${#VOLUMES[@]}" -eq 4 ]] || fail 'Could not identify all four expected Compose volumes; nothing was deleted.'
+    mapfile -t VOLUMES < <(for suffix in db-data config-data setup-state runtime-socket; do volume_for "$suffix" || exit 1; done)
+    [[ "${#VOLUMES[@]}" -eq 4 ]] || fail 'Could not identify all four exact Compose volumes; nothing was deleted.'
     docker compose down --remove-orphans
     docker volume rm "${VOLUMES[@]}"
     docker compose up -d db enforcement
     docker compose --profile migrate run --rm migrate
-    docker compose up -d backend
+    printf '\nDatabase is initialized. Full-state reset intentionally does NOT start the backend.\n'
+    printf 'Complete the missing host-setup integration before starting backend; see docs/DOCKER-DEPLOYMENT.md.\n'
     ;;
   *)
     cat <<'EOF'
 Usage:
   ./scripts/docker-reset.sh --db-only
-      Deletes only PostgreSQL data. Keeps setup config, snapshots and runtime state.
+      Deletes only PostgreSQL data, reapplies migrations and restarts the existing deployment.
 
   ./scripts/docker-reset.sh --full-state
       Deletes PostgreSQL data plus config-data, setup-state and runtime-socket.
+      Stops after migrations so first-run setup cannot be skipped accidentally.
 
 Neither mode deletes source code, .env, ./certs or Docker images.
 EOF
@@ -59,4 +68,3 @@ EOF
 esac
 
 docker compose ps
-printf '\nContainer reset sequence completed. Verify the setup wizard and gateway health before relying on enforcement.\n'
