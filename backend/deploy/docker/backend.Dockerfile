@@ -11,6 +11,7 @@ COPY frontend/public ./public
 RUN npm run build
 
 FROM node:22-bookworm-slim AS backend-build
+RUN apt-get update && apt-get install -y --no-install-recommends openssl && rm -rf /var/lib/apt/lists/*
 WORKDIR /src/backend
 COPY backend/package*.json ./
 RUN --mount=type=cache,target=/root/.npm npm ci
@@ -23,6 +24,7 @@ RUN npm run build
 # One-shot migration image: it retains Prisma CLI and the Prisma config,
 # but is not part of the long-running backend runtime.
 FROM node:22-bookworm-slim AS migration
+RUN apt-get update && apt-get install -y --no-install-recommends openssl && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=backend-build /src/backend/package*.json ./
 COPY --from=backend-build /src/backend/node_modules ./node_modules
