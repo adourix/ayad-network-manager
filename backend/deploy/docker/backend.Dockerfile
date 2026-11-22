@@ -50,7 +50,8 @@ COPY --from=backend-build /src/backend/package.json ./package.json
 COPY --from=backend-build /src/backend/dist ./dist
 COPY --from=frontend-build /src/frontend/dist /frontend-dist
 
-RUN mkdir -p /etc/network-control-system /run/network-control /var/lib/network-control/backups /etc/network-control-system/tls \
+RUN find ./dist -type f \( -name '*.map' -o -name '*.d.ts' -o -name '*.d.ts.map' \) -delete \
+    && mkdir -p /etc/network-control-system /run/network-control /var/lib/network-control/backups /etc/network-control-system/tls \
     && chown -R node:node /app /frontend-dist
 
 USER node
