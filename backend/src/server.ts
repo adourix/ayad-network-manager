@@ -45,6 +45,7 @@ import { SingleInterfaceVpnController } from "./infrastructure/enforcement/Singl
 import { vpnRoutes } from "./interfaces/http/routes/vpn.js";
 import { ScheduleEnforcementService } from "./application/policies/ScheduleEnforcementService.js";
 import { TrafficRetentionService } from "./infrastructure/database/TrafficRetentionService.js";
+import { NotificationDeliveryWorker } from "./infrastructure/notifications/NotificationDeliveryWorker.js";
 import { AuditRetentionService } from "./infrastructure/database/AuditRetentionService.js";
 import { NftPortRuleEnforcer } from "./infrastructure/enforcement/NftPortRuleEnforcer.js";
 import { ProfileEnforcementService } from "./application/policies/ProfileEnforcementService.js";
@@ -98,6 +99,7 @@ if (setupComplete) {
   const trafficEnforcer = new SingleInterfaceIfbTrafficEnforcer(config.network.uplinkBandwidthMbps, config.network.lanInterface, systemCommandExecutor, ifbManager, tcStateReader);
   const trafficEnforcementService = new TrafficEnforcementService(trafficEnforcer, trafficPolicyValidator, deviceRepository, policyRepository, config.network.quotaThrottleMbps, operationsRepository, discoveryService);
   const notificationRepository = new PrismaNotificationRepository();
+  const notificationDeliveryWorker = new NotificationDeliveryWorker(config.setup.notificationWebhookUrl);
   const quotaPeriodRepository = new PrismaQuotaPeriodRepository();
   const quotaService = new QuotaService(deviceRepository, policyRepository, trafficEnforcementService, firewallService, notificationRepository, quotaPeriodRepository);
   const devicePolicyService = new DevicePolicyService(deviceRepository, policyRepository, policyCatalogRepository, quotaService);
@@ -143,10 +145,10 @@ if (setupComplete) {
   for (const device of await deviceRepository.findAll()) { if (!device.ip) continue; for (const rule of await policyCatalogRepository.portRules(device.id)) if (rule.enabled) await portRuleEnforcer.apply({ mac: device.mac.toString(), ip: device.ip.toString() }, rule); }
   await trafficReconciliationService.reconcile(); await blockedIpReconciliationService.reconcile(); await ipBindingLifecycleService.reconcile(); await profileEnforcementService.reconcile(); await vpnService.reconcile();
   vpnService.startMonitor();
-  await scheduleEnforcementService.start(); await trafficAccountingService.start(); await trafficRetentionService.start(); await auditRetentionService.start(); await deviceDiscoverySyncService.start(); await liveMonitoringService.start(); await blockedIpReconciliationService.start(); await ipBindingLifecycleService.start(); await trafficReconciliationService.start(); await dhcpReservationService.start();
+  await scheduleEnforcementService.start(); await trafficAccountingService.start(); notificationDeliveryWorker.start(); await trafficRetentionService.start(); await auditRetentionService.start(); await deviceDiscoverySyncService.start(); await liveMonitoringService.start(); await blockedIpReconciliationService.start(); await ipBindingLifecycleService.start(); await trafficReconciliationService.start(); await dhcpReservationService.start();
 
   process.on("SIGTERM", async () => {
-    vpnService.stopMonitor(); await trafficAccountingService.stop(); trafficRetentionService.stop(); auditRetentionService.stop(); deviceDiscoverySyncService.stop(); liveMonitoringService.stop(); blockedIpReconciliationService.stop(); ipBindingLifecycleService.stop(); trafficReconciliationService.stop(); scheduleEnforcementService.stop(); dhcpReservationService.stop(); broadcastCaptureReader.stop(); await app.close();
+    vpnService.stopMonitor(); notificationDeliveryWorker.stop(); await trafficAccountingService.stop(); trafficRetentionService.stop(); auditRetentionService.stop(); deviceDiscoverySyncService.stop(); liveMonitoringService.stop(); blockedIpReconciliationService.stop(); ipBindingLifecycleService.stop(); trafficReconciliationService.stop(); scheduleEnforcementService.stop(); dhcpReservationService.stop(); broadcastCaptureReader.stop(); await app.close();
   });
 } else {
   registerFrontend(app);
