@@ -67,3 +67,14 @@ Scope: targeted source review of runtime traffic accounting, discovery, enforcem
 7. Block/unblock, port rules, quota actions, schedule transitions and VPN fail-closed transitions are tested.
 8. Restart/reboot reconciliation is tested without losing policies or exposing management access.
 9. Audit and traffic retention are observed over days; disk usage and PostgreSQL vacuum behavior are measured.
+
+## Additional findings and changes
+
+- Device discovery sync now avoids rewriting an unchanged device row every 10 seconds; it refreshes `lastSeen` at most every 30 seconds unless identity/IP/hostname fields change.
+- Login failure tracking is capped at 10,000 IP entries and expired entries are pruned on login. Expired auth sessions are pruned during successful login.
+- Prisma generator is configured with `engineType = "client"` because the backend already uses `@prisma/adapter-pg`; this should remove the generated Rust query-engine binary from the runtime client. Image-size reduction is pending CI confirmation.
+- Enforcement runtime image no longer copies the entire backend production `node_modules`; it copies only the compiled agent/executor and `dotenv`. It also removes unused package-install payloads (`dnsmasq`, `ethtool`, `tcpdump`, `kmod`) from that image. Docker build verification is pending.
+- Docker CI previously measured pre-optimization images at approximately 882.5 MB backend runtime, 593.0 MB migration, and 574.8 MB enforcement (uncompressed Docker image size). These are the baseline figures, not the size after the latest optimization.
+- The backend dependency preview applied safe npm audit updates, passed its test/build steps, and reported zero vulnerabilities in its generated audit report. The updated lockfile is committed by the branch workflow; a fresh backend CI run is still required after the bot commit.
+- Frontend dependency preview currently reports 21 vulnerabilities (2 critical, 8 high, 10 moderate, 1 low). The safe audit-fix attempt hit a Vite/vite-plugin-pwa peer-dependency conflict. Do not force a major Electron/Electron Builder upgrade without a desktop compatibility review.
+
