@@ -63,8 +63,9 @@ export class QuotaService {
     const cutoff = now.getTime() - 90 * 24 * 60 * 60 * 1000;
     for (const key of this.notifiedThresholds) {
       const match = key.match(/^\d+:(.+):(80|90|100)$/);
-      if (!match) continue;
-      const periodStart = new Date(match[1]).getTime();
+      const periodStartText = match?.[1];
+      if (!periodStartText) continue;
+      const periodStart = new Date(periodStartText).getTime();
       if (Number.isFinite(periodStart) && periodStart < cutoff) this.notifiedThresholds.delete(key);
     }
   }
