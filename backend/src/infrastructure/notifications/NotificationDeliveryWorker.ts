@@ -38,6 +38,8 @@ export class NotificationDeliveryWorker {
           await prisma.notification.update({ where: { id: row.id }, data: { deliveryAttempts: attempt, nextAttemptAt: new Date(Date.now() + delay), lastDeliveryError: error instanceof Error ? error.message : String(error) } });
         }
       }
+    } catch (error) {
+      console.error("Notification delivery worker failed; will retry on the next interval:", error);
     } finally { this.running = false; }
   }
 }
