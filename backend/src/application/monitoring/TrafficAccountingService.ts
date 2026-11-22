@@ -123,16 +123,23 @@ export class TrafficAccountingService {
       const knownByMac = new Map(knownDevices.map((device) => [device.mac.toString().toLowerCase(), device]));
       const activeDeviceIds = new Set<number>();
       let usageByMac: Map<string, { downloadBytes: bigint; uploadBytes: bigint }> | null = null;
+      let batchReadFailed = false;
 
       if (this.trafficUsageReader.readDevicesUsage) {
         try {
           usageByMac = await this.trafficUsageReader.readDevicesUsage(requestedMacs);
         } catch (error) {
-          console.error("Batched traffic counter read failed; falling back to per-device reads:", error);
+          batchReadFailed = true;
+          console.error("Batched traffic counter read failed; skipping this accounting cycle to avoid repeated full counter dumps:", error);
         }
       }
 
-      for (const discovered of discoveredDevices) {
+      // If the production batch snapshot failed, do not fall back to N full nft
+      // counter dumps. The next scheduled cycle retries the single snapshot.
+
+      if (batchReadFailed) return;
+
+      for (const discovered of discoveredDevices {
         try {
           const mac = discovered.mac.toLowerCase();
           const device = knownByMac.get(mac);
