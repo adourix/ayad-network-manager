@@ -69,3 +69,8 @@ Scope: targeted source review of runtime traffic accounting, discovery, enforcem
 7. Block/unblock, port rules, quota actions, schedule transitions and VPN fail-closed transitions are tested.
 8. Restart/reboot reconciliation is tested without losing policies or exposing management access.
 9. Audit and traffic retention are observed over days; disk usage and PostgreSQL vacuum behavior are measured.
+
+
+## Dependency audit finding
+
+The backend CI dependency audit currently reports **7 high-severity npm advisories** (including Prisma CLI and Fastify-related dependency paths), all with fixes indicated by npm audit. Dependency upgrades are not applied in this branch because registry access is unavailable in the editing environment and lockfile changes must be generated and tested with npm, not guessed. Resolve these advisories before a production release.
