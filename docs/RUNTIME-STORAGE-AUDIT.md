@@ -74,3 +74,9 @@ Scope: targeted source review of runtime traffic accounting, discovery, enforcem
 ## Dependency audit finding
 
 The backend CI dependency audit currently reports **7 high-severity npm advisories** (including Prisma CLI and Fastify-related dependency paths), all with fixes indicated by npm audit. Dependency upgrades are not applied in this branch because registry access is unavailable in the editing environment and lockfile changes must be generated and tested with npm, not guessed. Resolve these advisories before a production release.
+
+
+### Additional high-frequency path optimizations
+
+- If a batched nft counter snapshot fails, accounting skips that cycle instead of falling back to one full nft counter dump per discovered device; the next scheduled cycle retries.
+- Quota threshold notification keys are pruned no more than hourly once the in-memory key set reaches its threshold, avoiding a full set scan on every one-second accounting sample.
