@@ -49,9 +49,13 @@ UPLINK_BANDWIDTH_MBPS=
 NETWORK_MODE=single-interface-ifb
 VPN_TUN_INTERFACE=tun0
 EOF
+read -r -p "Dashboard port [5000]: " dashboard_port
+ dashboard_port="${dashboard_port:-5000}"
+ [[ "$dashboard_port" =~ ^[0-9]+$ ]] && (( dashboard_port >= 1 && dashboard_port <= 65535 )) || die "Invalid dashboard port"
+sed -i "s/^DASHBOARD_PORT=.*/DASHBOARD_PORT=$dashboard_port/" .env
 chmod 600 .env
 say "Checking dashboard port 5000"
-ss -ltn "( sport = :5000 )" | grep -q LISTEN && die "Port 5000 is in use; change DASHBOARD_PORT in .env and rerun"
+ss -ltn "( sport = :$dashboard_port )" | grep -q LISTEN && die "Port $dashboard_port is in use; choose another port and rerun"
 say "Preparing self-signed TLS certificate"
 mkdir -p certs && chmod 700 certs
 if [[ ! -s certs/server.key || ! -s certs/server.crt ]]; then
@@ -69,14 +73,14 @@ docker compose ps
 say "Waiting for API health"
 healthy=0
 for _ in $(seq 1 45); do
-  if curl -fsS "http://127.0.0.1:5000/api/health" >/dev/null; then healthy=1; break; fi
+  if curl -fsS "http://127.0.0.1:$dashboard_port/api/health" >/dev/null; then healthy=1; break; fi
   sleep 2
 done
 [[ "$healthy" == 1 ]] || { docker compose logs --tail=100 backend >&2; die "Backend health check failed"; }
 echo
 echo "Install/startup complete"
-echo "Dashboard: https://<server-ip>:5000/"
-echo "Setup Wizard: https://<server-ip>:5000/setup"
+echo "Dashboard: https://<server-ip>:$dashboard_port/"
+echo "Setup Wizard: https://<server-ip>:$dashboard_port/setup"
 echo "TLS certificate: $ROOT/certs/server.crt"
 echo "Host PostgreSQL: configured (no database container)"
 echo "Migrations: intentionally skipped"
