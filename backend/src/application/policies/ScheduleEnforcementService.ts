@@ -29,7 +29,11 @@ export class ScheduleEnforcementService {
   async start(): Promise<void> {
     if (this.timer) return;
     await this.reconcile();
-    this.timer = setInterval(() => void this.reconcile(), this.intervalMs);
+    this.timer = setInterval(() => {
+      void this.reconcile().catch((error) => {
+        console.error("Schedule enforcement reconciliation cycle failed:", error);
+      });
+    }, this.intervalMs);
   }
 
   stop(): void {
