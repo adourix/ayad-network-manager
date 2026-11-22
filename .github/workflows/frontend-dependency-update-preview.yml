@@ -48,6 +48,9 @@ jobs:
             echo "No dependency changes to commit."
           else
             git commit -m "chore(deps): apply tested frontend audit fixes"
+            # Rebase onto the latest branch tip before pushing, avoiding non-fast-forward races.
+            git fetch origin "${GITHUB_REF_NAME}"
+            git rebase "origin/${GITHUB_REF_NAME}"
             git push origin HEAD:${GITHUB_REF_NAME}
           fi
       - name: Upload updated package metadata
