@@ -7,8 +7,8 @@ services:
     logging:
       driver: json-file
       options:
-        max-size: "10m"
-        max-file: "3"
+        max-size: "5m"
+        max-file: "2"
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-ayad_network_manager}
       POSTGRES_USER: ${POSTGRES_USER:-ayad}
@@ -31,8 +31,8 @@ services:
     logging:
       driver: json-file
       options:
-        max-size: "10m"
-        max-file: "3"
+        max-size: "5m"
+        max-file: "2"
     network_mode: host
     cap_add:
       - NET_ADMIN
@@ -68,8 +68,8 @@ services:
     logging:
       driver: json-file
       options:
-        max-size: "10m"
-        max-file: "3"
+        max-size: "5m"
+        max-file: "2"
     env_file:
       - .env
     environment:
@@ -91,8 +91,8 @@ services:
     logging:
       driver: json-file
       options:
-        max-size: "10m"
-        max-file: "3"
+        max-size: "5m"
+        max-file: "2"
     user: node
     read_only: true
     tmpfs:
@@ -115,6 +115,7 @@ services:
       FRONTEND_DIST_PATH: /frontend-dist
       TLS_CERT_PATH: /etc/network-control-system/tls/server.crt
       TLS_KEY_PATH: /etc/network-control-system/tls/server.key
+      AUDIT_RETENTION_DAYS: ${AUDIT_RETENTION_DAYS:-90}
     ports:
       - "${DASHBOARD_PORT:-5000}:${DASHBOARD_PORT:-5000}"
     volumes:
