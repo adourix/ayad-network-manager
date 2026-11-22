@@ -17,7 +17,8 @@
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "react-router-dom": "^7.9.5",
-    "recharts": "^3.2.1"
+    "recharts": "^3.2.1",
+    "react-is": "^19.2.0"
   },
   "devDependencies": {
     "@types/node": "^24.13.3",
@@ -49,7 +50,9 @@
       "target": [
         {
           "target": "nsis",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ]
     },
