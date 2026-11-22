@@ -159,27 +159,12 @@ cp .env.docker.example .env
 nano .env
 ```
 
-At minimum, replace:
-
-```dotenv
-POSTGRES_PASSWORD=replace-with-a-long-random-password
-```
-
-Use a long random password. Do not commit `.env`.
+At minimum, replace `POSTGRES_PASSWORD` with a long random password. Do not commit `.env`.
 
 ### 3. Prepare TLS material
 
-The production backend is intended to serve HTTPS directly; nginx is not required.
-
-Create the certificate directory:
-
 ```bash
 mkdir -p certs
-```
-
-For a lab/test installation, a self-signed certificate can be generated with:
-
-```bash
 openssl req -x509 -newkey rsa:4096 -nodes \
   -keyout certs/server.key \
   -out certs/server.crt \
@@ -187,81 +172,54 @@ openssl req -x509 -newkey rsa:4096 -nodes \
   -subj "/CN=network-control.local"
 ```
 
-For a real deployment, replace these files with a certificate appropriate for the hostname clients will use.
+For production, replace the self-signed certificate with a certificate valid for the hostname used by clients.
 
-### 4. Build the images
+### 4. Build images
 
 ```bash
 docker compose build
 ```
 
-The enforcement image contains the networking tools at image build time:
+The build creates three targets:
 
-- dnsmasq
-- nftables
-- iproute2
-- ethtool
-- tcpdump
-- kmod
+- `backend`: Node/Fastify runtime plus built frontend; runs as the unprivileged `node` user and uses a read-only root filesystem.
+- `migrate`: one-shot Prisma migration image.
+- `enforcement`: narrow host-network container with `NET_ADMIN` and `NET_RAW`; it currently includes `nftables` and `iproute2`.
 
-The application image builds both the React frontend and Node/Fastify backend and contains the Prisma CLI needed for migrations.
-
-### 5. Start PostgreSQL and the enforcement agent
+### 5. Start the database and enforcement agent
 
 ```bash
 docker compose up -d db enforcement
-```
-
-Check:
-
-```bash
 docker compose ps
 docker compose logs --tail=100 enforcement
-docker compose logs --tail=100 db
 ```
 
-The enforcement health check becomes ready after its Unix socket exists:
+Wait until PostgreSQL and enforcement are healthy. Enforcement readiness currently checks that its Unix socket exists; it does not prove host gateway setup is complete.
 
-```text
-/run/network-control/enforcement.sock
+### 6. Apply database migrations (first install and after updates)
+
+```bash
+docker compose --profile migrate run --rm migrate
 ```
 
-### 6. Start the backend
+Do not skip this step on a fresh database. The backend container no longer runs migrations during startup.
+
+### 7. Start the backend
 
 ```bash
 docker compose up -d backend
+docker compose logs --tail=100 backend
 ```
 
-The backend container runs:
+### 8. Open the dashboard
 
-```text
-prisma migrate deploy
-node dist/bootstrap.js
-```
+Open `https://<gateway-ip>:5000` (or the configured `DASHBOARD_PORT`). The first-run wizard remains in setup mode until network configuration is persisted.
 
-The first startup remains in setup mode until the persisted setup configuration is complete.
+### Important Docker limitation before production use
 
-### 7. Open the dashboard
+The Docker packaging path is not yet production-ready for a clean host. The enforcement container has host networking and limited network capabilities, but it does not yet implement a typed host-setup broker for operations that require writing host OS files or controlling host system services. It also does not contain the complete bare-metal service/tool set (for example, dnsmasq and sing-box service management). Do not mount the host `/etc` into the backend or run the backend with `--privileged` to work around this; the required integration must be implemented through a restricted, validated host-setup protocol.
 
-Use the configured dashboard port, which defaults to `5000`:
-
-```text
-https://<gateway-ip>:5000
-```
-
-The first-run setup wizard is responsible for choosing the network configuration rather than relying on hardcoded reference-network values.
-
-## Important Docker limitation before production use
-
-The Compose architecture is intentionally aligned with the implementation specification: the enforcement container gets host networking and narrow capabilities, while the backend remains a normal container.
-
-However, the current setup implementation still has operations such as writing OS-level dnsmasq/nftables/systemd files and managing system services. Those operations cannot simply be performed inside the backend container because that filesystem and service manager are not the host's filesystem and service manager.
-
-Therefore, **do not treat `docker compose up` as proof that the complete gateway setup works on a clean host yet**.
-
-The required next integration is to route host-configuration operations through the enforcement boundary using a restricted, validated setup protocol. That preserves the architecture rather than weakening it by mounting the host `/etc` into the backend or running the backend privileged.
-
-This distinction is deliberate: a Docker deployment that starts containers but cannot safely configure the host gateway is not considered complete.
+Use the Docker path for packaging/isolated validation only until the clean-host gateway setup, rollback, reboot reconciliation, DHCP/NAT, nftables, traffic shaping, VPN, and management-access preservation are verified on a target host.
 
 ## Bare-metal installation
 
