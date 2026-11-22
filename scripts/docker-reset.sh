@@ -7,6 +7,7 @@ cd "$ROOT_DIR"
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 command -v docker >/dev/null 2>&1 || fail 'Docker is not installed.'
 docker compose version >/dev/null 2>&1 || fail 'Docker Compose v2 is required.'
+command -v python3 >/dev/null 2>&1 || fail 'python3 is required to resolve the Compose project name.'
 
 confirm_exact() {
   local prompt="$1" expected="$2" answer
@@ -15,11 +16,14 @@ confirm_exact() {
   [[ "$answer" == "$expected" ]] || fail 'Confirmation did not match; no destructive action was taken.'
 }
 
+PROJECT_NAME="$(docker compose config --format json | python3 -c 'import json,sys; print(json.load(sys.stdin).get("name", ""))')"
+[[ -n "$PROJECT_NAME" ]] || fail 'Could not determine the Compose project name.'
+
 volume_for() {
-  local logical="$1" project
-  project="$(docker compose config --format json | python3 -c 'import json,sys; print(json.load(sys.stdin).get("name", ""))')"
-  [[ -n "$project" ]] || return 1
-  docker volume ls --format '{{.Name}}' | awk -v expected="${project}_${logical}" '$0 == expected { print; found=1; exit } END { if (!found) exit 1 }'
+  local logical="$1" expected="${PROJECT_NAME}_${logical}" found
+  found="$(docker volume ls --format '{{.Name}}' | awk -v expected="$expected" '$0 == expected { print; exit }')"
+  [[ -n "$found" ]] || return 1
+  printf '%s\n' "$found"
 }
 
 reset_database() {
@@ -42,8 +46,11 @@ case "$MODE" in
     ;;
   --full-state)
     confirm_exact 'This permanently deletes DB, setup config, setup snapshots and runtime socket state.' 'DELETE ALL AYADNM STATE'
-    mapfile -t VOLUMES < <(for suffix in db-data config-data setup-state runtime-socket; do volume_for "$suffix" || exit 1; done)
-    [[ "${#VOLUMES[@]}" -eq 4 ]] || fail 'Could not identify all four exact Compose volumes; nothing was deleted.'
+    VOLUMES=()
+    for suffix in db-data config-data setup-state runtime-socket; do
+      volume="$(volume_for "$suffix")" || fail "Could not identify the exact ${PROJECT_NAME}_${suffix} volume; nothing was deleted."
+      VOLUMES+=("$volume")
+    done
     docker compose down --remove-orphans
     docker volume rm "${VOLUMES[@]}"
     docker compose up -d db enforcement
