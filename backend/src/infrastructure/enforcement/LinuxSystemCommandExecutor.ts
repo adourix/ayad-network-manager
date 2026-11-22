@@ -14,7 +14,8 @@ const SYSTEMCTL_TIMEOUT_MS = 20_000;
 const REMOTE_RESPONSE_GRACE_MS = 5_000;
 const REMOTE_CONNECT_RETRIES = 20;
 const REMOTE_CONNECT_RETRY_DELAY_MS = 250;
-const COMMAND_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
+// Bound command output memory. Current nft/ip/tc reads stay well below this for normal gateway sizes.
+const COMMAND_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
 const ERROR_OUTPUT_MAX_BYTES = 4 * 1024;
 
 function describeCommand(command: string, args: string[]): string {
