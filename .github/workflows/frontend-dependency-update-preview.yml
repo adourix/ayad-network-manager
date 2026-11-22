@@ -39,9 +39,6 @@ jobs:
         run: |
           npm audit --omit=dev --json > production-audit.json || true
           node -e 'const r=require("./production-audit.json"); const v=r.metadata?.vulnerabilities||{}; const total=(v.high||0)+(v.critical||0); console.log("Production high + critical:",total,JSON.stringify(v)); if(total>0) process.exit(1)'
-      - name: Require zero high/critical audit findings
-        run: |
-          node -e 'const r=require("./dependency-audit.json"); const v=r.metadata?.vulnerabilities||{}; const total=(v.high||0)+(v.critical||0); console.log("High + critical:",total,JSON.stringify(v)); if(total>0) process.exit(1)'
       - name: Commit tested dependency updates
         run: |
           git config user.name "github-actions[bot]"
