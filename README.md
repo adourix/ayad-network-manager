@@ -143,45 +143,39 @@ The Docker deployment deliberately uses different privilege levels:
 
 The enforcement container is **not** run with `--privileged`.
 
-## Docker installation
+## Unified installation
 
-The guided Docker installer is the entry point for the current Docker deployment:
+Run the unified entry point and choose native or Docker:
 
 ```bash
 git clone https://github.com/adourix/ayad-network-manager.git
 cd ayad-network-manager
+sudo bash install.sh
+```
+
+- **Native**: the original bare-metal installer; backend and enforcement remain systemd services.
+- **Docker**: full Host/Gateway provisioning and setup wizard run first using the original installer. After setup, the backend switches to Docker; the enforcement agent remains Host-native under systemd. This hybrid keeps privileged network operations out of the application container.
+
+The legacy Docker command remains supported:
+
+```bash
 sudo bash docker-install.sh
 ```
 
-The installer:
-- installs Docker Engine and the Compose plugin if missing
-- prompts for and validates the Host PostgreSQL connection using `psql`
-- writes a protected `.env` file and backs up an existing one
-- creates a self-signed TLS certificate if none exists
-- validates the Compose configuration, builds the backend/enforcement images, and starts both services
-- waits for the backend health endpoint and prints the dashboard/setup URLs
-
-The database must already exist on the Host, and the PostgreSQL role must have the required schema permissions. **Migrations are intentionally not run** by this installer.
-
 ### Docker topology
 
-- `backend`: host network mode, so it can connect to Host PostgreSQL via localhost; no `NET_ADMIN` or `NET_RAW`
-- `enforcement`: host network with only `NET_ADMIN` and `NET_RAW`, sharing the Unix socket with backend
-- PostgreSQL: existing Host installation (no database container)
-- no migration container is included in the Compose topology
-
-### Important Docker limitation
-
-The Docker setup currently launches the app and makes the existing setup wizard available, but it does **not** safely complete host gateway provisioning. The wizard's host-side operations require a restricted Host Setup Broker that is not yet implemented for this Docker topology. DHCP, NAT, firewall, traffic shaping, host files/services, rollback, and reboot reconciliation must not be considered Docker-ready.
-
-Do not use this Docker installer to configure a live gateway network yet. Do not mount the Host `/etc` into backend or use `--privileged`. The bare-metal installer remains the fully integrated setup path for the host networking workflow.
+- Backend application: Docker, host networking, no network-admin capabilities.
+- Enforcement: Host-native `network-control-enforcement.service`.
+- PostgreSQL, dnsmasq, nftables, tc/IFB and sing-box: provisioned on the Host.
+- Setup Wizard: completed through the original Host-native setup server before the backend switch.
+- Docker backend mounts only the enforcement socket, Host setup config, TLS and setup backup directory.
 
 ## Bare-metal installation
 
 For the reference bare-metal path:
 
 ```bash
-sudo bash backend/deploy/bare-metal/install.sh
+sudo bash install.sh native
 ```
 
 The intended flow is:
