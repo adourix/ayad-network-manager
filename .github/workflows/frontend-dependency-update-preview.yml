@@ -31,6 +31,9 @@ jobs:
           npm audit fix --legacy-peer-deps || echo "Some advisories may require manual overrides or upstream releases"
       - name: Build
         run: npm run build
+      - name: Build desktop installer
+        run: npm run desktop:build
+
       - name: Produce dependency audit report
         run: |
           npm audit --json > dependency-audit.json || true
@@ -39,9 +42,9 @@ jobs:
         run: |
           npm audit --omit=dev --json > production-audit.json || true
           node -e 'const r=require("./production-audit.json"); const v=r.metadata?.vulnerabilities||{}; const total=(v.high||0)+(v.critical||0); console.log("Production high + critical:",total,JSON.stringify(v)); if(total>0) process.exit(1)'
-      - name: Require zero production high/critical audit findings
+      - name: Require zero high/critical audit findings
         run: |
-          node -e 'const r=require("./production-audit.json"); const v=r.metadata?.vulnerabilities||{}; const total=(v.high||0)+(v.critical||0); console.log("Production high + critical:",total); if(total>0) process.exit(1)'
+          node -e 'const r=require("./dependency-audit.json"); const v=r.metadata?.vulnerabilities||{}; const total=(v.high||0)+(v.critical||0); console.log("High + critical:",total,JSON.stringify(v)); if(total>0) process.exit(1)'
       - name: Commit tested dependency updates
         run: |
           git config user.name "github-actions[bot]"
