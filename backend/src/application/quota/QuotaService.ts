@@ -223,8 +223,14 @@ export class QuotaService {
       if (used * 100n < quota * threshold) continue;
       const key = `${deviceId}:${periodStart.toISOString()}:${threshold}`;
       if (this.notifiedThresholds.has(key)) continue;
-      this.notifiedThresholds.add(key);
-      await this.notificationRepository.create({ deviceId, type: `quota-${threshold.toString()}`, message: `Device ${mac} reached ${threshold.toString()}% of its traffic quota.` });
+      try {
+        await this.notificationRepository.create({ deviceId, type: `quota-${threshold.toString()}`, message: `Device ${mac} reached ${threshold.toString()}% of its traffic quota.` });
+        this.notifiedThresholds.add(key);
+      } catch (error) {
+        // Notification delivery is auxiliary; it must never prevent quota
+        // enforcement from running after usage has already been recorded.
+        console.error(`Failed to create quota threshold notification for ${mac}:`, error);
+      }
     }
   }
 
