@@ -24,6 +24,7 @@ services:
       - app
 
   enforcement:
+    image: ayad-network-manager:enforcement
     build:
       context: .
       dockerfile: backend/deploy/enforcement/Dockerfile
@@ -60,6 +61,7 @@ services:
       retries: 30
 
   migrate:
+    image: ayad-network-manager:migrate
     build:
       context: .
       dockerfile: backend/deploy/docker/backend.Dockerfile
@@ -83,6 +85,7 @@ services:
       - migrate
 
   backend:
+    image: ayad-network-manager:backend
     build:
       context: .
       dockerfile: backend/deploy/docker/backend.Dockerfile
