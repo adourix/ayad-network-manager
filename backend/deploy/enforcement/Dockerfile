@@ -5,8 +5,10 @@ RUN npm ci
 COPY backend/ ./
 RUN npm run build
 
-# Install only host networking tools required by the enforcement boundary.
-FROM debian:bookworm-slim AS enforcement-runtime
+# Keep the required host networking utilities in a dedicated, minimal image.
+# Copying individual executables into another distro can miss shared libraries
+# and package data, so the final image uses Debian slim as its runtime base.
+FROM debian:bookworm-slim AS system-tools
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
        ca-certificates \
@@ -19,29 +21,31 @@ RUN apt-get update \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
-FROM node:22-bookworm-slim
+FROM debian:bookworm-slim
 ENV NODE_ENV=production \
     ENFORCEMENT_SOCKET_PATH=/run/network-control/enforcement.sock \
     SYSTEM_CONFIG_PATH=/etc/network-control-system/config.env \
     SETUP_SNAPSHOT_DIR=/var/lib/network-control/backups
 WORKDIR /app
 
+# Install the matching Node.js major runtime on Debian Bookworm.
+COPY --from=node:22-bookworm-slim /usr/local/bin/node /usr/local/bin/node
+COPY --from=node:22-bookworm-slim /usr/local/lib/node_modules /usr/local/lib/node_modules
+RUN ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm
+
 COPY --from=build /src/backend/package*.json ./
 COPY --from=build /src/backend/node_modules ./node_modules
 COPY --from=build /src/backend/dist ./dist
 COPY --from=build /src/backend/prisma ./prisma
 
-# The enforcement agent is a narrow privileged boundary. Keep required
-# system binaries/libraries, but do not install the complete Debian toolchain.
-COPY --from=enforcement-runtime /usr/bin/nft /usr/bin/nft
-COPY --from=enforcement-runtime /usr/sbin/tc /usr/sbin/tc
-COPY --from=enforcement-runtime /usr/sbin/ip /usr/sbin/ip
-COPY --from=enforcement-runtime /usr/sbin/dnsmasq /usr/sbin/dnsmasq
-COPY --from=enforcement-runtime /usr/bin/tcpdump /usr/bin/tcpdump
-COPY --from=enforcement-runtime /usr/sbin/ethtool /usr/sbin/ethtool
-COPY --from=enforcement-runtime /usr/sbin/modprobe /usr/sbin/modprobe
-COPY --from=enforcement-runtime /lib /lib
-COPY --from=enforcement-runtime /usr/lib /usr/lib
+# Copy the Debian packages' installed trees, including their shared libraries
+# and runtime data. This avoids incomplete single-binary COPY optimizations.
+COPY --from=system-tools /usr/bin /usr/bin
+COPY --from=system-tools /usr/sbin /usr/sbin
+COPY --from=system-tools /lib /lib
+COPY --from=system-tools /usr/lib /usr/lib
+COPY --from=system-tools /etc/dnsmasq.d /etc/dnsmasq.d
+COPY --from=system-tools /usr/share /usr/share
 
 RUN mkdir -p /run/network-control /etc/network-control-system /var/lib/network-control/backups
 
