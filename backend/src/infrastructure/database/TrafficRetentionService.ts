@@ -12,13 +12,9 @@ function floorToDay(timestampMs: number): Date {
 }
 
 /**
- * Keeps fine-grained traffic history bounded while preserving long-term
- * daily/hourly aggregates for the history API.
- *
- * Raw traffic samples are minute buckets produced by TrafficAccountingService.
- * They are retained for roughly 48h, then rolled into hourly buckets. Hourly
- * buckets older than roughly 30 days are rolled into daily buckets before
- * being removed.
+ * Keeps fine-grained traffic history bounded while preserving coarse aggregates.
+ * Raw samples are kept for about 48 hours, hourly rollups for about 30 days,
+ * and older traffic is preserved in daily rollups.
  */
 export class TrafficRetentionService {
   private timer: NodeJS.Timeout | undefined;
@@ -48,70 +44,61 @@ export class TrafficRetentionService {
     if (this.running) return;
     this.running = true;
     try {
-    const now = Date.now();
+      const now = Date.now();
+      // Align rollups to completed hour/day boundaries to avoid partial buckets.
+      const rawCutoff = floorToHour(now - this.rawWindowMs);
+      const hourlyCutoff = floorToDay(now - this.hourlyWindowMs);
 
-    // Align retention boundaries to bucket boundaries. This prevents a
-    // partially completed hour/day from being rolled up and later overwritten
-    // with an incomplete aggregate.
-    const rawCutoff = floorToHour(now - this.rawWindowMs);
-    const hourlyCutoff = floorToDay(now - this.hourlyWindowMs);
+      // Roll every expired raw bucket, including legacy samples older than the
+      // hourly retention window. Those are immediately converted to daily below.
+      await prisma.$executeRaw`
+        INSERT INTO "traffic_rollups"
+          ("deviceId", "bucketStart", "granularity", "downloadBytes", "uploadBytes")
+        SELECT
+          "deviceId",
+          date_trunc('hour', "timestamp"),
+          'hourly',
+          sum("downloadBytes"),
+          sum("uploadBytes")
+        FROM "traffic_samples"
+        WHERE "timestamp" < ${rawCutoff}
+        GROUP BY "deviceId", date_trunc('hour', "timestamp")
+        ON CONFLICT ("deviceId", "bucketStart", "granularity")
+        DO UPDATE SET
+          "downloadBytes" = EXCLUDED."downloadBytes",
+          "uploadBytes" = EXCLUDED."uploadBytes"
+      `;
 
-    // Convert complete raw hours that have left the fine-grained window into
-    // hourly aggregates. This is idempotent because of the unique key.
-    await prisma.$executeRaw`
-      INSERT INTO "traffic_rollups"
-        ("deviceId", "bucketStart", "granularity", "downloadBytes", "uploadBytes")
-      SELECT
-        "deviceId",
-        date_trunc('hour', "timestamp"),
-        'hourly',
-        sum("downloadBytes"),
-        sum("uploadBytes")
-      FROM "traffic_samples"
-      WHERE "timestamp" < ${rawCutoff}
-      GROUP BY "deviceId", date_trunc('hour', "timestamp")
-      ON CONFLICT ("deviceId", "bucketStart", "granularity")
-      DO UPDATE SET
-        "downloadBytes" = EXCLUDED."downloadBytes",
-        "uploadBytes" = EXCLUDED."uploadBytes"
-    `;
+      // Daily buckets are rebuilt from hourly rollups before old hourly data
+      // is deleted. This also safely handles an initial run on legacy data.
+      await prisma.$executeRaw`
+        INSERT INTO "traffic_rollups"
+          ("deviceId", "bucketStart", "granularity", "downloadBytes", "uploadBytes")
+        SELECT
+          "deviceId",
+          date_trunc('day', "bucketStart"),
+          'daily',
+          sum("downloadBytes"),
+          sum("uploadBytes")
+        FROM "traffic_rollups"
+        WHERE "granularity" = 'hourly'
+          AND "bucketStart" < ${hourlyCutoff}
+        GROUP BY "deviceId", date_trunc('day', "bucketStart")
+        ON CONFLICT ("deviceId", "bucketStart", "granularity")
+        DO UPDATE SET
+          "downloadBytes" = EXCLUDED."downloadBytes",
+          "uploadBytes" = EXCLUDED."uploadBytes"
+      `;
 
-    // Build daily history from complete hourly buckets. Raw samples are not
-    // used here because they are pruned after the fine-grained retention
-    // window.
-    await prisma.$executeRaw`
-      INSERT INTO "traffic_rollups"
-        ("deviceId", "bucketStart", "granularity", "downloadBytes", "uploadBytes")
-      SELECT
-        "deviceId",
-        date_trunc('day', "bucketStart"),
-        'daily',
-        sum("downloadBytes"),
-        sum("uploadBytes")
-      FROM "traffic_rollups"
-      WHERE "granularity" = 'hourly'
-        AND "bucketStart" < ${hourlyCutoff}
-      GROUP BY "deviceId", date_trunc('day', "bucketStart")
-      ON CONFLICT ("deviceId", "bucketStart", "granularity")
-      DO UPDATE SET
-        "downloadBytes" = EXCLUDED."downloadBytes",
-        "uploadBytes" = EXCLUDED."uploadBytes"
-    `;
+      await prisma.trafficSample.deleteMany({
+        where: { timestamp: { lt: rawCutoff } },
+      });
 
-    await prisma.trafficSample.deleteMany({
-      where: { timestamp: { lt: rawCutoff } },
-    });
-
-    // Daily rollups are the source of truth for periods older than the hourly
-    // retention window.
-    await prisma.trafficRollup.deleteMany({
-      where: {
-        granularity: "hourly",
-        bucketStart: { lt: hourlyCutoff },
-      },
-    });
+      await prisma.trafficRollup.deleteMany({
+        where: { granularity: "hourly", bucketStart: { lt: hourlyCutoff } },
+      });
     } catch (error) {
-      console.error("Traffic retention/rollup job failed; keeping data for a later retry:", error);
+      console.error("Traffic retention/rollup job failed; retrying on next interval:", error);
     } finally {
       this.running = false;
     }
