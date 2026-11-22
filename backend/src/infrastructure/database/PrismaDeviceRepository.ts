@@ -18,6 +18,7 @@ export class PrismaDeviceRepository implements DeviceRepository {
   async findByMac(mac:MacAddress):Promise<Device|null>{const row=await prisma.device.findUnique({where:{mac:mac.toString()}});return row?toDomain(row):null;}
   async findById(id:number):Promise<Device|null>{const row=await prisma.device.findUnique({where:{id}});return row?toDomain(row):null;}
   async findAll():Promise<Device[]>{const rows=await prisma.device.findMany({orderBy:{id:"asc"}});return rows.map(toDomain);}
+  async findByMacs(macs:string[]):Promise<Device[]>{const normalized=[...new Set(macs.map(mac=>mac.trim().toLowerCase()).filter(Boolean))];if(!normalized.length)return [];const rows=await prisma.device.findMany({where:{mac:{in:normalized}},orderBy:{id:"asc"}});return rows.map(toDomain);}
   async upsert(data:{mac:MacAddress;ip:IpAddress;hostname:string|null;l2Visible:boolean;proxyMac:MacAddress|null;identityValidated?:boolean;identitySource?:IdentitySource;seenAt:Date}):Promise<Device>{
     const mac=data.mac.toString(); const proxyMac=data.proxyMac?.toString()??null; await this.assertNotProxyMac(mac); if(proxyMac===mac)throw new Error(`Device MAC cannot also be its proxy MAC: ${mac}`);
     const existing=await this.findByMac(data.mac);
