@@ -4,6 +4,11 @@ services:
   db:
     image: postgres:16-bookworm
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-ayad_network_manager}
       POSTGRES_USER: ${POSTGRES_USER:-ayad}
@@ -23,6 +28,11 @@ services:
       context: .
       dockerfile: backend/deploy/enforcement/Dockerfile
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     network_mode: host
     cap_add:
       - NET_ADMIN
@@ -54,6 +64,11 @@ services:
       dockerfile: backend/deploy/docker/backend.Dockerfile
       target: migration
     restart: "no"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     env_file:
       - .env
     environment:
@@ -72,6 +87,11 @@ services:
       dockerfile: backend/deploy/docker/backend.Dockerfile
       target: runtime
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     user: node
     read_only: true
     tmpfs:
