@@ -3,14 +3,6 @@ import { prisma } from "./prisma.js";
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
 
-function floorToHour(timestampMs: number): Date {
-  return new Date(Math.floor(timestampMs / HOUR_MS) * HOUR_MS);
-}
-
-function floorToDay(timestampMs: number): Date {
-  return new Date(Math.floor(timestampMs / DAY_MS) * DAY_MS);
-}
-
 /**
  * Keeps fine-grained traffic history bounded while preserving coarse aggregates.
  * Raw samples are kept for about 48 hours, hourly rollups for about 30 days,
