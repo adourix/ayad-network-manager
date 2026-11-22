@@ -123,7 +123,7 @@ services:
       - setup-state:/var/lib/network-control:ro
       - ./certs:/etc/network-control-system/tls:ro
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch(\\\"http://127.0.0.1:\\"+process.env.DASHBOARD_PORT+\\\"/api/health\\\").then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:'+process.env.DASHBOARD_PORT+'/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s
       timeout: 5s
       retries: 3
