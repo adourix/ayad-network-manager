@@ -28,21 +28,31 @@ export class AuditedSystemCommandExecutor implements SystemCommandExecutor {
       }
       const result = await this.inner.execute(command, args);
       if (shouldAudit) {
-        await this.audit.audit({
-          action: "enforcement-command-after",
-          actor: this.actor,
-          details: { ...details, result: "success" },
-        });
+        try {
+          await this.audit.audit({
+            action: "enforcement-command-after",
+            actor: this.actor,
+            details: { ...details, result: "success" },
+          });
+        } catch (auditError) {
+          // The kernel mutation already succeeded. Do not report it as failed
+          // merely because the post-action audit write failed.
+          console.error("Post-enforcement audit write failed:", auditError);
+        }
       }
       return result;
     } catch (error) {
       if (shouldAudit) {
         const message = error instanceof Error ? error.message : String(error);
-        await this.audit.audit({
-          action: "enforcement-command-after",
-          actor: this.actor,
-          details: { ...details, result: "failure", error: message.slice(0, 1000) },
-        });
+        try {
+          await this.audit.audit({
+            action: "enforcement-command-after",
+            actor: this.actor,
+            details: { ...details, result: "failure", error: message.slice(0, 1000) },
+          });
+        } catch (auditError) {
+          console.error("Failure audit write failed:", auditError);
+        }
       }
       throw error;
     }
