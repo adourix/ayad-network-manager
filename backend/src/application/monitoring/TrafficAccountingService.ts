@@ -37,6 +37,7 @@ export class TrafficAccountingService {
   private readonly pendingBuckets = new Map<number, PendingBucket>();
   private timer: NodeJS.Timeout | undefined;
   private running = false;
+  private inFlight: Promise<void> | null = null;
   private readonly live = new Map<string, LiveTraffic>();
   private lastAccountingReconcileAt = 0;
 
@@ -68,6 +69,10 @@ export class TrafficAccountingService {
       this.timer = undefined;
     }
 
+    // Wait for a sampling cycle to finish before flushing pending history;
+    // otherwise the in-flight cycle could append to buckets after shutdown flush.
+    if (this.inFlight) await this.inFlight;
+
     for (const [deviceId, bucket] of this.pendingBuckets) {
       try {
         await this.flushHistoryBucket(deviceId, bucket);
@@ -82,10 +87,17 @@ export class TrafficAccountingService {
     return [...this.live.values()];
   }
 
-  private async collect(): Promise<void> {
-    if (this.running) return;
+  private collect(): Promise<void> {
+    if (this.inFlight) return this.inFlight;
     this.running = true;
+    this.inFlight = this.collectCycle().finally(() => {
+      this.running = false;
+      this.inFlight = null;
+    });
+    return this.inFlight;
+  }
 
+  private async collectCycle(): Promise<void> {
     try {
       const discoveredDevices = await this.discoveryService.discover();
       const now = new Date();
@@ -147,8 +159,8 @@ export class TrafficAccountingService {
       }
     } catch (error) {
       console.error("Traffic accounting collection failed:", error);
-    } finally {
-      this.running = false;
+    } catch (error) {
+      console.error("Traffic accounting collection failed:", error);
     }
   }
 
