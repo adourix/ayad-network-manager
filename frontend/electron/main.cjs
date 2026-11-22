@@ -36,16 +36,33 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
-  // The gateway normally uses an internal HTTPS certificate. Only trust a
-  // certificate error for the configured API host; never disable TLS globally.
+  // Internal gateways may use a self-signed certificate. Never blanket-trust
+  // TLS errors: accept only a currently valid certificate with an explicit
+  // fingerprint pin for the configured HTTPS API host.
+  const expectedFingerprint = (process.env.AYAD_API_CERT_FINGERPRINT ?? "")
+    .replace(/[^a-fA-F0-9]/g, "")
+    .toLowerCase();
   app.on("certificate-error", (event, webContents, url, error, certificate, callback) => {
-    const configured = process.env.VITE_API_BASE_URL;
-    if (!configured) return callback(false);
+    if (!expectedFingerprint || expectedFingerprint.length < 40) return callback(false);
 
     try {
-      const apiHost = new URL(configured).hostname;
-      const requestHost = new URL(url).hostname;
-      if (apiHost === requestHost && certificate && error) {
+      const configured = process.env.VITE_API_BASE_URL;
+      if (!configured || !certificate) return callback(false);
+      const apiUrl = new URL(configured);
+      const requestUrl = new URL(url);
+      const actualFingerprint = (certificate.fingerprint ?? "")
+        .replace(/[^a-fA-F0-9]/g, "")
+        .toLowerCase();
+      const nowSeconds = Math.floor(Date.now() / 1000);
+      const isCurrentlyValid = certificate.validStart <= nowSeconds && certificate.validExpiry > nowSeconds;
+      if (
+        apiUrl.protocol === "https:"
+        && requestUrl.protocol === "https:"
+        && apiUrl.hostname === requestUrl.hostname
+        && actualFingerprint === expectedFingerprint
+        && isCurrentlyValid
+        && error === "net::ERR_CERT_AUTHORITY_INVALID"
+      ) {
         event.preventDefault();
         callback(true);
         return;
