@@ -14,12 +14,13 @@ Scope: targeted source review of runtime traffic accounting, discovery, enforcem
 
 ### Database and persistent storage
 
-- Removed redundant traffic_samples index that duplicated the unique `(deviceId, timestamp)` index.
-- Removed redundant traffic_rollups index on `(deviceId, bucketStart)` because the unique `(deviceId, bucketStart, granularity)` index already supports its left-prefix queries.
-- Added migration `20261122100000_remove_duplicate_traffic_history_indexes`.
+- Reviewed traffic-history index redundancy. The unique composite indexes remain the source of truth; no migration is included in this PR, so existing database indexes/data are left untouched.
 - Traffic history rollup is serialized, catches failures and retries on the next interval. Legacy raw samples older than the hourly window are rolled through hourly into daily aggregates before pruning.
 - Added batched audit-log retention (90 days by default; configurable with `AUDIT_RETENTION_DAYS`). Cleanup is capped to 20 batches of 5,000 rows per run to limit pressure.
-- Docker service logs rotate at 10 MB with 3 files per service.
+- Terminal notification history older than the same retention window is pruned in batches; pending and retryable notifications are preserved.
+- Docker service logs rotate at 5 MB with 2 files per service.
+- Docker builds use BuildKit npm cache mounts and copy only build-required source; backend runtime removes TypeScript declarations and source maps.
+- Enforcement runtime installs only its minimal `dotenv` dependency and copies only its entrypoint and command executor, rather than shipping the full backend runtime dependency tree.
 
 ### Enforcement IPC and audit behavior
 
@@ -39,6 +40,7 @@ Scope: targeted source review of runtime traffic accounting, discovery, enforcem
 ### Frontend/runtime hygiene
 
 - WebSocket reconnect uses capped exponential backoff instead of retrying every second indefinitely when the backend is unavailable.
+- REST polling was relaxed to 3–5 seconds while live monitoring remains on WebSocket/5-second server snapshots.
 - Removed unused React/Vite starter SVG assets.
 
 ## Remaining blockers and limits
