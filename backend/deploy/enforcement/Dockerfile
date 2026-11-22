@@ -31,8 +31,8 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
 
 COPY --from=production-deps /src/enforcement/node_modules ./node_modules
-COPY --from=build /src/backend/package.json ./package.json
-COPY --from=build /src/backend/dist ./dist
+COPY --from=build /src/backend/dist/infrastructure/enforcement/EnforcementAgent.js ./dist/infrastructure/enforcement/EnforcementAgent.js
+COPY --from=build /src/backend/dist/infrastructure/enforcement/LinuxSystemCommandExecutor.js ./dist/infrastructure/enforcement/LinuxSystemCommandExecutor.js
 
 RUN mkdir -p /run/network-control /etc/network-control-system /var/lib/network-control/backups
 
