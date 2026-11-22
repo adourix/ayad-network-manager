@@ -24,7 +24,7 @@ jobs:
           cache-dependency-path: backend/package-lock.json
       - name: Install and apply non-breaking audit fixes
         run: |
-          npm ci
+          npm install
           npm audit fix || echo "Some advisories may require manual overrides or upstream releases"
       - name: Test
         run: npm test
