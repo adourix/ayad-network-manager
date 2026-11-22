@@ -51,14 +51,26 @@ export class DeviceDiscoveryService {
     const trusted = new Set(["REACHABLE", "STALE", "PERMANENT"]);
     const counts = new Map<string, number>();
     const keys: string[] = [];
+    // Deduplicate observations before bulk upsert; PostgreSQL cannot upsert the
+    // same conflict key twice within one INSERT statement.
+    const uniqueNeighbors = new Map<string, { mac: string; ip: string; state: string }>();
     for (const neighbor of neighbors) {
       const state = neighbor.state.trim().toUpperCase();
       if (!trusted.has(state)) continue;
       const mac = neighbor.mac.trim().toLowerCase();
       const ip = neighbor.ip.trim();
-      const key = `${mac}|${ip}`;
-      keys.push(key);
-      counts.set(key, await this.observationRepository.observe(mac, ip, state, now));
+      uniqueNeighbors.set(`${mac}|${ip}`, { mac, ip, state });
+    }
+    const batch = [...uniqueNeighbors.values()];
+    keys.push(...uniqueNeighbors.keys());
+    if (this.observationRepository.observeMany) {
+      const observed = await this.observationRepository.observeMany(batch, now);
+      for (const [key, count] of observed) counts.set(key, count);
+    } else {
+      for (const neighbor of batch) {
+        const key = `${neighbor.mac}|${neighbor.ip}`;
+        counts.set(key, await this.observationRepository.observe(neighbor.mac, neighbor.ip, neighbor.state, now));
+      }
     }
     await this.observationRepository.resetMissing(keys, now);
 
