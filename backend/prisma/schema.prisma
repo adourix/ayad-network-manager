@@ -157,7 +157,6 @@ model TrafficSample {
   downloadRate BigInt?
   uploadRate BigInt?
   @@unique([deviceId, timestamp])
-  @@index([deviceId, timestamp])
   @@map("traffic_samples")
 }
 
@@ -170,7 +169,6 @@ model TrafficRollup {
   downloadBytes BigInt
   uploadBytes BigInt
   @@unique([deviceId, bucketStart, granularity])
-  @@index([deviceId, bucketStart])
   @@map("traffic_rollups")
 }
 
