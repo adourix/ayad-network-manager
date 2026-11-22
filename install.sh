@@ -46,7 +46,7 @@ host_setup_completed() {
   [[ -f "$config" ]] || return 1
   grep -q '^SETUP_COMPLETED=true$' "$config" || return 1
   for key in CLIENT_INTERFACE UPLINK_INTERFACE CLIENT_GATEWAY_IP CLIENT_SUBNET UPLINK_BANDWIDTH_MBPS DASHBOARD_PORT SSH_PORT DNS_SERVERS; do
-    grep -Eq "^\${key}=.+$" "$config" || return 1
+    grep -Eq "^${key}=.+$" "$config" || return 1
   done
   [[ -f /etc/systemd/system/network-control-enforcement.service ]] || return 1
   [[ -f /etc/systemd/system/network-control-backend.service ]] || return 1
