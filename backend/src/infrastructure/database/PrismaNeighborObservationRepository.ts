@@ -32,7 +32,7 @@ export class PrismaNeighborObservationRepository implements NeighborObservationR
     // Current neighbors are upserted with seenAt before this method runs.
     // This timestamp update replaces a full table read and JS-side scan.
     await prisma.neighborObservation.updateMany({
-      where: { lastSeen: { lt: seenAt } },
+      where: { lastSeen: { lt: seenAt }, consecutiveCount: { gt: 0 } },
       data: { consecutiveCount: 0 },
     });
 
