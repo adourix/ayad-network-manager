@@ -1,28 +1,6 @@
 name: ayad-network-manager
 
 services:
-  db:
-    image: postgres:16-bookworm
-    restart: unless-stopped
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
-    environment:
-      POSTGRES_DB: ${POSTGRES_DB:-ayad_network_manager}
-      POSTGRES_USER: ${POSTGRES_USER:-ayad}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
-    volumes:
-      - db-data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ayad} -d ${POSTGRES_DB:-ayad_network_manager}"]
-      interval: 5s
-      timeout: 5s
-      retries: 20
-    networks:
-      - app
-
   enforcement:
     image: ayad-network-manager:enforcement
     build:
@@ -60,30 +38,6 @@ services:
       timeout: 3s
       retries: 30
 
-  migrate:
-    image: ayad-network-manager:migrate
-    build:
-      context: .
-      dockerfile: backend/deploy/docker/backend.Dockerfile
-      target: migration
-    restart: "no"
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
-    env_file:
-      - .env
-    environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-ayad}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-ayad_network_manager}
-    depends_on:
-      db:
-        condition: service_healthy
-    networks:
-      - app
-    profiles:
-      - migrate
-
   backend:
     image: ayad-network-manager:backend
     build:
@@ -106,24 +60,18 @@ services:
       NODE_ENV: production
       HOST: 0.0.0.0
       DASHBOARD_PORT: ${DASHBOARD_PORT:-5000}
-      DATABASE_URL: postgresql://${POSTGRES_USER:-ayad}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-ayad_network_manager}
-      DATABASE_USER: ${POSTGRES_USER:-ayad}
-      DATABASE_PASSWORD: ${POSTGRES_PASSWORD}
-      DATABASE_NAME: ${POSTGRES_DB:-ayad_network_manager}
-      DATABASE_HOST: db
-      DATABASE_PORT: 5432
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL to the Host PostgreSQL connection}
       ENFORCEMENT_SOCKET_PATH: /run/network-control/enforcement.sock
       SYSTEM_CONFIG_PATH: /etc/network-control-system/config.env
       SETUP_SNAPSHOT_DIR: /var/lib/network-control/backups
       FRONTEND_DIST_PATH: /frontend-dist
       TLS_CERT_PATH: /etc/network-control-system/tls/server.crt
       TLS_KEY_PATH: /etc/network-control-system/tls/server.key
-    ports:
-      - "${DASHBOARD_PORT:-5000}:${DASHBOARD_PORT:-5000}"
+    network_mode: host
     volumes:
-      - config-data:/etc/network-control-system:ro
+      - config-data:/etc/network-control-system
       - runtime-socket:/run/network-control
-      - setup-state:/var/lib/network-control:ro
+      - setup-state:/var/lib/network-control
       - ./certs:/etc/network-control-system/tls:ro
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:'+process.env.DASHBOARD_PORT+'/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
@@ -132,19 +80,10 @@ services:
       retries: 3
       start_period: 20s
     depends_on:
-      db:
-        condition: service_healthy
       enforcement:
         condition: service_healthy
-    networks:
-      - app
 
 volumes:
   config-data:
   runtime-socket:
   setup-state:
-  db-data:
-
-networks:
-  app:
-    driver: bridge
