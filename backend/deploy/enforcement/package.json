@@ -1,0 +1,9 @@
+{
+  "name": "enforcement-runtime",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "dependencies": {
+    "dotenv": "17.4.2"
+  }
+}
