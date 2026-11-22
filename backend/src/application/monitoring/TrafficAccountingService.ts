@@ -139,7 +139,7 @@ export class TrafficAccountingService {
 
       if (batchReadFailed) return;
 
-      for (const discovered of discoveredDevices {
+      for (const discovered of discoveredDevices) {
         try {
           const mac = discovered.mac.toLowerCase();
           const device = knownByMac.get(mac);
