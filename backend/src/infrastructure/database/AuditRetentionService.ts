@@ -58,7 +58,22 @@ export class AuditRetentionService {
         totalDeleted += deleted;
         if (deleted < this.batchSize) break;
       }
-      if (totalDeleted > 0) console.info(`Audit retention removed ${totalDeleted} expired rows (older than ${this.retentionDays} days).`);
+      // Keep notification history bounded too, but preserve pending deliveries and
+      // retryable failures. Only terminal notifications are eligible for cleanup.
+      const deletedNotifications = await prisma.$executeRaw`
+        WITH expired AS (
+          SELECT "id" FROM "notifications"
+          WHERE "createdAt" < ${cutoff}
+            AND ("deliveredAt" IS NOT NULL OR "deliveryAttempts" >= 8)
+          ORDER BY "createdAt" ASC
+          LIMIT ${this.batchSize}
+        )
+        DELETE FROM "notifications"
+        WHERE "id" IN (SELECT "id" FROM expired)
+      `;
+      if (totalDeleted > 0 || deletedNotifications > 0) {
+        console.info(`Retention removed ${totalDeleted} audit rows and ${deletedNotifications} terminal notifications older than ${this.retentionDays} days.`);
+      }
       return totalDeleted;
     } catch (error) {
       console.error("Audit retention cleanup failed; will retry on the next scheduled run:", error);
