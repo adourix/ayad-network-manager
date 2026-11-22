@@ -4,15 +4,24 @@ import { prisma } from "../database/prisma.js";
 export class NotificationDeliveryWorker {
   private timer: NodeJS.Timeout | undefined;
   private running = false;
-  constructor(private readonly webhookUrl: string | null, private readonly intervalMs = 5000) {}
+
+  constructor(private readonly webhookUrl: string | null, private readonly intervalMs = 5000) {
+    if (!Number.isInteger(intervalMs) || intervalMs < 1000) {
+      throw new Error("Notification worker interval must be at least 1 second");
+    }
+  }
 
   start(): void {
-    if (this.timer) return;
+    // Avoid an idle timer when notification delivery is not configured.
+    if (this.timer || !this.webhookUrl) return;
     void this.process();
     this.timer = setInterval(() => void this.process(), this.intervalMs);
   }
 
-  stop(): void { if (this.timer) clearInterval(this.timer); this.timer = undefined; }
+  stop(): void {
+    if (this.timer) clearInterval(this.timer);
+    this.timer = undefined;
+  }
 
   async process(): Promise<void> {
     if (this.running || !this.webhookUrl) return;
@@ -21,25 +30,45 @@ export class NotificationDeliveryWorker {
       const now = new Date();
       const rows = await prisma.notification.findMany({
         where: { deliveredAt: null, nextAttemptAt: { lte: now }, deliveryAttempts: { lt: 8 } },
-        orderBy: { id: "asc" }, take: 20,
+        orderBy: { id: "asc" },
+        take: 20,
       });
       for (const row of rows) {
         const attempt = row.deliveryAttempts + 1;
         try {
           const response = await fetch(this.webhookUrl, {
-            method: "POST", headers: { "content-type": "application/json" },
-            body: JSON.stringify({ id: row.id, deviceId: row.deviceId, type: row.type, message: row.message, createdAt: row.createdAt }),
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              id: row.id,
+              deviceId: row.deviceId,
+              type: row.type,
+              message: row.message,
+              createdAt: row.createdAt,
+            }),
             signal: AbortSignal.timeout(5000),
           });
           if (!response.ok) throw new Error(`notification delivery HTTP ${response.status}`);
-          await prisma.notification.update({ where: { id: row.id }, data: { deliveryAttempts: attempt, deliveredAt: new Date(), lastDeliveryError: null } });
+          await prisma.notification.update({
+            where: { id: row.id },
+            data: { deliveryAttempts: attempt, deliveredAt: new Date(), lastDeliveryError: null },
+          });
         } catch (error) {
           const delay = Math.min(60 * 60 * 1000, 1000 * 2 ** Math.min(attempt, 10));
-          await prisma.notification.update({ where: { id: row.id }, data: { deliveryAttempts: attempt, nextAttemptAt: new Date(Date.now() + delay), lastDeliveryError: error instanceof Error ? error.message : String(error) } });
+          await prisma.notification.update({
+            where: { id: row.id },
+            data: {
+              deliveryAttempts: attempt,
+              nextAttemptAt: new Date(Date.now() + delay),
+              lastDeliveryError: error instanceof Error ? error.message.slice(0, 1000) : String(error).slice(0, 1000),
+            },
+          });
         }
       }
     } catch (error) {
       console.error("Notification delivery worker failed; will retry on the next interval:", error);
-    } finally { this.running = false; }
+    } finally {
+      this.running = false;
+    }
   }
 }
