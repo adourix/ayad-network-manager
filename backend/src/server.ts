@@ -86,6 +86,20 @@ const neighborTableReader = new LinuxNeighborTableReader(systemCommandExecutor);
 // public setup-status endpoint to avoid incorrectly redirecting into the wizard.
 if (deploymentMode === "docker") {
   app.get("/api/setup/status", async () => ({ setupComplete }));
+  // The dashboard uses this read-only endpoint for gateway settings. Keep it
+  // available in Docker without exposing privileged setup apply/rollback routes.
+  app.get("/api/setup/config", async () => ({
+    setupComplete,
+    clientInterface: config.network.clientInterface,
+    uplinkInterface: config.network.uplinkInterface,
+    clientSubnet: config.network.clientSubnet,
+    clientGatewayIp: config.network.clientGatewayIp,
+    uplinkBandwidthMbps: config.network.uplinkBandwidthMbps.toString(),
+    dashboardPort: String(config.server.port),
+    sshPort: String(config.network.sshPort),
+    dnsServers: config.network.dnsServers,
+    networkMode: config.network.networkMode,
+  }));
 }
 
 
