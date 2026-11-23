@@ -77,12 +77,12 @@ systemctl daemon-reload
 systemctl enable ayadnm-docker.service
 systemctl restart ayadnm-docker.service
 
-say "Waiting for backend HTTP health (up to 120 seconds)"
+say "Waiting for backend HTTPS health (up to 120 seconds)"
 port="$(grep -E '^DASHBOARD_PORT=' /etc/network-control-system/config.env | tail -n1 | cut -d= -f2 || true)"
 port="${port:-5000}"
 healthy=0
 for _ in $(seq 1 60); do
-  if curl -fsS --connect-timeout 2 --max-time 5 "http://127.0.0.1:$port/api/health" >/dev/null 2>&1; then
+  if curl -kfsS --connect-timeout 2 --max-time 5 "https://127.0.0.1:$port/api/health" >/dev/null 2>&1; then
     healthy=1
     break
   fi
