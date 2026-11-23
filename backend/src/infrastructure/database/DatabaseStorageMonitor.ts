@@ -19,7 +19,10 @@ export class DatabaseStorageMonitor {
     const snapshot={databaseBytes,filesystemTotalBytes,filesystemFreeBytes,filesystemFreePercent};
     const dbMiB=(Number(databaseBytes)/1048576).toFixed(1),freeGiB=(Number(filesystemFreeBytes)/1073741824).toFixed(1);
     const message=`Storage snapshot: PostgreSQL ${dbMiB} MiB; filesystem free ${freeGiB} GiB (${filesystemFreePercent.toFixed(1)}%).`;
-    if(databaseBytes>=BigInt(this.databaseWarningBytes))this.warn("PostgreSQL size warning: "+message);else if(filesystemFreePercent<=this.diskFreeWarningPercent)this.warn("Low disk space warning: "+message);else this.info(message);
+    let warned = false;
+    if(databaseBytes>=BigInt(this.databaseWarningBytes)){this.warn("PostgreSQL size warning: "+message);warned=true;}
+    if(filesystemFreePercent<=this.diskFreeWarningPercent){this.warn("Low disk space warning: "+message);warned=true;}
+    if(!warned)this.info(message);
     return snapshot;
   }catch(error){this.warn("Storage monitor failed; will retry on the next interval: "+(error instanceof Error?error.message:String(error)));return null;}finally{this.running=false;}}
 }

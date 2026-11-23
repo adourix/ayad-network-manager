@@ -15,7 +15,7 @@ on:
       - ".dockerignore"
       - ".github/workflows/docker-ci.yml"
   push:
-    branches: [main]
+    branches: [main, feat/docker-setup-installer]
     paths:
       - "backend/**"
       - "frontend/**"
