@@ -31,6 +31,7 @@ import { DeviceDiscoveryService } from "./application/devices/DeviceDiscoverySer
 import { DeviceDiscoverySyncService } from "./application/devices/DeviceDiscoverySyncService.js";
 import { DeviceService } from "./application/devices/DeviceService.js";
 import { config, setupComplete } from "./config.js";
+const deploymentMode = (process.env.AYADNM_DEPLOYMENT_MODE ?? "native").trim().toLowerCase();
 import { deviceRoutes } from "./interfaces/http/routes/devices.js";
 import { registerAuthentication } from "./interfaces/http/auth.js";
 import { PrismaPolicyCatalogRepository } from "./infrastructure/database/PrismaPolicyCatalogRepository.js";
@@ -81,9 +82,16 @@ configureNftAudit(operationsRepository);
 const systemCommandExecutor = new AuditedSystemCommandExecutor(new LinuxSystemCommandExecutor(), operationsRepository);
 const dhcpLeaseReader = new LinuxDhcpLeaseReader(config.setup.dhcpLeasesPath);
 const neighborTableReader = new LinuxNeighborTableReader(systemCommandExecutor);
+// Docker deployments omit privileged setup endpoints, but the frontend needs the
+// public setup-status endpoint to avoid incorrectly redirecting into the wizard.
+if (deploymentMode === "docker") {
+  app.get("/api/setup/status", async () => ({ setupComplete }));
+}
+
+
 // Setup mutates host networking and host files. Docker-mode setup is completed
 // by the host installer before switching the application backend to Docker.
-if ((process.env.AYADNM_DEPLOYMENT_MODE ?? "native").trim().toLowerCase() !== "docker") {
+if (deploymentMode !== "docker") {
   await setupRoutes(app, new SetupService(new LinuxSetupProbe()));
 }
 
