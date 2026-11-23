@@ -279,6 +279,22 @@ else
 fi
 chmod 0600 "$ROOT/backend/.env"
 
+dashboard_port="$(grep -E '^DASHBOARD_PORT=' /etc/network-control-system/config.env | tail -n1 | cut -d= -f2)"
+dashboard_port="${dashboard_port:-5000}"
+compose_env="$ROOT/.env"
+touch "$compose_env"
+set_compose_env() {
+  local key="$1" value="$2"
+  if grep -qE "^$key=" "$compose_env"; then
+    sed -i "s|^$key=.*|$key=$value|" "$compose_env"
+  else
+    printf '%s=%s\\n' "$key" "$value" >> "$compose_env"
+  fi
+}
+set_compose_env DASHBOARD_PORT "$dashboard_port"
+set_compose_env ENFORCEMENT_SOCKET_GID "$socket_gid"
+chmod 0600 "$compose_env"
+
 docker_root="$(docker info --format '{{.DockerRootDir}}')" || die "Unable to determine Docker storage root"
 available_kb="$(df -Pk "$docker_root" | awk 'NR==2 {print $4}')"
 [[ "$available_kb" =~ ^[0-9]+$ ]] || die "Unable to determine free space for Docker storage"

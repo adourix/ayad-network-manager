@@ -13,3 +13,7 @@ certs
 *.log
 coverage
 .DS_Store
+
+# Keep installer-generated secrets out of all Docker build contexts
+**/.env
+**/.env.*
