@@ -38,6 +38,7 @@ services:
       - /run/network-control/enforcement.sock:/run/network-control/enforcement.sock
       - /etc/network-control-system/config.env:/etc/network-control-system/config.env:ro
       - /var/lib/network-control/backups:/var/lib/network-control/backups
+      - /var/lib/misc:/var/lib/misc
       - /etc/network-control-system/tls:/etc/network-control-system/tls:ro
     healthcheck:
       test: ["CMD", "node", "/app/healthcheck.mjs"]
