@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { DatabaseStorageMonitor } from "../src/infrastructure/database/DatabaseStorageMonitor.js";
+process.env.DATABASE_URL ??= "postgresql://test:test@127.0.0.1:5432/test";
+const { DatabaseStorageMonitor } = await import("../src/infrastructure/database/DatabaseStorageMonitor.js");
 
 test("storage monitor reports metrics and logs info when below thresholds",async()=>{
  const messages:string[]=[];
