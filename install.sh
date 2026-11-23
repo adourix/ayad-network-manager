@@ -37,6 +37,7 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update
 if ! command -v docker >/dev/null 2>&1 || ! docker compose version >/dev/null 2>&1; then
   apt-get install -y docker.io docker-compose-v2 || apt-get install -y docker.io docker-compose-plugin
+apt-get install -y acl
 fi
 docker compose version >/dev/null 2>&1 || die "Docker Compose plugin missing"
 systemctl enable --now docker
@@ -66,6 +67,8 @@ systemctl is-active --quiet network-control-enforcement.service || die "Host enf
 [[ -S /run/network-control/enforcement.sock ]] || die "Enforcement socket is missing"
 [[ -r /etc/network-control-system/config.env ]] || die "Host runtime configuration is missing"
 [[ -r /etc/network-control-system/tls/server.crt && -r /etc/network-control-system/tls/server.key ]] || die "TLS certificate/key files are missing"
+# Grant the Docker image non-root UID 1000 read-only access to the TLS private key via ACL.
+setfacl -m u:1000:r /etc/network-control-system/tls/server.key || die "Unable to set TLS key ACL for Docker UID 1000"
 grep -q '^SETUP_COMPLETED=true$' /etc/network-control-system/config.env || die "Gateway setup is not complete"
 grep -Eq '^ADMIN_PASSWORD_HASH=.+$' "$ROOT/backend/.env" || die "Admin password hash is missing from backend .env"
 grep -Eq '^ADMIN_PASSWORD_SALT=.+$' "$ROOT/backend/.env" || die "Admin password salt is missing from backend .env"
