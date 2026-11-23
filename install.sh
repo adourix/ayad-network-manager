@@ -61,6 +61,232 @@ else
   host_setup_completed || die "Host setup wizard returned but required Host config is incomplete; Docker backend will not be installed"
 fi
 
+say "Verifying host enforcement, TLS, and installer-owned configuration"
+systemctl is-active --quiet network-control-enforcement.service || die "Host enforcement service is not active"
+[[ -S /run/network-control/enforcement.sock ]] || die "Enforcement socket is missing"
+[[ -r /etc/network-control-system/config.env ]] || die "Host runtime configuration is missing"
+[[ -r /etc/network-control-system/tls/server.crt && -r /etc/network-control-system/tls/server.key ]] || die "TLS certificate/key files are missing"
+grep -q '^SETUP_COMPLETED=truedocker compose config >/dev/null || die "Compose configuration validation failed"
+
+say "Building Docker backend"
+docker compose build backend
+
+say "Switching backend from native systemd to Docker"
+systemctl stop network-control-backend.service || true
+systemctl disable network-control-backend.service || true
+
+SERVICE_FILE="/etc/systemd/system/ayadnm-docker.service"
+sed "s|@APP_ROOT@|$ROOT|g" "$ROOT/backend/deploy/systemd/ayadnm-docker.service" > "$SERVICE_FILE"
+systemctl daemon-reload
+systemctl enable ayadnm-docker.service
+systemctl restart ayadnm-docker.service
+
+say "Waiting for backend HTTPS health (up to 120 seconds)"
+port="$(grep -E '^DASHBOARD_PORT=' /etc/network-control-system/config.env | tail -n1 | cut -d= -f2 || true)"
+port="${port:-5000}"
+healthy=0
+for _ in $(seq 1 60); do
+  if curl -kfsS --connect-timeout 2 --max-time 5 "https://127.0.0.1:$port/api/health" >/dev/null 2>&1; then
+    healthy=1
+    break
+  fi
+  sleep 2
+done
+
+if [[ "$healthy" != 1 ]]; then
+  docker compose logs --tail=100 backend >&2 || true
+  say "Docker backend failed health check; attempting rollback to native backend"
+  systemctl disable --now ayadnm-docker.service || true
+  systemctl enable --now network-control-backend.service || true
+  die "Docker backend health check failed. Native backend rollback was attempted."
+fi
+
+say "Removing unused host-side development dependencies"
+if [[ -d "$ROOT/backend/node_modules" ]]; then
+  (cd "$ROOT/backend" && npm prune --omit=dev) || say "WARNING: backend dependency pruning failed; deployment remains running"
+fi
+rm -rf "$ROOT/frontend/node_modules"
+npm cache clean --force >/dev/null 2>&1 || true
+
+echo
+echo "AyadNM installation complete"
+echo "Deployment: Docker backend + Host-native enforcement"
+echo "Dashboard: https://<gateway-ip>:$port/"
+echo "Setup: Host provisioning/setup verified"
+echo "Enforcement: network-control-enforcement.service (Host)"
+echo "Backend: ayadnm-docker.service (Docker)"
+echo "Rollback: systemctl disable --now ayadnm-docker.service && systemctl enable --now network-control-backend.service"
+ /etc/network-control-system/config.env || die "Gateway setup is not complete"
+grep -Eq '^ADMIN_PASSWORD_HASH=.+docker compose config >/dev/null || die "Compose configuration validation failed"
+
+say "Building Docker backend"
+docker compose build backend
+
+say "Switching backend from native systemd to Docker"
+systemctl stop network-control-backend.service || true
+systemctl disable network-control-backend.service || true
+
+SERVICE_FILE="/etc/systemd/system/ayadnm-docker.service"
+sed "s|@APP_ROOT@|$ROOT|g" "$ROOT/backend/deploy/systemd/ayadnm-docker.service" > "$SERVICE_FILE"
+systemctl daemon-reload
+systemctl enable ayadnm-docker.service
+systemctl restart ayadnm-docker.service
+
+say "Waiting for backend HTTPS health (up to 120 seconds)"
+port="$(grep -E '^DASHBOARD_PORT=' /etc/network-control-system/config.env | tail -n1 | cut -d= -f2 || true)"
+port="${port:-5000}"
+healthy=0
+for _ in $(seq 1 60); do
+  if curl -kfsS --connect-timeout 2 --max-time 5 "https://127.0.0.1:$port/api/health" >/dev/null 2>&1; then
+    healthy=1
+    break
+  fi
+  sleep 2
+done
+
+if [[ "$healthy" != 1 ]]; then
+  docker compose logs --tail=100 backend >&2 || true
+  say "Docker backend failed health check; attempting rollback to native backend"
+  systemctl disable --now ayadnm-docker.service || true
+  systemctl enable --now network-control-backend.service || true
+  die "Docker backend health check failed. Native backend rollback was attempted."
+fi
+
+say "Removing unused host-side development dependencies"
+if [[ -d "$ROOT/backend/node_modules" ]]; then
+  (cd "$ROOT/backend" && npm prune --omit=dev) || say "WARNING: backend dependency pruning failed; deployment remains running"
+fi
+rm -rf "$ROOT/frontend/node_modules"
+npm cache clean --force >/dev/null 2>&1 || true
+
+echo
+echo "AyadNM installation complete"
+echo "Deployment: Docker backend + Host-native enforcement"
+echo "Dashboard: https://<gateway-ip>:$port/"
+echo "Setup: Host provisioning/setup verified"
+echo "Enforcement: network-control-enforcement.service (Host)"
+echo "Backend: ayadnm-docker.service (Docker)"
+echo "Rollback: systemctl disable --now ayadnm-docker.service && systemctl enable --now network-control-backend.service"
+ "$ROOT/backend/.env" || die "Admin password hash is missing from backend .env"
+grep -Eq '^ADMIN_PASSWORD_SALT=.+docker compose config >/dev/null || die "Compose configuration validation failed"
+
+say "Building Docker backend"
+docker compose build backend
+
+say "Switching backend from native systemd to Docker"
+systemctl stop network-control-backend.service || true
+systemctl disable network-control-backend.service || true
+
+SERVICE_FILE="/etc/systemd/system/ayadnm-docker.service"
+sed "s|@APP_ROOT@|$ROOT|g" "$ROOT/backend/deploy/systemd/ayadnm-docker.service" > "$SERVICE_FILE"
+systemctl daemon-reload
+systemctl enable ayadnm-docker.service
+systemctl restart ayadnm-docker.service
+
+say "Waiting for backend HTTPS health (up to 120 seconds)"
+port="$(grep -E '^DASHBOARD_PORT=' /etc/network-control-system/config.env | tail -n1 | cut -d= -f2 || true)"
+port="${port:-5000}"
+healthy=0
+for _ in $(seq 1 60); do
+  if curl -kfsS --connect-timeout 2 --max-time 5 "https://127.0.0.1:$port/api/health" >/dev/null 2>&1; then
+    healthy=1
+    break
+  fi
+  sleep 2
+done
+
+if [[ "$healthy" != 1 ]]; then
+  docker compose logs --tail=100 backend >&2 || true
+  say "Docker backend failed health check; attempting rollback to native backend"
+  systemctl disable --now ayadnm-docker.service || true
+  systemctl enable --now network-control-backend.service || true
+  die "Docker backend health check failed. Native backend rollback was attempted."
+fi
+
+say "Removing unused host-side development dependencies"
+if [[ -d "$ROOT/backend/node_modules" ]]; then
+  (cd "$ROOT/backend" && npm prune --omit=dev) || say "WARNING: backend dependency pruning failed; deployment remains running"
+fi
+rm -rf "$ROOT/frontend/node_modules"
+npm cache clean --force >/dev/null 2>&1 || true
+
+echo
+echo "AyadNM installation complete"
+echo "Deployment: Docker backend + Host-native enforcement"
+echo "Dashboard: https://<gateway-ip>:$port/"
+echo "Setup: Host provisioning/setup verified"
+echo "Enforcement: network-control-enforcement.service (Host)"
+echo "Backend: ayadnm-docker.service (Docker)"
+echo "Rollback: systemctl disable --now ayadnm-docker.service && systemctl enable --now network-control-backend.service"
+ "$ROOT/backend/.env" || die "Admin password salt is missing from backend .env"
+grep -Eq '^DATABASE_URL=.+docker compose config >/dev/null || die "Compose configuration validation failed"
+
+say "Building Docker backend"
+docker compose build backend
+
+say "Switching backend from native systemd to Docker"
+systemctl stop network-control-backend.service || true
+systemctl disable network-control-backend.service || true
+
+SERVICE_FILE="/etc/systemd/system/ayadnm-docker.service"
+sed "s|@APP_ROOT@|$ROOT|g" "$ROOT/backend/deploy/systemd/ayadnm-docker.service" > "$SERVICE_FILE"
+systemctl daemon-reload
+systemctl enable ayadnm-docker.service
+systemctl restart ayadnm-docker.service
+
+say "Waiting for backend HTTPS health (up to 120 seconds)"
+port="$(grep -E '^DASHBOARD_PORT=' /etc/network-control-system/config.env | tail -n1 | cut -d= -f2 || true)"
+port="${port:-5000}"
+healthy=0
+for _ in $(seq 1 60); do
+  if curl -kfsS --connect-timeout 2 --max-time 5 "https://127.0.0.1:$port/api/health" >/dev/null 2>&1; then
+    healthy=1
+    break
+  fi
+  sleep 2
+done
+
+if [[ "$healthy" != 1 ]]; then
+  docker compose logs --tail=100 backend >&2 || true
+  say "Docker backend failed health check; attempting rollback to native backend"
+  systemctl disable --now ayadnm-docker.service || true
+  systemctl enable --now network-control-backend.service || true
+  die "Docker backend health check failed. Native backend rollback was attempted."
+fi
+
+say "Removing unused host-side development dependencies"
+if [[ -d "$ROOT/backend/node_modules" ]]; then
+  (cd "$ROOT/backend" && npm prune --omit=dev) || say "WARNING: backend dependency pruning failed; deployment remains running"
+fi
+rm -rf "$ROOT/frontend/node_modules"
+npm cache clean --force >/dev/null 2>&1 || true
+
+echo
+echo "AyadNM installation complete"
+echo "Deployment: Docker backend + Host-native enforcement"
+echo "Dashboard: https://<gateway-ip>:$port/"
+echo "Setup: Host provisioning/setup verified"
+echo "Enforcement: network-control-enforcement.service (Host)"
+echo "Backend: ayadnm-docker.service (Docker)"
+echo "Rollback: systemctl disable --now ayadnm-docker.service && systemctl enable --now network-control-backend.service"
+ "$ROOT/backend/.env" || die "Database URL is missing from backend .env"
+
+socket_gid="$(stat -c '%g' /run/network-control/enforcement.sock)"
+if grep -q '^ENFORCEMENT_SOCKET_GID=' "$ROOT/backend/.env"; then
+  sed -i "s/^ENFORCEMENT_SOCKET_GID=.*/ENFORCEMENT_SOCKET_GID=${socket_gid}/" "$ROOT/backend/.env"
+else
+  printf '\nENFORCEMENT_SOCKET_GID=%s\n' "$socket_gid" >> "$ROOT/backend/.env"
+fi
+chmod 0600 "$ROOT/backend/.env"
+
+docker_root="$(docker info --format '{{.DockerRootDir}}')" || die "Unable to determine Docker storage root"
+available_kb="$(df -Pk "$docker_root" | awk 'NR==2 {print $4}')"
+[[ "$available_kb" =~ ^[0-9]+$ ]] || die "Unable to determine free space for Docker storage"
+if (( available_kb < 4194304 )); then
+  die "Docker storage has less than 4 GiB free; free space before building images"
+fi
+say "Docker storage has $(awk -v kb="$available_kb" 'BEGIN {printf "%.1f",kb/1048576}') GiB free"
+
 say "Validating Compose configuration"
 docker compose config >/dev/null || die "Compose configuration validation failed"
 
