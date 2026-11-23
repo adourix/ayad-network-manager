@@ -39,6 +39,7 @@ COPY --from=backend-build /src/backend/package.json ./package.json
 COPY --from=backend-build /src/backend/dist ./dist
 COPY --from=backend-build /src/backend/prisma ./prisma
 COPY --from=frontend-build /src/frontend/dist /frontend-dist
+COPY backend/deploy/docker/healthcheck.mjs ./healthcheck.mjs
 
 RUN mkdir -p /etc/network-control-system /run/network-control /var/lib/network-control/backups /etc/network-control-system/tls \
     && chown -R node:node /app /frontend-dist

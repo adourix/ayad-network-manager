@@ -8,6 +8,7 @@ on:
       - "docker-compose.yml"
       - "docker-install.sh"
       - "install.sh"
+      - "scripts/**"
       - "backend/deploy/systemd/ayadnm-docker.service"
       - ".env.docker.example"
       - "README.md"
@@ -21,6 +22,7 @@ on:
       - "docker-compose.yml"
       - "docker-install.sh"
       - "install.sh"
+      - "scripts/**"
       - "backend/deploy/systemd/ayadnm-docker.service"
       - ".env.docker.example"
       - "README.md"
@@ -28,19 +30,30 @@ on:
       - ".github/workflows/docker-ci.yml"
 
 jobs:
-  compose-config:
+  tests-and-syntax:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      - name: Check Docker installer syntax
+      - name: Check installer and reset script syntax
         run: |
           bash -n install.sh
           bash -n docker-install.sh
+          bash -n backend/deploy/bare-metal/install.sh
+          bash -n scripts/docker-reset.sh
       - name: Validate Compose configuration
         run: |
           cp .env.docker.example .env
           docker compose config --quiet
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - name: Install backend dependencies and run tests
+        working-directory: backend
+        run: npm ci && npm test
 
   build-images:
     runs-on: ubuntu-24.04
@@ -67,6 +80,14 @@ jobs:
           push: false
           load: true
           tags: ayad-network-manager-migrate:ci
+      - name: Build enforcement image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: backend/deploy/enforcement/Dockerfile
+          push: false
+          load: true
+          tags: ayad-network-manager-enforcement:ci
       - name: Report built image sizes
         run: |
-          docker image inspect ayad-network-manager:ci ayad-network-manager-migrate:ci --format '{{.RepoTags}}: {{.Size}} bytes' 
+          docker image inspect ayad-network-manager:ci ayad-network-manager-migrate:ci ayad-network-manager-enforcement:ci --format '{{.RepoTags}}: {{.Size}} bytes'

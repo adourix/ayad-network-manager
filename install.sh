@@ -97,6 +97,13 @@ if [[ "$healthy" != 1 ]]; then
   die "Docker backend health check failed. Native backend rollback was attempted."
 fi
 
+say "Removing unused host-side development dependencies"
+if [[ -d "$ROOT/backend/node_modules" ]]; then
+  (cd "$ROOT/backend" && npm prune --omit=dev) || say "WARNING: backend dependency pruning failed; deployment remains running"
+fi
+rm -rf "$ROOT/frontend/node_modules"
+npm cache clean --force >/dev/null 2>&1 || true
+
 echo
 echo "AyadNM installation complete"
 echo "Deployment: Docker backend + Host-native enforcement"

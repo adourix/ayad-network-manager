@@ -47,6 +47,9 @@ import { ScheduleEnforcementService } from "./application/policies/ScheduleEnfor
 import { TrafficRetentionService } from "./infrastructure/database/TrafficRetentionService.js";
 import { NotificationDeliveryWorker } from "./infrastructure/notifications/NotificationDeliveryWorker.js";
 import { AuditRetentionService } from "./infrastructure/database/AuditRetentionService.js";
+import { NotificationRetentionService } from "./infrastructure/database/NotificationRetentionService.js";
+import { QuotaPeriodRetentionService } from "./infrastructure/database/QuotaPeriodRetentionService.js";
+import { DatabaseStorageMonitor } from "./infrastructure/database/DatabaseStorageMonitor.js";
 import { NftPortRuleEnforcer } from "./infrastructure/enforcement/NftPortRuleEnforcer.js";
 import { ProfileEnforcementService } from "./application/policies/ProfileEnforcementService.js";
 import { SetupService } from "./application/setup/SetupService.js";
@@ -78,7 +81,11 @@ configureNftAudit(operationsRepository);
 const systemCommandExecutor = new AuditedSystemCommandExecutor(new LinuxSystemCommandExecutor(), operationsRepository);
 const dhcpLeaseReader = new LinuxDhcpLeaseReader(config.setup.dhcpLeasesPath);
 const neighborTableReader = new LinuxNeighborTableReader(systemCommandExecutor);
-await setupRoutes(app, new SetupService(new LinuxSetupProbe()));
+// Setup mutates host networking and host files. Docker-mode setup is completed
+// by the host installer before switching the application backend to Docker.
+if ((process.env.AYADNM_DEPLOYMENT_MODE ?? "native").trim().toLowerCase() !== "docker") {
+  await setupRoutes(app, new SetupService(new LinuxSetupProbe()));
+}
 
 if (setupComplete) {
   const identityValidator = new DhcpNeighborIdentityValidator(config.network.clientSubnet, false);
@@ -137,6 +144,9 @@ if (setupComplete) {
   const scheduleEnforcementService = new ScheduleEnforcementService(deviceRepository, policyRepository, policyCatalogRepository, trafficEnforcementService, deviceBlocker, operationsRepository);
   const trafficRetentionService = new TrafficRetentionService();
   const auditRetentionService = new AuditRetentionService(60 * 60 * 1000, Number(process.env.AUDIT_RETENTION_DAYS ?? 90));
+  const notificationRetentionService = new NotificationRetentionService(60 * 60 * 1000, Number(process.env.NOTIFICATION_RETENTION_DAYS ?? 90), 1000, 10, undefined, Boolean(config.setup.notificationWebhookUrl));
+  const quotaPeriodRetentionService = new QuotaPeriodRetentionService(60 * 60 * 1000, Number(process.env.QUOTA_HISTORY_RETENTION_DAYS ?? 90));
+  const databaseStorageMonitor = new DatabaseStorageMonitor(24 * 60 * 60 * 1000, Number(process.env.DATABASE_SIZE_WARNING_MB ?? 2048) * 1024 * 1024, Number(process.env.DISK_FREE_WARNING_PERCENT ?? 10));
   const profileEnforcementService = new ProfileEnforcementService(deviceRepository, policyRepository, policyCatalogRepository, trafficEnforcementService);
   app.get("/api/health", async () => ({ status: "ok", capture: broadcastCaptureReader.status() }));
   registerFrontend(app);
@@ -145,10 +155,10 @@ if (setupComplete) {
   for (const device of await deviceRepository.findAll()) { if (!device.ip) continue; for (const rule of await policyCatalogRepository.portRules(device.id)) if (rule.enabled) await portRuleEnforcer.apply({ mac: device.mac.toString(), ip: device.ip.toString() }, rule); }
   await trafficReconciliationService.reconcile(); await blockedIpReconciliationService.reconcile(); await ipBindingLifecycleService.reconcile(); await profileEnforcementService.reconcile(); await vpnService.reconcile();
   vpnService.startMonitor();
-  await scheduleEnforcementService.start(); await trafficAccountingService.start(); notificationDeliveryWorker.start(); await trafficRetentionService.start(); await auditRetentionService.start(); await deviceDiscoverySyncService.start(); await liveMonitoringService.start(); await blockedIpReconciliationService.start(); await ipBindingLifecycleService.start(); await trafficReconciliationService.start(); await dhcpReservationService.start();
+  await scheduleEnforcementService.start(); await trafficAccountingService.start(); notificationDeliveryWorker.start(); await trafficRetentionService.start(); await auditRetentionService.start(); await notificationRetentionService.start(); await quotaPeriodRetentionService.start(); await databaseStorageMonitor.start(); await deviceDiscoverySyncService.start(); await liveMonitoringService.start(); await blockedIpReconciliationService.start(); await ipBindingLifecycleService.start(); await trafficReconciliationService.start(); await dhcpReservationService.start();
 
   process.on("SIGTERM", async () => {
-    vpnService.stopMonitor(); notificationDeliveryWorker.stop(); await trafficAccountingService.stop(); trafficRetentionService.stop(); auditRetentionService.stop(); deviceDiscoverySyncService.stop(); liveMonitoringService.stop(); blockedIpReconciliationService.stop(); ipBindingLifecycleService.stop(); trafficReconciliationService.stop(); scheduleEnforcementService.stop(); dhcpReservationService.stop(); broadcastCaptureReader.stop(); await app.close();
+    vpnService.stopMonitor(); notificationDeliveryWorker.stop(); await trafficAccountingService.stop(); trafficRetentionService.stop(); auditRetentionService.stop(); notificationRetentionService.stop(); quotaPeriodRetentionService.stop(); databaseStorageMonitor.stop(); deviceDiscoverySyncService.stop(); liveMonitoringService.stop(); blockedIpReconciliationService.stop(); ipBindingLifecycleService.stop(); trafficReconciliationService.stop(); scheduleEnforcementService.stop(); dhcpReservationService.stop(); broadcastCaptureReader.stop(); await app.close();
   });
 } else {
   registerFrontend(app);

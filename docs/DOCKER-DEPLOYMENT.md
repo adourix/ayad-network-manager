@@ -1,82 +1,71 @@
-# Docker Deployment Status and Known Integration Blocker
+# Docker Deployment (Hybrid Host + Docker Backend)
 
-## Current status
+## Supported deployment architecture
 
-The repository has Docker build targets for the frontend/backend runtime, a dedicated Prisma migration target, and a separate enforcement image. Docker CI validates the Compose model and builds all three image targets.
+The unified installer provides a hybrid deployment:
+- PostgreSQL remains installed and managed on the Debian/Ubuntu host. The backend container uses host networking and connects to PostgreSQL at 127.0.0.1.
+- The enforcement agent remains a host-native systemd service and owns nftables, tc/IFB, host network changes and the Unix socket.
+- The web/API backend runs in Docker as a non-root user with a read-only root filesystem.
+- First-run gateway setup is completed by the host/native installer before the backend switches to Docker. Docker mode intentionally does not expose setup mutation routes because those operations would target the container instead of the host.
 
-**This is not yet a production-ready Docker gateway deployment.** A successful image build only proves the images can be assembled; it does not prove that the container can safely configure and operate the host network.
+This is not a fully containerized deployment: PostgreSQL and enforcement are host services.
 
-## Architecture that must be preserved
+## Installer flow
 
-- PostgreSQL remains the system of record and uses the named `db-data` volume.
-- Backend runs without `NET_ADMIN`, `NET_RAW`, or `--privileged`.
-- Only the enforcement component may execute privileged `nft`, `tc`, and `ip` operations.
-- The enforcement agent is exposed to the backend through the Unix socket.
-- Host-specific network configuration must remain outside the application image.
-- `reconcile()` must reconstruct runtime kernel state from PostgreSQL after restart.
-- Keep the single-interface + IFB implementation as the current MVP topology.
+The unified installer:
+1. Installs host packages, PostgreSQL, Node.js, sing-box and enforcement prerequisites.
+2. Creates or preserves database/admin configuration.
+3. Runs first-time host setup using the native wizard if needed.
+4. Applies Prisma migrations and builds the host runtime used by enforcement.
+5. Builds and starts the Docker backend service.
+6. Waits for HTTPS health using the local self-signed certificate (verification disabled only for the loopback probe).
+7. Attempts rollback to the native backend if Docker health fails.
+8. After health succeeds, prunes native backend development dependencies and removes frontend node_modules. Frontend build output and enforcement runtime remain available for native rollback.
 
-## Blocking issue: setup is not yet fully brokered through the enforcement agent
+Existing completed setup, PostgreSQL data, admin credentials and network configuration are preserved.
 
-`backend/src/infrastructure/setup/LinuxSetupProbe.ts` currently constructs a local privileged executor and runs setup-time `nft`, `tc`, and `ip` commands in the backend process. `SetupService` also writes host-specific files and expects to restart/enable host services. In a normal backend container:
+## Storage lifecycle
 
-- `/etc/dnsmasq.d`, `/etc/nftables.d`, `/etc/modules-load.d`, `/etc/systemd/system`, `/var/lib/misc`, and the host's dnsmasq lease file are not the container's host paths.
-- `systemctl` inside a normal container does not manage the host systemd manager.
-- Mounting the entire host `/etc` and `/var/lib` into the backend or granting the backend host networking/root capabilities would violate the privilege-isolation requirement.
+- Raw traffic samples: about 48 hours.
+- Hourly rollups: about 30 days.
+- Daily rollups: retained long-term.
+- Audit logs: 90 days by default, bounded batch deletion.
+- Notifications: 90 days by default. Old delivered/exhausted notifications are removed; pending webhook deliveries are preserved when webhook delivery is configured.
+- Quota periods: 90 days by default, bounded batch deletion of expired periods.
+- Docker backend logs: 10 MiB per file, 3 files.
+- A daily log-only storage monitor reports database size and filesystem free space; defaults warn at 2 GiB database size or 10% free. It does not delete files or perform host changes.
 
-### Required implementation before calling Docker deployment complete
+Retention and monitoring values can be set in the installer-owned .env: AUDIT_RETENTION_DAYS, NOTIFICATION_RETENTION_DAYS, QUOTA_HISTORY_RETENTION_DAYS, DATABASE_SIZE_WARNING_MB, and DISK_FREE_WARNING_PERCENT.
 
-1. Extend the enforcement-agent protocol with explicit, typed setup operations, not generic arbitrary filesystem access or generic shell execution.
-2. Allowlist each operation and each destination path in the agent. Validate interface names, subnet, ports, DNS addresses, file templates and service-unit names.
-3. Move host file snapshot/write/atomic-replace/rollback, `modprobe ifb`, and service reload/restart operations behind this broker.
-4. Make setup probes query host state through the broker (interfaces, routes, port 53, IFB, UFW, NTP, DHCP leases and link diagnostics).
-5. Keep the backend process unprivileged and mount only the shared Unix socket plus the application-owned config volume.
-6. Add unit tests for every setup protocol operation and denial cases; add an integration test on a disposable Linux VM with host networking.
-7. Verify post-setup DHCP lease issuance, client gateway assignment, NAT, firewall management-port preservation, upload shaping through IFB, download shaping on client-interface egress, and rollback.
+## Docker security and resource behavior
 
-## Database recreation
+- Backend runs as the unprivileged node user.
+- Container root filesystem is read-only; /tmp uses tmpfs.
+- Backend receives no NET_ADMIN, NET_RAW, or privileged mode.
+- Enforcement remains host-native and limited by its systemd capability set.
+- Docker JSON logs are rotated (10 MiB, 3 files).
+- Build dependencies and Prisma CLI are excluded from the backend runtime image.
+- Healthcheck uses HTTPS, with self-signed TLS accepted only for the loopback probe.
 
-`scripts/docker-reset.sh --db-only` removes only the Compose `db-data` volume, reapplies committed Prisma migrations, then restarts the backend while preserving setup-owned state.
+## Reset scripts
 
-`scripts/docker-reset.sh --full-state` removes the four named application volumes after two explicit confirmations. It intentionally stops after database migrations and does not start the backend: a clean first-run wizard must not be skipped while the host-setup broker is incomplete.
+scripts/docker-reset.sh --db-only removes only the Compose db-data volume, reapplies committed Prisma migrations and restarts the backend while preserving setup state.
 
-Never add `docker compose down -v` to routine reset instructions. It removes every declared named volume, not just PostgreSQL data.
+scripts/docker-reset.sh --full-state removes four named application volumes after exact-name confirmation and stops after migrations. Re-run host setup before starting backend after full-state reset.
 
-## Image-size optimization notes
-
-- Frontend build dependencies do not enter the backend runtime image.
-- Prisma CLI and TypeScript build tooling do not enter the backend runtime image; Prisma migrations use a dedicated build target.
-- Runtime backend dependencies are installed with `npm ci --omit=dev`.
-- `.dockerignore` excludes source-control metadata, installed dependencies, build outputs, local certificates and environment files.
-- Enforcement image packages use `--no-install-recommends` and purge apt metadata.
-- Do not copy selected binaries between Debian images unless their complete shared-library and runtime-data closure is verified; the current enforcement image installs required packages directly in a slim runtime base.
+Never use docker compose down -v for routine resets; it removes all declared named volumes.
 
 ## Verification gates
 
-Image/Compose CI does not prove host-network functionality. Before production:
+CI now checks shell syntax, Compose config, backend tests and builds backend runtime, migration and enforcement images. These checks are not a substitute for a real host test.
 
-- [ ] Docker Compose config validates with the real `.env` shape.
-- [ ] Runtime, migration and enforcement images build successfully.
-- [ ] Prisma migrations apply against an empty disposable PostgreSQL volume.
-- [ ] Backend runs as a non-root user with a read-only root filesystem.
-- [ ] Enforcement agent starts with only `NET_ADMIN` and `NET_RAW`, not `--privileged`.
-- [ ] Setup broker can safely configure host files/services and roll back.
-- [ ] Host firewall preserves SSH and dashboard management access.
-- [ ] DHCP, NAT, nftables, download shaping and IFB upload shaping work from a real test client.
-- [ ] Container restart causes enforcement reconciliation from desired database state.
-- [ ] Traffic retention and identity-safety tests remain green.
+Before a clean gateway reinstall, verify:
+- Host wizard completes and SETUP_COMPLETED=true is present.
+- PostgreSQL and enforcement service are healthy; enforcement socket exists with correct group.
+- Docker backend health reports healthy over HTTPS.
+- Dashboard authentication works.
+- DHCP leases, NAT, block/unblock, shaping, quota and schedule enforcement work with a real client.
+- Reboot persistence is verified for Docker backend, host enforcement, dnsmasq, PostgreSQL and nftables.
+- Native rollback is tested before removing the old application deployment.
 
-Until the setup broker gates pass, use the supported bare-metal installer for real gateway deployment; use Compose only for build and integration development.
-
-## Additional first-install requirement: administrator bootstrap
-
-The current bare-metal installer creates the administrator password hash and salt interactively before starting the temporary setup server. The Docker environment example does not yet implement an equivalent first-run administrator bootstrap lifecycle.
-
-Before Docker is used for a clean deployment, add one of the following explicitly designed paths:
-
-- A one-time bootstrap secret supplied through a Docker secret, consumed only when no administrator credential exists, and removed/invalidated after successful account creation; or
-- A setup wizard step that creates the first admin with a secure password and stores only a password hash plus salt through a narrowly scoped backend operation.
-
-Do not ship a default username/password, store the plaintext admin password in a persistent `.env`, or reuse a credential from the development/bare-metal installation.
-
-Also verify that a completely new PostgreSQL volume has a path to create the first authenticated admin. `prisma migrate deploy` creates schema objects; it does not create the application administrator or seed an admin account by itself.
+This remains a hybrid deployment. Network setup after deployment must use the supported native/host setup path rather than the Docker backend.
