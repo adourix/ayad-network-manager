@@ -3,7 +3,7 @@ import { prisma } from "./prisma.js";
 const DAY_MS=86400000;
 export interface StorageSnapshot{databaseBytes:bigint;filesystemTotalBytes:bigint;filesystemFreeBytes:bigint;filesystemFreePercent:number;}
 export class DatabaseStorageMonitor {
-  private timer?:NodeJS.Timeout;private running=false;
+  private timer:NodeJS.Timeout | undefined;private running=false;
   constructor(private readonly intervalMs=DAY_MS,private readonly databaseWarningBytes=2*1024*1024*1024,private readonly diskFreeWarningPercent=10,private readonly db:Pick<typeof prisma,"$queryRaw">=prisma,private readonly filesystemStats:typeof statfs=statfs,private readonly info:(message:string)=>void=console.info,private readonly warn:(message:string)=>void=console.warn){
     if(!Number.isInteger(intervalMs)||intervalMs<60000)throw new Error("Storage monitor interval must be at least one minute");
     if(databaseWarningBytes<1)throw new Error("Database warning threshold must be positive");

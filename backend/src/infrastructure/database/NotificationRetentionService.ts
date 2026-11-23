@@ -1,7 +1,7 @@
 import { prisma } from "./prisma.js";
 const DAY_MS=86400000;
 export class NotificationRetentionService {
-  private timer?:NodeJS.Timeout; private running=false;
+  private timer:NodeJS.Timeout | undefined; private running=false;
   constructor(private readonly intervalMs=3600000,private readonly retentionDays=90,private readonly batchSize=1000,private readonly maxBatchesPerRun=10,private readonly db:Pick<typeof prisma,"$executeRaw">=prisma,private readonly preservePendingDeliveries=false){
     if(!Number.isInteger(intervalMs)||intervalMs<60000)throw new Error("Notification cleanup interval must be at least one minute");
     if(!Number.isInteger(retentionDays)||retentionDays<7||retentionDays>3650)throw new Error("Notification retention must be between 7 and 3650 days");
