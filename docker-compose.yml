@@ -14,7 +14,13 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
-    user: node
+    # Root is used for the host-mounted DHCP reservation path and packet capture.
+    # Limit additional capabilities to those required for network capture.
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
     group_add:
       - "${ENFORCEMENT_SOCKET_GID:-1000}"
     read_only: true

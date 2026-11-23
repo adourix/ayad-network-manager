@@ -34,6 +34,12 @@ ENV NODE_ENV=production \
     SYSTEM_CONFIG_PATH=/etc/network-control-system/config.env \
     SETUP_SNAPSHOT_DIR=/var/lib/network-control/backups
 
+# tcpdump is needed by broadcast capture. Runtime remains read-only except for
+# explicitly mounted host paths and /tmp. Compose supplies NET_RAW/NET_ADMIN.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends tcpdump \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY --from=backend-production-deps /src/backend/node_modules ./node_modules
 COPY --from=backend-build /src/backend/package.json ./package.json
 COPY --from=backend-build /src/backend/dist ./dist
@@ -41,9 +47,7 @@ COPY --from=backend-build /src/backend/prisma ./prisma
 COPY --from=frontend-build /src/frontend/dist /frontend-dist
 COPY backend/deploy/docker/healthcheck.mjs ./healthcheck.mjs
 
-RUN mkdir -p /etc/network-control-system /run/network-control /var/lib/network-control/backups /etc/network-control-system/tls \
-    && chown -R node:node /app /frontend-dist
+RUN mkdir -p /etc/network-control-system /run/network-control /var/lib/network-control/backups /etc/network-control-system/tls
 
-USER node
 EXPOSE 5000
 CMD ["node", "dist/bootstrap.js"]
