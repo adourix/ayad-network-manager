@@ -143,90 +143,39 @@ The Docker deployment deliberately uses different privilege levels:
 
 The enforcement container is **not** run with `--privileged`.
 
-## Docker installation
+## Unified installation
 
-### 1. Clone the repository
+Run the unified entry point and choose native or Docker:
 
 ```bash
 git clone https://github.com/adourix/ayad-network-manager.git
 cd ayad-network-manager
+sudo bash install.sh
 ```
 
-### 2. Create the environment file
+- **Native**: the original bare-metal installer; backend and enforcement remain systemd services.
+- **Docker**: full Host/Gateway provisioning and setup wizard run first using the original installer. After setup, the backend switches to Docker; the enforcement agent remains Host-native under systemd. This hybrid keeps privileged network operations out of the application container.
+
+The legacy Docker command remains supported:
 
 ```bash
-cp .env.docker.example .env
-nano .env
+sudo bash docker-install.sh
 ```
 
-At minimum, replace `POSTGRES_PASSWORD` with a long random password. Do not commit `.env`.
+### Docker topology
 
-### 3. Prepare TLS material
-
-```bash
-mkdir -p certs
-openssl req -x509 -newkey rsa:4096 -nodes \
-  -keyout certs/server.key \
-  -out certs/server.crt \
-  -days 825 \
-  -subj "/CN=network-control.local"
-```
-
-For production, replace the self-signed certificate with a certificate valid for the hostname used by clients.
-
-### 4. Build images
-
-```bash
-docker compose build
-```
-
-The build creates three targets:
-
-- `backend`: Node/Fastify runtime plus built frontend; runs as the unprivileged `node` user and uses a read-only root filesystem.
-- `migrate`: one-shot Prisma migration image.
-- `enforcement`: narrow host-network container with `NET_ADMIN` and `NET_RAW`; it currently includes `nftables` and `iproute2`.
-
-### 5. Start the database and enforcement agent
-
-```bash
-docker compose up -d db enforcement
-docker compose ps
-docker compose logs --tail=100 enforcement
-```
-
-Wait until PostgreSQL and enforcement are healthy. Enforcement readiness currently checks that its Unix socket exists; it does not prove host gateway setup is complete.
-
-### 6. Apply database migrations (first install and after updates)
-
-```bash
-docker compose --profile migrate run --rm migrate
-```
-
-Do not skip this step on a fresh database. The backend container no longer runs migrations during startup.
-
-### 7. Start the backend
-
-```bash
-docker compose up -d backend
-docker compose logs --tail=100 backend
-```
-
-### 8. Open the dashboard
-
-Open `https://<gateway-ip>:5000` (or the configured `DASHBOARD_PORT`). The first-run wizard remains in setup mode until network configuration is persisted.
-
-### Important Docker limitation before production use
-
-The Docker packaging path is not yet production-ready for a clean host. The enforcement container has host networking and limited network capabilities, but it does not yet implement a typed host-setup broker for operations that require writing host OS files or controlling host system services. It also does not contain the complete bare-metal service/tool set (for example, dnsmasq and sing-box service management). Do not mount the host `/etc` into the backend or run the backend with `--privileged` to work around this; the required integration must be implemented through a restricted, validated host-setup protocol.
-
-Use the Docker path for packaging/isolated validation only until the clean-host gateway setup, rollback, reboot reconciliation, DHCP/NAT, nftables, traffic shaping, VPN, and management-access preservation are verified on a target host.
+- Backend application: Docker, host networking, no network-admin capabilities.
+- Enforcement: Host-native `network-control-enforcement.service`.
+- PostgreSQL, dnsmasq, nftables, tc/IFB and sing-box: provisioned on the Host.
+- Setup Wizard: completed through the original Host-native setup server before the backend switch.
+- Docker backend mounts only the enforcement socket, Host setup config, TLS and setup backup directory.
 
 ## Bare-metal installation
 
 For the reference bare-metal path:
 
 ```bash
-sudo bash backend/deploy/bare-metal/install.sh
+sudo bash install.sh native
 ```
 
 The intended flow is:
@@ -430,7 +379,7 @@ PostgreSQL is mandatory for this project. SQLite is not the project database.
 
 Prisma handles the database schema and migrations.
 
-For container deployments, PostgreSQL data lives in the named `db-data` volume so rebuilding application containers does not delete policy/history data.
+For Docker deployment, PostgreSQL is external to Compose and must be provisioned on the Host. The installer tests the supplied connection but does not create the database, roles, or schema.
 
 ## Logs and troubleshooting
 
@@ -453,10 +402,10 @@ docker compose logs -f backend
 docker compose logs -f enforcement
 ```
 
-### Database logs
+### PostgreSQL logs (Host)
 
 ```bash
-docker compose logs -f db
+sudo journalctl -u postgresql -f
 ```
 
 ### Verify the enforcement socket
@@ -475,7 +424,7 @@ docker compose build --no-cache
 docker compose up -d
 ```
 
-Do **not** add `-v` unless you intentionally want to delete the PostgreSQL volume and all persisted Docker deployment state.
+Docker Compose no longer manages the database volume. Application configuration and runtime state are kept in named volumes.
 
 ## Operational safety
 

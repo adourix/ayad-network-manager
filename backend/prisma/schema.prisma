@@ -145,6 +145,7 @@ model QuotaPeriod {
   updatedAt DateTime @updatedAt
   @@unique([deviceId, periodType, periodStart])
   @@index([deviceId, periodEnd])
+  @@index([periodEnd])
   @@map("quota_periods")
 }
 

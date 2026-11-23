@@ -348,6 +348,8 @@ install_production_services() {
   grep -qF "EnvironmentFile=-${CONFIG_FILE}" "${enforcement_unit}" || die "enforcement unit is missing runtime config"
   grep -qF "EnvironmentFile=-${APP_ROOT}/.env" "${enforcement_unit}" || die "enforcement unit is missing installer environment"
   grep -qF "ExecStart=/usr/bin/node ${APP_ROOT}/dist/infrastructure/enforcement/EnforcementAgent.js" "${enforcement_unit}" || die "enforcement unit points to an unexpected agent path"
+  grep -qF "CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_CHOWN" "${enforcement_unit}" || die "enforcement unit is missing CAP_CHOWN"
+  grep -qF "AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW CAP_CHOWN" "${enforcement_unit}" || die "enforcement unit is missing ambient CAP_CHOWN"
 
   if grep -qE '@APP_ROOT@|@CONFIG_FILE@|@SYSTEMD_HELPER_DIR@' \
     "${SYSTEMD_DIR}/network-control-enforcement.service" \

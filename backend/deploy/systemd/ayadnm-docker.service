@@ -1,0 +1,16 @@
+[Unit]
+Description=Ayad Network Manager Docker Backend
+Requires=docker.service network-control-enforcement.service
+After=docker.service network-control-enforcement.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=@APP_ROOT@
+ExecStart=/usr/bin/docker compose up -d backend
+ExecStop=/usr/bin/docker compose stop backend
+TimeoutStartSec=0
+
+[Install]
+WantedBy=multi-user.target
